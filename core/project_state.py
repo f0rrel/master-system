@@ -293,8 +293,7 @@ class ProjectState:
                             continue
                         d = dep.strip()
                         if d in seen:
-                            problems.append(f"task {task_id} has duplicate dependency {d}")
-                            continue
+                            continue  # normalize duplicates
                         seen.add(d)
                         if d not in task_ids:
                             problems.append(f"task {task_id} references unknown dependency {d}")

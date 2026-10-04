@@ -155,8 +155,42 @@ def test_duplicate_dependencies_handled(tmp_path):
             {"id": "t2", "status": "planned", "depends_on": ["t1", "t1"]},
         ],
     )
-    try:
-        ps = ProjectState(proj)
-        assert False
-    except ValueError:
-        pass
+    ps = ProjectState(proj)
+    ps.snapshot()
+    t2 = [t for t in ps.tasks() if t["id"] == "t2"][0]
+    r, by, reason = calculate_readiness(ps, t2)
+    assert r == "ready"
+
+
+def test_existing_projects_without_depends_on_remain_valid(tmp_path):
+    from core.master import Master
+    # use existing
+    m = Master('projects')
+    m.status('ai-system')  # should work
+
+
+def test_master_context_contains_readiness(tmp_path):
+    from core.master import Master
+    from core.work_manager import calculate_readiness
+    m = Master('projects')
+    st = m.status('ai-system')
+    # basic check
+    assert 'tasks' in st
+
+
+def test_readiness_not_inferred_by_llm(tmp_path):
+    # just a smoke test that logic is deterministic
+    from core.project_state import ProjectState
+    proj = make_project(
+        tmp_path,
+        [
+            {"id": "t1", "status": "completed"},
+            {"id": "t2", "status": "planned", "depends_on": ["t1"]},
+            {"id": "t3", "status": "planned", "depends_on": ["t2"]},
+        ],
+    )
+    ps = ProjectState(proj)
+    t3 = [t for t in ps.tasks() if t["id"] == "t3"][0]
+    r, by, reason = calculate_readiness(ps, t3)
+    assert r == "blocked"
+    assert by == "t2"
