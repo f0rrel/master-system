@@ -1,0 +1,30 @@
+# Secrets / local configuration
+.env
+.env.*
+*.secret
+*secret*
+*credentials*
+*api_key*
+*apikey*
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Logs / runtime output
+*.log
+*.tmp
+
+# Local agent/runtime state
+agents/*/workspace/
+agents/*/memory/

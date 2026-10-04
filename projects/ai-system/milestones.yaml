@@ -1,0 +1,32 @@
+milestones:
+  - id: foundation
+    name: Foundation
+    status: in_progress
+
+  - id: orchestration
+    name: Orchestration
+    status: planned
+
+  - id: agents
+    name: Agents
+    status: planned
+
+  - id: models
+    name: Models
+    status: planned
+
+  - id: tools-runtime
+    name: Tools & Runtime
+    status: planned
+
+  - id: engineering-control
+    name: Engineering Control
+    status: planned
+
+  - id: project-management
+    name: Project Management
+    status: planned
+
+  - id: self-improvement
+    name: Self-Improvement
+    status: planned

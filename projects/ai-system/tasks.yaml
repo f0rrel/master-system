@@ -1,0 +1,21 @@
+tasks:
+- id: foundation-001
+  milestone: foundation
+  title: Define project and task data model
+  status: in_progress
+  assigned_to: master
+- id: foundation-002
+  milestone: foundation
+  title: Build project state manager
+  status: in_progress
+  assigned_to: master
+- id: foundation-003
+  milestone: foundation
+  title: Build initial Master CLI
+  status: planned
+  assigned_to: master
+- id: foundation-004
+  milestone: foundation
+  title: Add activity tracking
+  status: planned
+  assigned_to: master

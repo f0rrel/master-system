@@ -1,0 +1,355 @@
+import contextlib
+import os
+import stat
+import tempfile
+from pathlib import Path
+from typing import NamedTuple
+
+import yaml
+
+
+VALID_TASK_STATUSES = {
+    "planned",
+    "in_progress",
+    "blocked",
+    "completed",
+    "cancelled",
+}
+
+VALID_MILESTONE_STATUSES = {
+    "planned",
+    "in_progress",
+    "completed",
+}
+
+
+def _count_by_status(items, statuses):
+    counts = {status: 0 for status in sorted(statuses)}
+
+    for item in items:
+        status = item.get("status")
+
+        if status in counts:
+            counts[status] += 1
+
+    return counts
+
+
+def _fsync_directory(directory):
+    with contextlib.suppress(OSError):
+        descriptor = os.open(directory, os.O_RDONLY)
+
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def write_yaml_atomically(path, document):
+    """Replace path with document so readers never see a partial file.
+
+    The new content is written to a temporary file in the same directory,
+    flushed, fsynced and then moved into place with os.replace. If anything
+    fails before that move the original file is left untouched, and the
+    temporary file is removed.
+    """
+    path = Path(path)
+    mode = stat.S_IMODE(path.stat().st_mode)
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary_path = Path(temporary_name)
+
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            yaml.safe_dump(
+                document,
+                file,
+                sort_keys=False,
+                allow_unicode=True,
+            )
+            file.flush()
+            os.fsync(file.fileno())
+
+        os.chmod(temporary_path, mode)
+        os.replace(temporary_path, path)
+        _fsync_directory(path.parent)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+
+        raise
+
+
+class ProjectSnapshot(NamedTuple):
+    project: dict
+    milestones_doc: dict
+    tasks_doc: dict
+
+    @property
+    def milestones(self):
+        return self.milestones_doc.get("milestones", [])
+
+    @property
+    def tasks(self):
+        return self.tasks_doc.get("tasks", [])
+
+
+class ProjectState:
+    def __init__(self, project_path):
+        self.project_path = Path(project_path)
+
+    def _load(self, filename):
+        path = self.project_path / filename
+
+        if not path.exists():
+            raise FileNotFoundError(f"Missing project file: {path}")
+
+        with path.open("r", encoding="utf-8") as file:
+            return yaml.safe_load(file) or {}
+
+    def snapshot(self):
+        """Return a validated, self-consistent view of the three state files.
+
+        The snapshot holds the parsed documents, so callers that need to
+        rewrite a file can do so without discarding unknown top-level keys.
+        Mutating it does not change anything on disk.
+        """
+        snapshot = ProjectSnapshot(
+            project=self._load("project.yaml"),
+            milestones_doc=self._load("milestones.yaml"),
+            tasks_doc=self._load("tasks.yaml"),
+        )
+
+        self._check(
+            snapshot.project,
+            snapshot.milestones,
+            snapshot.tasks,
+        )
+
+        return snapshot
+
+    def project(self):
+        return self.snapshot().project
+
+    def declared_id(self):
+        """Return the id declared in project.yaml, or None if there is none.
+
+        This is a diagnostic read only. A project whose other state files fail
+        validation still has to be nameable when reporting why it was
+        rejected, so this deliberately does not validate anything.
+
+        It grants no access to an invalid project: every other read goes
+        through snapshot(), which validates all three files. Recoverable
+        identity is not the same thing as a valid project.
+        """
+        document = self._load("project.yaml")
+
+        if not isinstance(document, dict):
+            return None
+
+        declared = document.get("id")
+
+        if isinstance(declared, str) and declared.strip():
+            return declared
+
+        return None
+
+    def milestones(self):
+        return self.snapshot().milestones
+
+    def tasks(self):
+        return self.snapshot().tasks
+
+    def get_task(self, task_id):
+        for task in self.tasks():
+            if task["id"] == task_id:
+                return task
+
+        return None
+
+    def get_milestone(self, milestone_id):
+        for milestone in self.milestones():
+            if milestone["id"] == milestone_id:
+                return milestone
+
+        return None
+
+    def tasks_in_milestone(self, milestone_id):
+        return [
+            task
+            for task in self.tasks()
+            if task.get("milestone") == milestone_id
+        ]
+
+    def tasks_with_status(self, status):
+        if status not in VALID_TASK_STATUSES:
+            raise ValueError(
+                f"Invalid task status: {status}. "
+                f"Valid statuses: {sorted(VALID_TASK_STATUSES)}"
+            )
+
+        return [task for task in self.tasks() if task.get("status") == status]
+
+    def progress(self):
+        snapshot = self.snapshot()
+
+        return {
+            "project_id": snapshot.project.get("id"),
+            "project_name": snapshot.project.get("name"),
+            "total_tasks": len(snapshot.tasks),
+            "task_status_counts": _count_by_status(
+                snapshot.tasks, VALID_TASK_STATUSES
+            ),
+            "total_milestones": len(snapshot.milestones),
+            "milestone_status_counts": _count_by_status(
+                snapshot.milestones, VALID_MILESTONE_STATUSES
+            ),
+        }
+
+    def validate(self):
+        self.snapshot()
+
+        return True
+
+    def _check(self, project, milestones, tasks):
+        problems = []
+
+        for field in ("id", "name"):
+            if not project.get(field):
+                problems.append(f"project.yaml is missing '{field}'")
+
+        milestone_ids = set()
+
+        for milestone in milestones:
+            milestone_id = milestone.get("id")
+
+            if not milestone_id:
+                problems.append("milestone is missing an 'id'")
+                continue
+
+            if milestone_id in milestone_ids:
+                problems.append(f"duplicate milestone id: {milestone_id}")
+
+            milestone_ids.add(milestone_id)
+
+            status = milestone.get("status")
+
+            if status is None:
+                problems.append(f"milestone {milestone_id} is missing a 'status'")
+            elif status not in VALID_MILESTONE_STATUSES:
+                problems.append(
+                    f"milestone {milestone_id} has unknown status "
+                    f"'{status}'; valid statuses: "
+                    f"{sorted(VALID_MILESTONE_STATUSES)}"
+                )
+
+        task_ids = set()
+
+        for task in tasks:
+            task_id = task.get("id")
+
+            if not task_id:
+                problems.append("task is missing an 'id'")
+                continue
+
+            if task_id in task_ids:
+                problems.append(f"duplicate task id: {task_id}")
+
+            task_ids.add(task_id)
+
+            status = task.get("status")
+
+            if status is None:
+                problems.append(f"task {task_id} is missing a 'status'")
+            elif status not in VALID_TASK_STATUSES:
+                problems.append(
+                    f"task {task_id} has unknown status "
+                    f"'{status}'; valid statuses: "
+                    f"{sorted(VALID_TASK_STATUSES)}"
+                )
+
+            milestone_id = task.get("milestone")
+
+            if not milestone_id:
+                problems.append(f"task {task_id} is not assigned to a milestone")
+            elif milestone_id not in milestone_ids:
+                problems.append(
+                    f"task {task_id} references unknown milestone "
+                    f"'{milestone_id}'"
+                )
+
+            depends_on = task.get("depends_on")
+            if depends_on is not None:
+                if not isinstance(depends_on, list):
+                    problems.append(f"task {task_id} has invalid depends_on")
+                else:
+                    seen = set()
+                    for dep in depends_on:
+                        if not isinstance(dep, str) or not dep.strip():
+                            problems.append(f"task {task_id} has invalid dependency id")
+                            continue
+                        d = dep.strip()
+                        if d in seen:
+                            problems.append(f"task {task_id} has duplicate dependency {d}")
+                            continue
+                        seen.add(d)
+                        if d not in task_ids:
+                            problems.append(f"task {task_id} references unknown dependency {d}")
+
+        if problems:
+            raise ValueError(
+                f"Invalid project state in {self.project_path}:\n"
+                + "\n".join(f"  - {problem}" for problem in problems)
+            )
+
+    def update_task_status(self, task_id, status):
+        snapshot = self.snapshot()
+
+        if status not in VALID_TASK_STATUSES:
+            raise ValueError(
+                f"Invalid task status: {status}. "
+                f"Valid statuses: {sorted(VALID_TASK_STATUSES)}"
+            )
+
+        for task in snapshot.tasks:
+            if task["id"] == task_id:
+                task["status"] = status
+                write_yaml_atomically(
+                    self.project_path / "tasks.yaml",
+                    snapshot.tasks_doc,
+                )
+
+                return task
+
+        raise ValueError(f"Task not found: {task_id}")
+
+
+if __name__ == "__main__":
+    state = ProjectState(
+        Path(__file__).parent.parent / "projects" / "ai-system"
+    )
+
+    print("PROJECT")
+    print(state.project())
+
+    print("\nVALIDATION")
+    state.validate()
+    print("ok")
+
+    print("\nMILESTONES")
+    for milestone in state.milestones():
+        print(milestone)
+
+    print("\nTASKS IN MILESTONE 'foundation'")
+    for task in state.tasks_in_milestone("foundation"):
+        print(task)
+
+    print("\nTASKS WITH STATUS 'in_progress'")
+    for task in state.tasks_with_status("in_progress"):
+        print(task)
+
+    print("\nPROGRESS")
+    print(state.progress())
