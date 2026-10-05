@@ -332,7 +332,7 @@ class AutonomousLoop:
         return add_usage(failed) if failed else None
 
     def _record_decision(self, run_id, project_id, step, decision, gate_reason=None,
-                         proposal=None):
+                         proposal=None, gate_attempt_id=None):
         operation = decision.operation if decision is not None else None
         self._record(
             EventType.DECISION,
@@ -349,6 +349,7 @@ class AutonomousLoop:
             ),
             pending_approval=bool(decision is not None and decision.pending_approval),
             gate_reason=gate_reason,
+            gate_attempt_id=gate_attempt_id,
             usage=getattr(proposal, "usage", None),
             reasoner=getattr(proposal, "reasoner", None),
             failed_call_usage=self._failed_call_usage(),
@@ -487,20 +488,21 @@ class AutonomousLoop:
             # A completed status applies on its own only with evidence that the
             # latest attempt passed verification. Worked out before the
             # decision is recorded so the record says why it is waiting.
-            gate_reason = None
+            gate_reason = gate_attempt_id = None
             if (
                 decision is not None
                 and decision.decision is Decision.ACT
                 and decision.operation is not None
                 and not decision.pending_approval
             ):
-                gate_reason = self._evidence.completion_gate(
+                gate_reason, gate_attempt_id = self._evidence.completion_check(
                     decision.operation, self._current_task(decision.operation)
                 )
 
             # The decision is the recorded intent: it is written before any
             # state changes or any worker runs.
-            self._record_decision(run_id, project_id, steps, decision, gate_reason, proposal)
+            self._record_decision(run_id, project_id, steps, decision, gate_reason, proposal,
+                                  gate_attempt_id)
 
             # Anything but an explicit ACT stops the loop. This covers WAIT,
             # BLOCKED, NEEDS_INFORMATION, REQUEST_APPROVAL, and a reply that

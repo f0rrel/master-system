@@ -67,6 +67,9 @@ def spec_hash(task: Optional[Mapping]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+_NOT_A_COMPLETION = object()
+
+
 @dataclass(frozen=True)
 class AttemptSummary:
     """One execution attempt, reduced to the facts decisions may use."""
@@ -197,6 +200,24 @@ class HistoryEvidence:
     # --- completion gate -------------------------------------------------
 
     def completion_gate(self, operation, current_task: Optional[Mapping] = None) -> Optional[str]:
+        return self.completion_check(operation, current_task)[0]
+
+    def completion_check(self, operation, current_task: Optional[Mapping] = None):
+        """``(reason, attempt_id)``: the gate's verdict and the attempt it judged.
+
+        ``attempt_id`` is the task's latest attempt when the operation completes
+        a task (None if there is none, or for any other operation), so every
+        autonomous completion traces to the evidence that authorised it.
+        """
+        reason = self._completion_reason(operation, current_task)
+        if reason is _NOT_A_COMPLETION:
+            return None, None
+        arguments = operation.arguments
+        attempts = attempts_for_task(self._history, arguments.get("project_id"),
+                                     arguments.get("task_id"))
+        return reason, (attempts[-1].attempt_id if attempts else None)
+
+    def _completion_reason(self, operation, current_task: Optional[Mapping] = None):
         """Why an autonomous ``completed`` must wait for a human, or None.
 
         Applies to any operation that would set a task's status to
@@ -212,9 +233,9 @@ class HistoryEvidence:
         """
         arguments = operation.arguments
         if arguments.get("status") != "completed":
-            return None
+            return _NOT_A_COMPLETION
         if operation.operation not in ("update_task", "create_task"):
-            return None
+            return _NOT_A_COMPLETION
 
         task_id = arguments.get("task_id")
         project_id = arguments.get("project_id")

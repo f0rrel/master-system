@@ -541,3 +541,38 @@ def test_master_is_told_whether_a_task_has_acceptance(tmp_path):
     assert {t["id"]: t["has_acceptance"] for t in context["tasks"]} == {"t1": True,
                                                                         "t2": False}
     assert "pytest" not in json.dumps(context)
+
+
+# --- completions trace to the attempt that authorised them ---------------------
+
+
+def test_an_autonomous_completion_records_the_attempt_it_relied_on(tmp_path):
+    loop, master, _, _ = loop_for(tmp_path, [run_task(), complete()])
+
+    loop.run("alpha")
+
+    attempt = loop.history.events(types=[EventType.ATTEMPT_STARTED])[0].attempt_id
+    decisions = [e.payload for e in loop.history.events(types=[EventType.DECISION])]
+    assert decisions[-1]["gate_attempt_id"] == attempt
+    assert decisions[-1]["gate_reason"] is None
+    assert decisions[0]["gate_attempt_id"] is None  # run_task is not a completion
+    assert status_of(master) == "completed"
+
+
+def test_a_held_completion_records_the_attempt_that_failed_the_gate(tmp_path):
+    loop, _, _, _ = loop_for(tmp_path, [run_task(), complete()], verdict="fail")
+
+    loop.run("alpha")
+
+    attempt = loop.history.events(types=[EventType.ATTEMPT_STARTED])[0].attempt_id
+    decision = loop.history.events(types=[EventType.DECISION])[-1].payload
+    assert (decision["gate_reason"], decision["gate_attempt_id"]) == ("verification_fail",
+                                                                      attempt)
+
+
+def test_completion_check_returns_no_attempt_for_other_operations():
+    operation = Operation.propose({"operation": "update_task", "project_id": "alpha",
+                                   "task_id": "t1", "status": "blocked"})
+
+    assert HistoryEvidence(InMemoryHistoryStore()).completion_check(operation, TASK) == \
+        (None, None)
