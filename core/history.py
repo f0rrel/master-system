@@ -70,6 +70,8 @@ class EventType(Enum):
     ATTEMPT_PROCESS = "attempt_process"
     #: A human integrated a verified attempt's result into the base branch.
     INTEGRATION = "integration"
+    #: A human edited a task's spec through run_cli (actor, action, spec hashes).
+    HUMAN_ACTION = "human_action"
 
 
 #: Events that belong to one execution attempt and must name it.

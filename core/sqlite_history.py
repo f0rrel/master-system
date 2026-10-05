@@ -26,7 +26,7 @@ __all__ = [
     "SQLiteHistoryStore",
 ]
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 #: How long a writer waits for another connection's lock before failing.
 BUSY_TIMEOUT_MS = 5000
 
@@ -93,8 +93,8 @@ def _event(row) -> HistoryEvent:
 class SQLiteHistoryStore:
     """HistoryStore backed by one SQLite file, created on first use.
 
-    A version 1 database is copied to ``<name>.bak-v1-<timestamp>`` and then
-    migrated in one transaction. If the copy fails, nothing is migrated.
+    An older database (v1 or v2) is copied to ``<name>.bak-v<N>-<timestamp>``
+    and then migrated in one transaction. If the copy fails, nothing is migrated.
     """
 
     def __init__(self, path=None):
@@ -116,8 +116,8 @@ class SQLiteHistoryStore:
                  "CREATE TABLE schema_meta (version INTEGER NOT NULL)",
                  ("INSERT INTO schema_meta (version) VALUES (?)", (SCHEMA_VERSION,))]
             )
-        elif version == 1:
-            self._migrate_from_v1()
+        elif version in (1, 2):
+            self._migrate(version)
         elif version != SCHEMA_VERSION:
             raise RuntimeError(
                 f"history schema version {version} is not supported "
@@ -155,12 +155,12 @@ class SQLiteHistoryStore:
         finally:
             connection.isolation_level = previous
 
-    def backup_path_for(self, stamp: str) -> Path:
-        return self.path.with_name(f"{self.path.name}.bak-v1-{stamp}")
+    def backup_path_for(self, stamp: str, version: int = 1) -> Path:
+        return self.path.with_name(f"{self.path.name}.bak-v{version}-{stamp}")
 
-    def _backup(self) -> Path:
+    def _backup(self, version: int) -> Path:
         """Copy the database aside before changing its schema, and check the copy."""
-        target = self.backup_path_for(_backup_stamp())
+        target = self.backup_path_for(_backup_stamp(), version)
         try:
             if target.exists():
                 raise FileExistsError(f"{target} already exists")
@@ -178,14 +178,18 @@ class SQLiteHistoryStore:
                 )
         except (OSError, sqlite3.Error) as error:
             raise HistoryMigrationError(
-                f"refusing to migrate {self.path} from schema v1: "
+                f"refusing to migrate {self.path} from schema v{version}: "
                 f"the backup to {target} failed: {error}"
             ) from error
         return target
 
-    def _migrate_from_v1(self) -> None:
-        """Widen the event-type CHECK by rebuilding the table, rows and seq kept."""
-        self.migration_backup = self._backup()
+    def _migrate(self, version: int) -> None:
+        """Widen the event-type CHECK by rebuilding the table, rows and seq kept.
+
+        Every schema change so far (v1->v2, v2->v3) only added event types, so
+        one rebuild brings any older version to the current one.
+        """
+        self.migration_backup = self._backup(version)
         self._transaction(
             [
                 _events_table("events_v2"),
