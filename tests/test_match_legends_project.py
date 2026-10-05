@@ -20,7 +20,7 @@ def test_the_definition_is_valid_and_points_at_the_dedicated_clone():
 def test_five_independent_tasks_each_with_a_human_spec():
     tasks = ProjectState(PROJECT).tasks()
 
-    assert [t["id"] for t in tasks] == ["ml-1", "ml-2", "ml-3", "ml-4", "ml-5"]
+    assert [t["id"] for t in tasks] == [f"ml-{n}" for n in range(1, 9)]
     for task in tasks:
         assert "depends_on" not in task, f"{task['id']} must be independent"
         assert task["description"].strip()
@@ -36,11 +36,17 @@ def test_five_independent_tasks_each_with_a_human_spec():
 
 def test_no_task_runs_another_tasks_pending_test():
     for task in ProjectState(PROJECT).tasks():
-        others = {f"ml-{n}" for n in range(1, 6)} - {task["id"]}
+        others = {f"ml-{n}" for n in range(1, 9)} - {task["id"]}
         for command in task["acceptance"]["commands"]:
             assert not any(f"tasks/{o}-" in command for o in others), (task["id"], command)
 
 
 def test_the_specs_are_distinct():
     hashes = {spec_hash(t) for t in ProjectState(PROJECT).tasks()}
-    assert len(hashes) == 5
+    assert len(hashes) == 8
+
+
+def test_the_new_tasks_say_how_to_check_by_hand():
+    tasks = {t["id"]: t for t in ProjectState(PROJECT).tasks()}
+    for task_id in ("ml-6", "ml-7", "ml-8"):
+        assert tasks[task_id]["manual_check"].startswith("1. ")

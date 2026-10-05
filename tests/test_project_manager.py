@@ -827,8 +827,8 @@ def test_overview_of_repository_project():
     assert overview["problem_count"] == 0
     assert [p["project_id"] for p in overview["projects"]] == ["ai-system", "match-legends"]
     assert all(p["project_status"] == "active" for p in overview["projects"])
-    assert overview["totals"]["tasks"] == 4 + 5
-    assert overview["totals"]["milestones"] == 8 + 1
+    assert overview["totals"]["tasks"] == 4 + 8
+    assert overview["totals"]["milestones"] == 8 + 2
 
 
 def test_manager_reads_without_writing(projects_root):
