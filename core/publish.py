@@ -117,32 +117,10 @@ class Publisher:
         self._push(app, repository, [develop, "gh-pages"], self._askpass_dir,
                    force_refs=("gh-pages",))
         url = pages_url(github["repo"])
-        notes = self._ensure_pages(app, github["repo"])
         self._history.append(
             type=EventType.PUBLISHED, run_id=uuid.uuid4().hex, project_id=project_id,
             session_id=session_id,
             payload={"develop_branch": develop, "develop_sha": develop_sha,
                      "release_branch": release, "release_sha": release_sha,
                      "pages_sha": site or parent, "url": url, "actor": "system"})
-        return [f"Preview updated: {url}develop/ (develop {develop_sha[:12]})", *notes]
-
-    @staticmethod
-    def _ensure_pages(app, repo) -> list:
-        """Turn on GitHub Pages from gh-pages the first time (the app has Pages: write)."""
-        request = getattr(app, "request", None)
-        if request is None:
-            return []
-        from core.github import GitHubError
-
-        try:
-            request("GET", f"/repos/{repo}/pages")
-            return []
-        except GitHubError as error:
-            if " 404 " not in f" {error} ":
-                return [f"Could not check GitHub Pages: {error}"]
-        try:
-            request("POST", f"/repos/{repo}/pages",
-                    {"source": {"branch": "gh-pages", "path": "/"}})
-            return ["GitHub Pages turned on; the first build takes a minute or two."]
-        except GitHubError as error:
-            return [f"Could not turn on GitHub Pages: {error}"]
+        return [f"Preview updated: {url}develop/ (develop {develop_sha[:12]})"]

@@ -837,9 +837,9 @@ def _command_github(args, out):
             pages = app.request("GET", f"/repos/{repo}/pages") or {}
             source = pages.get("source") or {}
             line(source.get("branch") == "gh-pages", f"Pages serves gh-pages ({pages.get('html_url')})",
-                 "step 7 (the first publish creates gh-pages; then select it)")
+                 "step 7 (Settings -> Pages -> branch gh-pages)")
         except GitHubError as error:
-            line(False, "Pages is not turned on yet", "step 7 (after the first publish)")
+            line(False, "Pages is not turned on yet", "step 7 (Settings -> Pages -> branch gh-pages)")
     print("All set." if ok else "Some steps are missing (see -> above).", file=out)
     return 0 if ok else 1
 

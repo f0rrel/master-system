@@ -40,7 +40,7 @@ A GitHub App is a separate "robot" account that **you** control.
    | --- | --- | --- |
    | **Contents** | Read and write | push `develop`, the site branch `gh-pages`, and release tags |
    | **Pull requests** | Read and write | open the release pull request (`develop` → `main`) |
-   | **Pages** | Read and write | turn the preview site on, once |
+   | **Pages** | Read-only | check that the preview site is on |
    | **Metadata** | Read-only | GitHub sets this one automatically |
 
    Do **not** give it "Administration". Without it, the app cannot change the protection on
@@ -119,8 +119,16 @@ merge a release pull request on GitHub.
 
 ## 7. GitHub Pages
 
-You don't need to do anything. The first time the system publishes, it creates the
-`gh-pages` branch and turns Pages on. The first build takes a minute or two. After that:
+The first time the system publishes (after a run, or `ms publish match-legends`), it creates
+the `gh-pages` branch. GitHub allows only an admin to switch Pages on, and the app
+deliberately isn't one, so you do it once:
+
+1. Open <https://github.com/f0rrel/Match_Legends_mobile_game/settings/pages>.
+2. **Source:** "Deploy from a branch". **Branch:** `gh-pages`, folder `/ (root)`. Click
+   **Save**.
+
+(For Match Legends this was done on 2026-10-06.) The first build takes a minute or two.
+After that:
 
 - the released game: <https://f0rrel.github.io/Match_Legends_mobile_game/>
 - the preview of `develop`: <https://f0rrel.github.io/Match_Legends_mobile_game/develop/>
@@ -135,4 +143,4 @@ ms github check
 ```
 
 Every line should say `[ok]`. If one says `[!!]`, the line under it tells you which step to
-redo. The Pages line shows `[!!]` until the first publish, which is normal.
+redo. The Pages line shows `[!!]` until step 7 is done.
