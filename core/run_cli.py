@@ -9,8 +9,20 @@ the existing modules.
 
 Commands:
 
+    start  <project> --objective TEXT [--session ID] [--until-stopped ...]
+    resume <session> [--until-stopped ...]
+    status [<project>]
     task describe <project> <task> (--text TEXT | --clear)      human edit, recorded
     task set-acceptance <project> <task> (--command C ... [--protect GLOB ...] | --clear)
+
+``--until-stopped`` keeps resuming while a run ends at the step limit, bounded
+by ``--max-runs`` (default 10) and ``--max-hours`` (default 8). It stops on any
+other stop reason: approval needed, attempt limit, no actionable work, an
+error, or Ctrl-C (recorded as ``run_error``).
+
+Secrets: the Master's API key is read from this process's environment by the
+provider. Workers never see it: they get the allowlisted environment of
+``core/worker_env.py`` and their own worker home.
 
 Global options: ``--config PATH``, ``--root PATH`` (projects root) and
 ``--state-dir PATH`` (history and sessions).
@@ -19,7 +31,10 @@ Global options: ``--config PATH``, ``--root PATH`` (projects root) and
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -29,7 +44,9 @@ from core import human_edits
 from core.master import EXPECTED_ERRORS, Master
 from core.paths import RuntimePaths
 from core.run_config import ConfigError, load_config
-from core.run_lock import ProjectBusyError
+from core.run_lock import LOCK_FILENAME, ProjectBusyError, ProjectLock
+
+STEP_LIMIT = "step_limit"
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -57,6 +74,177 @@ class Context:
 
             self._history = SQLiteHistoryStore(self.paths.history_path)
         return self._history
+
+
+class SetupError(RuntimeError):
+    """The run cannot start: something on this machine is missing."""
+
+
+# --- composition ---------------------------------------------------------------------
+
+
+def build_provider(config):
+    """The Master's reasoning provider, from [master]. The one place names live."""
+    m = config.master
+    if m.provider == "deepseek":
+        from core.deepseek_provider import DEFAULT_BASE_URL, DeepSeekProvider
+
+        if not os.environ.get("DEEPSEEK_API_KEY"):
+            raise SetupError("DEEPSEEK_API_KEY is not set in run_cli's environment")
+        return DeepSeekProvider(base_url=m.base_url or DEFAULT_BASE_URL, model=m.model,
+                                timeout=m.timeout_s)
+    if m.provider == "ollama":
+        from core.ollama_provider import DEFAULT_BASE_URL, OllamaProvider
+
+        return OllamaProvider(base_url=m.base_url or DEFAULT_BASE_URL, model=m.model,
+                              timeout=m.timeout_s)
+    from core.opencode_provider import DEFAULT_BASE_URL, OpenCodeProvider
+
+    provider_id, _, model_id = m.model.partition("/")
+    if not model_id:
+        raise SetupError("[master] model for opencode must be 'providerID/modelID'")
+    return OpenCodeProvider(base_url=m.base_url or DEFAULT_BASE_URL, provider_id=provider_id,
+                            model_id=model_id, timeout=m.timeout_s,
+                            total_timeout=m.timeout_s)
+
+
+def build_worker(config):
+    from core.opencode_backend import OpenCodeCliBackend
+
+    w = config.worker
+    if not Path(w.opencode_bin).is_file():
+        raise SetupError(f"OpenCode not found at {w.opencode_bin} ([worker] opencode_bin)")
+    return OpenCodeCliBackend(opencode_bin=w.opencode_bin, model=w.model,
+                              extra_args=w.extra_args)
+
+
+def build_verifier(config):
+    from core.acceptance_verifier import AcceptanceVerifier
+
+    return AcceptanceVerifier()
+
+
+def build_worker_env(config):
+    from core.worker_env import find_node_bin, worker_environment
+
+    w = config.worker
+    node_bin = find_node_bin(w.node_min_major)
+    if node_bin is None:
+        raise SetupError(f"no Node >= {w.node_min_major} found in nvm's install directory "
+                         "(install it with 'nvm install', or lower [worker] node_min_major)")
+    Path(w.home).mkdir(parents=True, exist_ok=True)
+    extra = {}
+    if w.playwright_browsers_path:
+        extra["PLAYWRIGHT_BROWSERS_PATH"] = str(w.playwright_browsers_path)
+    return worker_environment(w.home, path_dirs=[node_bin], extra=extra)
+
+
+def build_runner(ctx):
+    from core.session_runner import SessionRunner
+    from core.session_store import FileSessionStore
+
+    r = ctx.config.run
+    return SessionRunner(
+        ctx.master,
+        build_provider(ctx.config),
+        build_worker(ctx.config),
+        build_verifier(ctx.config),
+        store=FileSessionStore(ctx.paths.sessions_dir),
+        history=ctx.history,
+        paths=ctx.paths,
+        max_steps=r.max_steps,
+        max_retries=r.max_retries,
+        max_attempts_per_task=r.max_attempts_per_task,
+        attempt_timeout_s=r.attempt_timeout_s,
+        verification_timeout_s=r.verification_timeout_s,
+        worker_env=build_worker_env(ctx.config),
+    )
+
+
+# --- start / resume -------------------------------------------------------------------
+
+
+def _describe(session) -> str:
+    return (f"session {session.session_id}: {session.status.value} "
+            f"(stop: {session.last_stop_reason}, steps: {session.steps_completed})")
+
+
+def _run(ctx, args, out, first):
+    """Run once, then (with --until-stopped) resume while runs end at the step limit."""
+    runner = build_runner(ctx)
+    started = time.monotonic()
+    session = first(runner)
+    runs = 1
+    print(_describe(session), file=out)
+    while (
+        args.until_stopped
+        and session.last_stop_reason == STEP_LIMIT
+        and runs < args.max_runs
+        and time.monotonic() - started < args.max_hours * 3600
+    ):
+        session = runner.resume(session.session_id)
+        runs += 1
+        print(_describe(session), file=out)
+    if session.pending_approval:
+        print(f"waiting for a human: {session.pending_approval}", file=out)
+    return EXIT_OK
+
+
+def _command_start(ctx, args, out):
+    session_id = args.session or (
+        f"{args.project_id}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}")
+    return _run(ctx, args, out,
+                lambda runner: runner.start(args.project_id, args.objective, session_id))
+
+
+def _command_resume(ctx, args, out):
+    return _run(ctx, args, out, lambda runner: runner.resume(args.session_id))
+
+
+# --- status ------------------------------------------------------------------------------
+
+
+def _lock_holder(project_path):
+    try:
+        ProjectLock(project_path).acquire().release()
+        return None
+    except ProjectBusyError:
+        try:
+            return (Path(project_path) / LOCK_FILENAME).read_text().strip() or "unknown"
+        except OSError:
+            return "unknown"
+
+
+def _command_status(ctx, args, out):
+    from core.session_store import FileSessionStore
+    from core.history import EventType
+
+    projects = [args.project_id] if args.project_id else ctx.master.list_projects()
+    store = FileSessionStore(ctx.paths.sessions_dir)
+    for project_id in projects:
+        state = ctx.master.status(project_id)
+        holder = _lock_holder(ctx.master.project_state(project_id).project_path)
+        print(f"PROJECT {project_id}  ({'running: ' + holder if holder else 'idle'})", file=out)
+        for task in state["tasks"]:
+            print(f"  task {task['id']:<16} {task['status']:<12} {task['title']}", file=out)
+        for session in store.list_sessions(project_id):
+            line = f"  {_describe(session)}"
+            if session.pending_approval:
+                line += f"  pending: {session.pending_approval}"
+            print(line, file=out)
+        events = ctx.history.events(project_id=project_id)
+        ended = {e.attempt_id for e in events if e.type in (EventType.ATTEMPT_FINISHED,
+                                                            EventType.ATTEMPT_INTERRUPTED)}
+        for e in events:
+            if e.type is EventType.ATTEMPT_STARTED and e.attempt_id not in ended:
+                print(f"  open attempt {e.attempt_id} on {e.task_id} "
+                      f"(deadline {e.payload.get('deadline_at')})", file=out)
+        print("  last events:", file=out)
+        for e in events[-10:]:
+            print(f"    {e.seq:>6} {e.created_at[:19]} {e.type.value:<20} "
+                  f"{e.task_id or '':<12} {e.payload.get('stop_reason') or e.payload.get('decision') or e.payload.get('outcome') or e.payload.get('verdict') or ''}",
+                  file=out)
+    return EXIT_OK
 
 
 # --- task: human edits, recorded ---------------------------------------------------
@@ -105,6 +293,28 @@ def build_parser():
                         help="State directory (history.sqlite, sessions/).")
     commands = parser.add_subparsers(dest="command", metavar="<command>", required=True)
 
+    def run_options(sub):
+        sub.add_argument("--until-stopped", action="store_true",
+                         help="Keep resuming while runs end at the step limit.")
+        sub.add_argument("--max-runs", type=int, default=10)
+        sub.add_argument("--max-hours", type=float, default=8.0)
+
+    start = commands.add_parser("start", help="Start a session and run it.")
+    start.add_argument("project_id")
+    start.add_argument("--objective", required=True)
+    start.add_argument("--session", default=None, help="Session id (default: project-time).")
+    run_options(start)
+    start.set_defaults(handler=_command_start)
+
+    resume = commands.add_parser("resume", help="Run a session again.")
+    resume.add_argument("session_id")
+    run_options(resume)
+    resume.set_defaults(handler=_command_resume)
+
+    status = commands.add_parser("status", help="Tasks, sessions, open attempts, events.")
+    status.add_argument("project_id", nargs="?")
+    status.set_defaults(handler=_command_status)
+
     task = commands.add_parser("task", help="Edit a task's spec (recorded in history).")
     task_commands = task.add_subparsers(dest="task_command", metavar="<edit>", required=True)
 
@@ -136,9 +346,23 @@ def main(argv=None, out=None) -> int:
     except ConfigError as error:
         print(f"error: config: {error}", file=sys.stderr)
         return EXIT_USAGE
-    except (ProjectBusyError, *EXPECTED_ERRORS) as error:
+    except SetupError as error:
+        print(f"error: setup: {error}", file=sys.stderr)
+        return EXIT_USAGE
+    except KeyboardInterrupt:
+        print("interrupted: the run was recorded as run_error and the session stopped",
+              file=sys.stderr)
+        return 130
+    except (ProjectBusyError, *EXPECTED_ERRORS, *_session_errors()) as error:
         print(f"error: {error}", file=sys.stderr)
         return EXIT_ERROR
+
+
+def _session_errors():
+    from core.session_store import SessionStoreError
+    from core.work_session import SessionError
+
+    return (SessionStoreError, SessionError)
 
 
 if __name__ == "__main__":

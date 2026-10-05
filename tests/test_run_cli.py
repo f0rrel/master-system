@@ -104,3 +104,216 @@ def test_state_defaults_to_the_xdg_state_dir(setup, monkeypatch, tmp_path):
 
     history = SQLiteHistoryStore(RuntimePaths.default().history_path)
     assert len(history.events(types=[EventType.HUMAN_ACTION])) == 1
+
+
+# --- start / resume / status / --until-stopped --------------------------------------
+
+import json
+
+from conftest import attach_repository
+from core.execution import ExecutionResult
+from core.provider import ReasoningProvider
+from core.session_store import FileSessionStore
+from core.verification import VerificationResult
+from core.work_session import SessionStatus
+
+
+def act(operation):
+    return json.dumps({"decision": "act", "reason": "go", "operation": operation})
+
+
+START = act({"operation": "update_task", "project_id": "alpha", "task_id": "t1",
+             "status": "in_progress"})
+RUN = act({"operation": "run_task", "project_id": "alpha", "task_id": "t1"})
+DONE = act({"operation": "update_task", "project_id": "alpha", "task_id": "t1",
+            "status": "completed"})
+WAIT = json.dumps({"decision": "wait", "reason": "enough", "operation": None})
+
+
+class Scripted(ReasoningProvider):
+    name = "scripted:test"
+
+    def __init__(self, replies):
+        self.replies = list(replies)
+
+    def complete(self, prompt, schema=None):
+        self.last_usage = {"input_tokens": 100, "output_tokens": 10}
+        reply = self.replies.pop(0)
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+
+class Writes:
+    def execute(self, task, context, *, workspace):
+        (workspace.path / "done.txt").write_text("done\n")
+        return ExecutionResult(status="success", usage={"input_tokens": 5000})
+
+
+class Passes:
+    def verify(self, task, context, evidence=None, *, workspace):
+        return VerificationResult(verdict="pass", summary="ok")
+
+
+@pytest.fixture
+def wired(setup, monkeypatch):
+    attach_repository(setup["project"])
+
+    def install(replies):
+        provider = Scripted(replies)
+        monkeypatch.setattr(run_cli, "build_provider", lambda config: provider)
+        monkeypatch.setattr(run_cli, "build_worker", lambda config: Writes())
+        monkeypatch.setattr(run_cli, "build_verifier", lambda config: Passes())
+        monkeypatch.setattr(run_cli, "build_worker_env",
+                            lambda config: {"PATH": "/usr/bin:/bin", "HOME": "/tmp"})
+        return provider
+
+    return install
+
+
+def config_file(setup, text):
+    path = setup["state"].parent / "config.toml"
+    path.write_text(text)
+    return path
+
+
+def cli_with(setup, config, *argv):
+    out = io.StringIO()
+    code = run_cli.main(["--config", str(config), "--root", str(setup["root"]),
+                         "--state-dir", str(setup["state"]), *argv], out=out)
+    return code, out.getvalue()
+
+
+def sessions(setup):
+    return FileSessionStore(setup["state"] / "sessions")
+
+
+def test_start_runs_a_task_end_to_end(setup, wired):
+    wired([START, RUN, DONE])
+
+    code, out = cli(setup, "start", "alpha", "--objective", "Finish t1", "--session", "s1")
+
+    assert code == 0, out
+    session = sessions(setup).load("s1")
+    assert session.last_stop_reason == "no_actionable_work"
+    assert ProjectState(setup["project"]).get_task("t1")["status"] == "completed"
+    assert "session s1: stopped" in out
+
+
+def test_until_stopped_resumes_after_each_step_limit(setup, wired):
+    wired([START, RUN, WAIT])
+    config = config_file(setup, "[run]\nmax_steps = 1\n")
+
+    code, out = cli_with(setup, config, "start", "alpha", "--objective", "o",
+                         "--session", "s1", "--until-stopped")
+
+    assert code == 0
+    assert out.count("session s1:") == 3
+    assert sessions(setup).load("s1").last_stop_reason == "master_stop"
+
+
+def test_until_stopped_respects_max_runs(setup, wired):
+    wired([START, RUN, WAIT])
+    config = config_file(setup, "[run]\nmax_steps = 1\n")
+
+    cli_with(setup, config, "start", "alpha", "--objective", "o", "--session", "s1",
+             "--until-stopped", "--max-runs", "2")
+
+    assert sessions(setup).load("s1").last_stop_reason == "step_limit"
+
+
+def test_without_until_stopped_one_run_only(setup, wired):
+    wired([START, RUN, WAIT])
+    config = config_file(setup, "[run]\nmax_steps = 1\n")
+
+    _, out = cli_with(setup, config, "start", "alpha", "--objective", "o", "--session", "s1")
+
+    assert out.count("session s1:") == 1
+
+
+def test_resume_runs_again(setup, wired):
+    wired([START, WAIT, RUN, WAIT])
+    cli(setup, "start", "alpha", "--objective", "o", "--session", "s1")
+
+    code, out = cli(setup, "resume", "s1")
+
+    assert code == 0
+    assert sessions(setup).load("s1").steps_completed == 4
+
+
+def test_ctrl_c_is_recorded_and_the_session_stopped(setup, wired):
+    wired([START, KeyboardInterrupt()])
+
+    code, _ = cli(setup, "start", "alpha", "--objective", "o", "--session", "s1")
+
+    assert code == 130
+    session = sessions(setup).load("s1")
+    assert session.status is SessionStatus.STOPPED and session.last_stop_reason == "error"
+    assert setup["history"]().events(types=[EventType.RUN_ERROR])
+
+
+def test_status_shows_tasks_sessions_and_events(setup, wired):
+    wired([START, RUN, WAIT])
+    cli(setup, "start", "alpha", "--objective", "o", "--session", "s1")
+
+    code, out = cli(setup, "status", "alpha")
+
+    assert code == 0
+    assert "PROJECT alpha  (idle)" in out
+    assert "task t1" in out and "in_progress" in out
+    assert "session s1" in out
+    assert "verification" in out
+
+
+def test_status_shows_who_holds_the_project(setup, wired):
+    with ProjectLock(setup["project"], holder="session=s9"):
+        _, out = cli(setup, "status", "alpha")
+
+    assert "running:" in out and "session=s9" in out
+
+
+def test_a_missing_master_key_is_a_setup_error(setup, monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    code, _ = cli(setup, "start", "alpha", "--objective", "o")
+
+    assert code == 2
+    assert sessions(setup).list_sessions() == ()
+
+
+def test_a_missing_worker_binary_is_a_setup_error(setup, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    config = config_file(setup, '[worker]\nopencode_bin = "/nonexistent/opencode"\n')
+
+    code, _ = cli_with(setup, config, "start", "alpha", "--objective", "o")
+
+    assert code == 2
+
+
+def test_no_suitable_node_is_a_setup_error(setup, monkeypatch, tmp_path):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    fake_bin = tmp_path / "opencode"
+    fake_bin.write_text("#!/bin/sh\n")
+    config = config_file(setup, f'[worker]\nopencode_bin = "{fake_bin}"\nnode_min_major = 99\n')
+
+    code, _ = cli_with(setup, config, "start", "alpha", "--objective", "o")
+
+    assert code == 2
+
+
+def test_the_real_composition_wires_the_configured_parts(setup, monkeypatch, tmp_path):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    fake_bin = tmp_path / "opencode"
+    fake_bin.write_text("#!/bin/sh\n")
+    config = run_cli.load_config(config_file(
+        setup, f'[worker]\nopencode_bin = "{fake_bin}"\nmodel = "p/m"\nhome = "{tmp_path / "wh"}"\n'))
+
+    provider = run_cli.build_provider(config)
+    worker = run_cli.build_worker(config)
+
+    assert provider.name == "deepseek:deepseek-v4-flash"
+    assert worker.command(tmp_path, "P")[worker.command(tmp_path, "P").index("--model") + 1] == "p/m"
+    from core.worker_env import find_node_bin
+    if find_node_bin(22) is not None:
+        env = run_cli.build_worker_env(config)
+        assert env["HOME"] == str(tmp_path / "wh") and "DEEPSEEK_API_KEY" not in env

@@ -171,6 +171,7 @@ class AutonomousLoop:
         worktrees: Optional[GitWorktrees] = None,
         attempt_timeout_s: float = DEFAULT_ATTEMPT_TIMEOUT_S,
         verification_timeout_s: float = DEFAULT_VERIFICATION_TIMEOUT_S,
+        worker_env: Optional[Mapping] = None,
     ):
         if not isinstance(master, Master):
             raise TypeError(f"expected a Master, got {type(master).__name__}")
@@ -211,6 +212,7 @@ class AutonomousLoop:
             attempt_timeout_s=attempt_timeout_s,
             verification_timeout_s=verification_timeout_s,
             log_root=(paths if paths is not None else RuntimePaths.default()).state_dir / "logs",
+            worker_env=worker_env,
         )
 
     @property
