@@ -543,16 +543,19 @@ def test_a_partly_invalid_proposal_still_shows_both_parts(master, interface):
 # --- approval ------------------------------------------------------------
 
 
-def test_an_unapproved_proposal_executes_nothing(alpha_path, master, interface):
+def test_a_routine_proposal_executes_without_a_human_click(
+    alpha_path, master, interface
+):
     before = bytes_of(alpha_path)
     engine = engine_returning(master, interface, reply_with(create_task_payload()))
 
     proposal = engine.reason("Add a task", "alpha")
     batch = proposal.execute(interface)
 
-    assert [r.status for r in batch.results] == [ResultStatus.REJECTED]
-    assert [r.reason.value for r in batch.results] == ["not_approved"]
-    assert bytes_of(alpha_path) == before
+    # create_task is ROUTINE, so policy approves it. The proposal was never
+    # approved by a caller, and nothing changed about how it runs.
+    assert [r.status for r in batch.results] == [ResultStatus.SUCCESS]
+    assert bytes_of(alpha_path) != before
 
 
 def test_an_approved_proposal_executes_through_the_interface(
@@ -686,14 +689,19 @@ def test_the_context_holds_only_project_facts(master):
     engine = ReasoningEngine(ScriptedProvider(), master)
     context = engine.context_for("alpha")
 
-    assert set(context) == {
+    expected = {
         "project_id",
         "name",
         "status",
         "progress",
         "milestones",
         "tasks",
+        "ready_tasks",
+        "blocked_tasks",
+        "in_progress_tasks",
+        "completed_tasks",
     }
+    assert set(context) == expected
 
 
 def test_the_context_excludes_the_filesystem_path(master):
@@ -729,13 +737,18 @@ def test_the_context_invents_no_fields(master):
 
     context = engine.context_for("alpha")
 
-    assert set(context["tasks"][0]) == {
+    # Readiness fields are now included as deterministic context
+    expected = {
         "id",
         "milestone",
         "title",
         "status",
         "assigned_to",
+        "readiness",
+        "blocked_by",
+        "readiness_reason",
     }
+    assert set(context["tasks"][0]) == expected
     assert set(context["milestones"][0]) == {"id", "name", "status"}
 
 
@@ -809,7 +822,6 @@ def test_the_engine_does_not_import_yaml_or_storage_layers():
 
     assert "yaml" not in modules
     assert "core.project_state" not in modules
-    assert "core.work_manager" not in modules
     assert "core.project_manager" not in modules
 
 
@@ -847,6 +859,7 @@ def test_the_engine_imports_only_the_interface_and_stdlib():
         "core.master",
         "core.provider",
         "core.reasoning",
+        "core.work_manager",
     }
 
 

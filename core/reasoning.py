@@ -104,6 +104,7 @@ from core.master import EXPECTED_ERRORS, Master
 __all__ = [
     "ApprovalState",
     "BatchResult",
+    "ImpactLevel",
     "InvalidOperationError",
     "Operation",
     "OperationResult",
@@ -114,6 +115,7 @@ __all__ = [
     "SPECS",
     "Decision",
     "MasterDecision",
+    "requires_approval",
 ]
 
 
@@ -184,6 +186,18 @@ class InvalidOperationError(ValueError):
         self.operation = operation
 
 
+class ImpactLevel(Enum):
+    """How much authority applying one operation carries.
+
+    Classified by what the operation *does*, never by who proposed it, which
+    model or worker produced it, or which project it targets.
+    """
+
+    ROUTINE = "routine"
+    ELEVATED = "elevated"
+    CRITICAL = "critical"
+
+
 @dataclass(frozen=True)
 class OperationSpec:
     """How one named operation maps onto an existing Master method.
@@ -191,12 +205,18 @@ class OperationSpec:
     ``required`` and ``optional`` name Master's parameters. ``variadic`` marks a
     Master method that ends in ``**changes``, where any further argument is
     passed through untouched for the domain layer to judge.
+
+    ``impact`` says how much authority executing the operation carries, and is
+    stated here beside the allowlist it constrains so the two cannot drift
+    apart. It defaults to CRITICAL so that an operation added without a
+    deliberate decision about its impact is gated rather than autonomous.
     """
 
     method: str
     required: tuple
     optional: tuple = ()
     variadic: bool = False
+    impact: ImpactLevel = ImpactLevel.CRITICAL
 
     @property
     def accepted(self):
@@ -205,31 +225,69 @@ class OperationSpec:
 
 # The allowlist. Every method named here already exists on Master, and exposes
 # nothing Master does not already support.
+#
+# Every entry is ROUTINE: each one only books work that a Master decision has
+# already authorized. None of them can reach outside ProjectState, which is why
+# none of them are ELEVATED or CRITICAL today. There is deliberately no
+# operation here that edits a file, promotes a workspace, or merges, so those
+# impact levels are currently unreachable rather than merely restricted.
 SPECS = MappingProxyType(
     {
-        "inspect_project": OperationSpec("status", ("project_id",)),
+        "inspect_project": OperationSpec(
+            "status", ("project_id",), impact=ImpactLevel.ROUTINE
+        ),
         "create_milestone": OperationSpec(
             "create_milestone",
             ("project_id", "milestone_id", "name"),
             ("status",),
+            impact=ImpactLevel.ROUTINE,
         ),
         "update_milestone": OperationSpec(
             "update_milestone",
             ("project_id", "milestone_id"),
             variadic=True,
+            impact=ImpactLevel.ROUTINE,
         ),
         "create_task": OperationSpec(
             "create_task",
             ("project_id", "task_id", "milestone", "title"),
             ("status", "assigned_to"),
+            impact=ImpactLevel.ROUTINE,
         ),
         "update_task": OperationSpec(
             "update_task",
             ("project_id", "task_id"),
             variadic=True,
+            impact=ImpactLevel.ROUTINE,
         ),
     }
 )
+
+
+def requires_approval(operation) -> bool:
+    """Whether one operation must be approved by a human before it runs.
+
+    A pure function of the operation itself. It reads the impact level declared
+    on its ``OperationSpec`` and never looks at the model, the provider, the
+    worker, a QA verdict, or the project it targets -- approval is about the
+    authority the operation carries, so anything that could change the answer
+    without changing the operation is excluded by construction.
+
+    ROUTINE operations apply autonomously once a Master decision has produced
+    them. Everything else is gated, including an operation absent from the
+    allowlist: unclassified means gated, so a new capability cannot become
+    autonomous by being overlooked.
+    """
+    if not isinstance(operation, Operation):
+        raise TypeError(
+            f"expected an Operation, got {type(operation).__name__}"
+        )
+
+    spec = SPECS.get(operation.operation)
+    if spec is None:
+        return True
+
+    return spec.impact is not ImpactLevel.ROUTINE
 
 
 
@@ -263,6 +321,21 @@ class MasterDecision:
                     RequestError.INVALID_ARGUMENT_VALUE,
                     "request_approval requires an operation",
                 )
+
+    @property
+    def pending_approval(self) -> bool:
+        """Whether a human still has to authorize this decision.
+
+        True for an explicit REQUEST_APPROVAL, and also for an ACT whose
+        operation policy gates. The second case matters: a model that asks to
+        ACT on a gated operation has not thereby obtained authority, so the
+        decision is represented as pending approval rather than actionable.
+        Derived from the operation, so it does not depend on the model having
+        asked for the right thing.
+        """
+        if self.operation is None:
+            return False
+        return requires_approval(self.operation)
 
 
 @dataclass(frozen=True)
@@ -478,11 +551,26 @@ class ReasoningInterface:
         ``DOMAIN_ERROR`` carrying the originating exception's type name.
         Anything outside Master's expected error set propagates, so a real bug
         is not disguised as a rejected request.
+
+        A ROUTINE operation is approved by policy and runs without a human
+        clicking anything. Policy approval is not a second path: it yields the
+        same approved :class:`Operation` a human approval would produce, so
+        everything below this line is unchanged and identical either way.
+
+        Policy fills in only a missing approval. An explicit ``reject()`` stays
+        rejected, because a human who said no is not overruled by a rule.
         """
         if not isinstance(operation, Operation):
             raise TypeError(
                 f"expected an Operation, got {type(operation).__name__}"
             )
+
+        if (
+            not operation.is_approved
+            and operation.state is ApprovalState.PROPOSED
+            and not requires_approval(operation)
+        ):
+            operation = operation.approve()
 
         if not operation.is_approved:
             reason = (

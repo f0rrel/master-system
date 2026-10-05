@@ -1,17 +1,21 @@
 import ast
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 import yaml
 
+from core import reasoning
 from core.master import Master
 from core.reasoning import (
     SPECS,
     ApprovalState,
     BatchResult,
+    ImpactLevel,
     InvalidOperationError,
     Operation,
     OperationResult,
+    OperationSpec,
     ReasoningInterface,
     RequestError,
     ResultStatus,
@@ -69,6 +73,25 @@ def bytes_of(root):
 
 def payload(operation, **arguments):
     return dict(operation=operation, **arguments)
+
+
+# A stand-in for a high-impact operation: same shape as update_task, but gated.
+# Nothing in the real allowlist is ELEVATED or CRITICAL, so the guarantee that
+# an unapproved operation changes nothing needs one to be exercised against.
+GATED_SPEC = OperationSpec(
+    "update_task",
+    ("project_id", "task_id"),
+    variadic=True,
+    impact=ImpactLevel.CRITICAL,
+)
+
+
+@pytest.fixture
+def gated_specs(monkeypatch):
+    """Temporarily widen the allowlist with one CRITICAL operation."""
+    widened = MappingProxyType({**SPECS, "gated_update_task": GATED_SPEC})
+    monkeypatch.setattr(reasoning, "SPECS", widened)
+    return widened
 
 
 @pytest.fixture
@@ -441,14 +464,15 @@ def test_the_error_names_the_unsupported_arguments():
 # --- 6. proposed operation cannot execute before approval ----------------
 
 
-def test_a_proposed_operation_does_not_execute(alpha_path, recording_interface):
+def test_a_proposed_operation_does_not_execute(
+    alpha_path, recording_interface, gated_specs
+):
     before = bytes_of(alpha_path)
     operation = recording_interface.propose(
         payload(
-            "create_task",
+            "gated_update_task",
             project_id="alpha",
-            task_id="task-003",
-            milestone="alpha",
+            task_id="task-002",
             title="Third",
         )
     )
@@ -1056,16 +1080,17 @@ def test_a_rejected_milestone_change_leaves_state_untouched(alpha_path, interfac
     assert bytes_of(alpha_path) == before
 
 
-def test_a_batch_of_unapproved_payloads_changes_nothing(alpha_path, interface):
+def test_a_batch_of_unapproved_payloads_changes_nothing(
+    alpha_path, interface, gated_specs
+):
     before = bytes_of(alpha_path)
 
     batch = interface.execute_batch(
         [
             payload(
-                "create_task",
+                "gated_update_task",
                 project_id="alpha",
-                task_id="task-003",
-                milestone="alpha",
+                task_id="task-002",
                 title="Third",
             )
         ]
@@ -1171,9 +1196,9 @@ def test_a_batch_reports_a_malformed_payload_without_aborting(alpha_path, interf
     batch = interface.execute_batch(operations)
 
     assert [r.status for r in batch.results] == [
-        ResultStatus.REJECTED,
+        ResultStatus.SUCCESS,
         ResultStatus.INVALID_REQUEST,
-        ResultStatus.REJECTED,
+        ResultStatus.SUCCESS,
     ]
     assert batch.results[1].reason is RequestError.UNKNOWN_OPERATION
     assert batch.all_successful is False
@@ -1191,11 +1216,16 @@ def test_a_batch_accepts_approved_operations_and_raw_payloads_together(
         ]
     )
 
+    # The second payload is ROUTINE, so policy approves it exactly as the
+    # explicit approve() on the first did. Both take the same path.
     assert [r.status for r in batch.results] == [
         ResultStatus.SUCCESS,
-        ResultStatus.REJECTED,
+        ResultStatus.SUCCESS,
     ]
-    assert recording_interface.master.calls == [("status", {"project_id": "alpha"})]
+    assert recording_interface.master.calls == [
+        ("status", {"project_id": "alpha"}),
+        ("status", {"project_id": "beta"}),
+    ]
 
 
 def test_an_empty_batch_is_vacuously_successful(interface):

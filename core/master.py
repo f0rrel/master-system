@@ -174,6 +174,11 @@ class Master:
 
         return self._projects.get_project(project_id)
 
+    def project_state(self, project_id):
+        """Return the underlying ProjectState for project_id."""
+        return self._resolve(project_id)
+
+
     def _work(self, project_id):
         """Return a WorkManager bound to project_id."""
         return WorkManager(self._resolve(project_id).project_path)

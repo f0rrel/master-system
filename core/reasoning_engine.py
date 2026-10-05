@@ -215,6 +215,31 @@ Valid decisions:
 When decision is "act" or "request_approval", you must include a valid operation
 from the allowed list. For other decisions, "operation" must be null.
 
+OPERATION SHAPE
+An operation is a single FLAT JSON object. Its operation name goes in the
+"operation" key, and its arguments are siblings of that key at the same level.
+Do not nest arguments under "name", "params", "args" or "operation_type", and
+do not write the operation name outside the "operation" key. This is valid:
+
+{{
+  "decision": "act",
+  "reason": "t1 has no unmet dependencies, so start it",
+  "operation": {{
+    "operation": "update_task",
+    "project_id": "p",
+    "task_id": "t1",
+    "status": "in_progress"
+  }}
+}}
+
+And this is valid when you are choosing not to act:
+
+{{
+  "decision": "wait",
+  "reason": "nothing is ready yet",
+  "operation": null
+}}
+
 OPERATIONS YOU MAY USE
 {catalogue}
 
@@ -228,6 +253,20 @@ ADDITIONAL RULES
 - Propose the smallest change that answers the request.
 - If no action is appropriate, choose wait/blocked/needs_information with operation null.
 - Anything not in the list above will be rejected.
+
+WHAT THIS SYSTEM CAN DO
+You do not write code and you do not edit files yourself. A separate worker
+process performs implementation. What you do is choose the next action and
+express it as an operation, and the system carries it out:
+- You can start a task by proposing update_task with status "in_progress".
+- Once a task is in_progress, the worker executes it in its own workspace.
+- After execution, a verifier inspects the result; that result is shown to you
+  in the next PROJECT STATE as "last_result".
+- You can then record the outcome with an operation, for example marking a task
+  "completed" or "blocked" based on the evidence you were given.
+So a task's text describing implementation or testing does not mean you must do
+that yourself, and does not mean you cannot advance it. Judge progress by the
+state and the last_result evidence, and choose the next operation from those.
 
 REQUEST
 {request}
@@ -314,9 +353,9 @@ class Proposal:
 
         Behaviour by state, which is the whole point of the state:
 
-        * proposed  - nothing runs; each operation is reported REJECTED, so a
-          caller that forgot to approve gets a visible refusal rather than a
-          silent success
+        * proposed  - a ROUTINE operation still runs, because policy approves
+          it; anything policy gates is reported REJECTED, so a caller that
+          wanted human approval on a gated operation gets a visible refusal
         * rejected  - nothing runs and no results are produced
         * approved  - the valid operations run, in order, each through
           ReasoningInterface, which re-checks and delegates to Master
@@ -360,6 +399,30 @@ class ReasoningEngine:
         """
         status = self._master.status(project_id)
 
+        from core.work_manager import calculate_readiness
+
+        project_state = self._master.project_state(project_id)
+        tasks_with_readiness = []
+        for task in status.get("tasks", []):
+            readiness, blocked_by, reason = calculate_readiness(project_state, task)
+            tasks_with_readiness.append(
+                {
+                    "id": task.get("id"),
+                    "milestone": task.get("milestone"),
+                    "title": task.get("title"),
+                    "status": task.get("status"),
+                    "assigned_to": task.get("assigned_to"),
+                    "readiness": readiness,
+                    "blocked_by": blocked_by,
+                    "readiness_reason": reason,
+                }
+            )
+
+        ready_tasks = [t for t in tasks_with_readiness if t["readiness"] == "ready"]
+        blocked_tasks = [t for t in tasks_with_readiness if t["readiness"] == "blocked"]
+        in_progress_tasks = [t for t in tasks_with_readiness if t["status"] == "in_progress"]
+        completed_tasks = [t for t in tasks_with_readiness if t["status"] == "completed"]
+
         context = {
             "project_id": status.get("project_id"),
             "name": status.get("name"),
@@ -373,18 +436,20 @@ class ReasoningEngine:
                 }
                 for milestone in status.get("milestones", [])
             ],
-            "tasks": [
-                {
-                    "id": task.get("id"),
-                    "milestone": task.get("milestone"),
-                    "title": task.get("title"),
-                    "status": task.get("status"),
-                    "assigned_to": task.get("assigned_to"),
-                }
-                for task in status.get("tasks", [])
-            ],
+            "tasks": tasks_with_readiness,
+            "ready_tasks": ready_tasks,
+            "blocked_tasks": blocked_tasks,
+            "in_progress_tasks": in_progress_tasks,
+            "completed_tasks": completed_tasks,
         }
+        if hasattr(self, "_last_result") and self._last_result is not None:
+            context["last_result"] = self._last_result
         return context
+
+    def attach_last_result(self, result):
+        """Attach last execution/verification result for next reasoning cycle."""
+        self._last_result = result
+
 
     def build_prompt(self, request, project_id):
         prompt = PROMPT_TEMPLATE.format(
