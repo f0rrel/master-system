@@ -340,3 +340,50 @@ def test_without_rebase_a_moved_base_still_refuses_with_a_hint(setup):
         integrate(setup["master"], setup["history"], "alpha", attempt_id)
 
     assert refused.value.reason == "base_moved"
+
+
+# --- short attempt ids ------------------------------------------------------------------
+
+
+def test_the_12_character_id_the_report_prints_is_accepted(setup):
+    attempt_id, result_sha = make_attempt(setup)
+
+    result = integrate(setup["master"], setup["history"], "alpha", attempt_id[:12])
+
+    assert result.attempt_id == attempt_id
+    assert git(setup["repo"], "rev-parse", "main") == result_sha
+    assert integration_events(setup)[0].attempt_id == attempt_id
+
+
+def test_a_too_short_prefix_is_refused(setup):
+    attempt_id, _ = make_attempt(setup)
+
+    with pytest.raises(IntegrationRefused) as refused:
+        integrate(setup["master"], setup["history"], "alpha", attempt_id[:6])
+
+    assert refused.value.reason == "attempt_id_too_short"
+
+
+def test_an_ambiguous_prefix_is_refused(setup):
+    from core.attempts import resolve_attempt_id
+
+    for chosen in ("abcdef0123456789" + "0" * 16, "abcdef0123456789" + "1" * 16):
+        setup["history"].append(type=EventType.ATTEMPT_STARTED, run_id="r", project_id="alpha",
+                                task_id="t1", event_id=chosen)
+
+    with pytest.raises(IntegrationRefused) as refused:
+        resolve_attempt_id(setup["history"], "alpha", "abcdef012345")
+
+    assert refused.value.reason == "ambiguous_attempt"
+    assert resolve_attempt_id(setup["history"], "alpha", "abcdef0123456789" + "1") == \
+        "abcdef0123456789" + "1" * 16
+
+
+def test_the_integrated_commit_reads_task_id_and_title(setup):
+    attempt_id, _ = make_attempt(setup)
+    move_base(setup)
+
+    integrate(setup["master"], setup["history"], "alpha", attempt_id, rebase=True,
+              verifier=Verdict("pass"))
+
+    assert git(setup["repo"], "log", "-1", "--format=%s", "main") == "t1: T1"

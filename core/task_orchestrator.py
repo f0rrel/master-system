@@ -48,6 +48,12 @@ def _deadline(seconds: float):
     return time.monotonic() + seconds, at.isoformat(timespec="seconds")
 
 
+def commit_subject(task) -> str:
+    """``<task id>: <task title>``, one line, for the attempt's commit."""
+    title = " ".join(str(task.get("title") or "").split())
+    return f"{task.get('id')}: {title}"[:120]
+
+
 def default_worker_env() -> dict:
     node_bin = find_node_bin()
     return worker_environment(default_worker_home(),
@@ -278,7 +284,8 @@ class TaskOrchestrator:
 
         facts = {}
         try:
-            facts = self._worktrees.snapshot(worktree, base_sha, attempt_id)
+            facts = self._worktrees.snapshot(
+                worktree, base_sha, attempt_id, subject=commit_subject(task))
         except WorkspaceError as error:
             facts = {"result_sha": None, "snapshot_error": str(error)}
 

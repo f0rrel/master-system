@@ -192,13 +192,20 @@ class GitWorktrees:
             return None
         return _git(["rev-parse", "HEAD"], path).stdout.strip()
 
-    def snapshot(self, path, base_sha: str, attempt_id: str) -> dict:
-        """Commit everything in the worktree and describe base..result."""
+    def snapshot(self, path, base_sha: str, attempt_id: str,
+                 subject: Optional[str] = None) -> dict:
+        """Commit everything in the worktree and describe base..result.
+
+        The commit message is ``subject`` (for example ``<task id>: <task
+        title>``) with the attempt id in the body. The verified SHA is the
+        one integrated, so this message is what lands on the base branch.
+        """
         _git(["add", "-A"], path)
         staged = _git(["diff", "--cached", "--quiet"], path, check=False)
         if staged.returncode == 1:
-            _git([*_COMMIT_CONFIG, "commit", "--no-verify", "-q", "-m",
-                  f"attempt {attempt_id}"], path, extra_env=_COMMIT_IDENTITY)
+            message = f"{subject}\n\nAttempt {attempt_id}." if subject else f"attempt {attempt_id}"
+            _git([*_COMMIT_CONFIG, "commit", "--no-verify", "-q", "-m", message],
+                 path, extra_env=_COMMIT_IDENTITY)
         elif staged.returncode != 0:
             raise WorkspaceError(f"git diff --cached failed: {staged.stderr.strip()}")
         result_sha = _git(["rev-parse", "HEAD"], path).stdout.strip()

@@ -379,3 +379,15 @@ def test_the_workers_usage_claim_is_recorded(tmp_path):
 
     finished = payload(history, EventType.ATTEMPT_FINISHED)
     assert finished["worker_reported_usage"] == {"input_tokens": 1200, "output_tokens": 30}
+
+
+def test_the_attempt_commit_is_named_after_the_task(tmp_path):
+    result, history, repo, *_ = run_once(tmp_path, Writes())
+
+    finished = payload(history, EventType.ATTEMPT_FINISHED)
+    attempt_id = payload(history, EventType.ATTEMPT_STARTED) and \
+        history.events(types=[EventType.ATTEMPT_STARTED])[0].attempt_id
+    worktree = Path(payload(history, EventType.ATTEMPT_STARTED)["worktree"])
+    message = git(worktree, "log", "-1", "--format=%B", finished["result_sha"])
+    assert message.splitlines()[0] == "t1: T1"
+    assert f"Attempt {attempt_id}." in message

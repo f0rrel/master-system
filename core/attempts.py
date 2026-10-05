@@ -84,6 +84,31 @@ class IntegrationResult:
     rebased_from: Optional[str] = None
 
 
+#: The shortest attempt-id prefix accepted (the report prints 12 characters).
+MIN_ATTEMPT_PREFIX = 8
+
+
+def resolve_attempt_id(history: HistoryStore, project_id: str, given: str) -> str:
+    """The full attempt id for ``given`` (a full id or a unique prefix)."""
+    given = (given or "").strip().lower()
+    if len(given) < MIN_ATTEMPT_PREFIX:
+        raise IntegrationRefused(
+            "attempt_id_too_short",
+            f"give at least {MIN_ATTEMPT_PREFIX} characters of the attempt id")
+    matches = sorted({e.attempt_id for e in history.events(
+        project_id=project_id, types=[EventType.ATTEMPT_STARTED])
+        if e.attempt_id.startswith(given)})
+    if not matches:
+        raise IntegrationRefused("unknown_attempt",
+                                 f"no attempt {given} in project {project_id!r}")
+    if len(matches) > 1:
+        raise IntegrationRefused(
+            "ambiguous_attempt",
+            f"{given} matches {len(matches)} attempts: "
+            + ", ".join(m[:16] for m in matches))
+    return matches[0]
+
+
 def _attempt_records(history: HistoryStore, project_id: str, attempt_id: str):
     events = history.events(project_id=project_id, attempt_id=attempt_id)
     started = next((e for e in events if e.type is EventType.ATTEMPT_STARTED), None)
@@ -161,6 +186,7 @@ def integrate(master: Master, history: HistoryStore, project_id: str, attempt_id
         recover_project(history, project_id, store=FileSessionStore(paths.sessions_dir),
                         worktrees=worktrees)
 
+        attempt_id = resolve_attempt_id(history, project_id, attempt_id)
         started, finished, verification, integrations = _attempt_records(
             history, project_id, attempt_id)
         if started is None:
