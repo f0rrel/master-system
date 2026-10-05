@@ -307,3 +307,37 @@ def test_github_check_without_setup_says_what_is_missing(home):
     code, out = run_ms("github", "check")
     assert code == 1
     assert "App ID configured (missing)" in out and "ms github setup" in out
+
+
+def test_status_groups_tasks_and_lists_what_waits_for_the_owner(env):
+    from core.ms import project_overview
+
+    write_project(env.root, [task("t1", status="blocked"), task("t2"),
+                             task("t3", status="completed")])
+    view = project_overview(env.daemon.master, env.history, "alpha")
+    assert view["groups"]["blocked"] == ["t1 T1"]
+    assert view["groups"]["waiting"] == ["t2 T2"]
+    assert view["groups"]["done"] == ["t3 T3"]
+    assert view["needs_you"] == ["t1 T1: blocked"]
+    assert view["preview_url"] is None
+
+
+def test_status_command_prints_plain_text(home, tmp_path):
+    root = tmp_path / "projects"
+    write_project(root, [task("t1")])
+    config = home / "config" / "master-system" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(f'[run]\nprojects_root = "{root}"\n')
+    code, out = run_ms("status")
+    assert code == 0
+    assert out.startswith("Master System: on. Spent today $0.000 of $0.50")
+    assert "alpha: 1 task(s) ready" in out and "waiting (1): t1 T1" in out
+
+
+def test_report_without_sessions(home):
+    assert run_ms("report") == (0, "No sessions yet.\n")
+
+
+def test_the_wrapper_runs_ms_from_the_repository(tmp_path):
+    script = ms.wrapper_script(tmp_path)
+    assert f'PYTHONPATH="{tmp_path}"' in script and "-m core.ms" in script

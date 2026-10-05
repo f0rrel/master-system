@@ -557,6 +557,9 @@ The approval prompt defaults to **no**. A `run_task` in a proposal is never exec
 ### The owner's command: `ms` (Milestone 3, hands-off)
 
 ```bash
+ms status             # projects, tasks by state, what waits for you, today's spend, links
+ms report [session]   # a session's report (default: the latest)
+ms install            # put `ms` on PATH (~/.local/bin/ms)
 ms service install    # the background service: starts at login, processes approved tasks
 ms pause | ms resume  # start nothing new / allow new work (a running task finishes)
 ms stop               # stop the current run now (recorded as interrupted), and pause

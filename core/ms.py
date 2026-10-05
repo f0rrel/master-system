@@ -1,8 +1,11 @@
 """`ms`: the owner's command. Plain words in, plain text out.
 
+    ms status                  projects, tasks, what waits for you, today's spend, links
+    ms report [session]        a session's report (default: the latest)
     ms pause | resume          stop or allow new work (a running task finishes)
     ms stop                    stop the current run now, and pause
     ms daemon                  the background service loop (run by systemd)
+    ms install                 put `ms` on your PATH (~/.local/bin/ms)
     ms service install         install and start the service (starts at login)
     ms service uninstall
     ms notify setup            create the phone-notification topic, show how to subscribe
@@ -77,6 +80,20 @@ def _command_stop(args, out):
         return 0
     print("Stopping the current run (it is recorded as interrupted; its work is kept). "
           "The service is paused; `ms resume` to continue.", file=out)
+    return 0
+
+
+def wrapper_script(repo: Path) -> str:
+    return (f"#!/bin/sh\n# The Master System's owner command (installed by `ms install`).\n"
+            f'PYTHONPATH="{repo}" exec "{repo}/.venv/bin/python" -m core.ms "$@"\n')
+
+
+def _command_install(args, out):
+    target = Path.home() / ".local" / "bin" / "ms"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(wrapper_script(REPO))
+    target.chmod(0o755)
+    print(f"Installed {target}. Try: ms status", file=out)
     return 0
 
 
@@ -240,6 +257,124 @@ def _command_notify(args, out):
     return 0 if ok else 1
 
 
+# --- status / report -----------------------------------------------------------------------
+
+
+def project_overview(master, history, project_id, *, is_busy=None, max_failures=3):
+    """Everything `ms status` shows for one project, as plain data."""
+    from core.daemon import work_for
+    from core.history import EventType
+    from core.publish import pages_url
+    from core.workspace import is_ancestor
+
+    status = master.status(project_id)
+    project = master.project_state(project_id).project()
+    tasks = status["tasks"]
+    runnable, exhausted = work_for(status, history, max_failures)
+    integrations = {}
+    for e in history.events(project_id=project_id, types=[EventType.INTEGRATION]):
+        integrations[e.task_id] = e.payload.get("result_sha")
+    github = project.get("github") if isinstance(project.get("github"), dict) else {}
+    release = github.get("release_branch")
+    repo = Path(project.get("repository") or ".").expanduser()
+    groups = {"running": [], "waiting": [], "blocked": [], "in develop": [], "released": [],
+              "done": [], "other": []}
+    for task in tasks:
+        state = task.get("status")
+        label = f"{task['id']} {task.get('title') or ''}".rstrip()
+        if state == "in_progress":
+            groups["running"].append(label)
+        elif state == "planned":
+            groups["waiting"].append(label)
+        elif state == "blocked":
+            groups["blocked"].append(label)
+        elif state == "completed" and task["id"] in integrations and release:
+            sha = integrations[task["id"]]
+            try:
+                shipped = bool(sha) and is_ancestor(repo, sha, release)
+            except Exception:
+                shipped = False
+            groups["released" if shipped else "in develop"].append(label)
+        elif state == "completed":
+            groups["done"].append(label)
+        elif state != "cancelled":
+            groups["other"].append(label)
+    needs_you = [f"{t}: failed {max_failures} attempts; change its description or acceptance"
+                 for t in exhausted]
+    needs_you += [f"{label}: blocked" for label in groups["blocked"]]
+    if groups["in develop"]:
+        needs_you.append(f"release ready: {len(groups['in develop'])} task(s) in develop "
+                         "are not released yet (`ms release`)")
+    url = pages_url(github["repo"]) if github.get("repo") else None
+    return {"project_id": project_id, "name": status.get("name"),
+            "busy": bool(is_busy and is_busy(project_id)), "groups": groups,
+            "ready": runnable, "needs_you": needs_you,
+            "preview_url": url + "develop/" if url else None, "live_url": url}
+
+
+def _command_status(args, out):
+    from core.master import Master
+    from core.report import spend_since
+    from core.daemon import start_of_today_utc
+    from core.run_cli import _lock_holder
+    from core.sqlite_history import SQLiteHistoryStore
+
+    config = _config(args)
+    paths = _paths()
+    master = Master(config.run.projects_root)
+    history = SQLiteHistoryStore(paths.history_path)
+    paused = (paths.state_dir / "paused").exists()
+    service = "paused (ms resume)" if paused else "on"
+    spend = spend_since(history, start_of_today_utc(), config.prices, config.master.model)
+    print(f"Master System: {service}. Spent today ${spend['total_usd']:.3f} of "
+          f"${config.budget.daily_usd:.2f}"
+          f" (Master ${spend['master_usd']:.3f}, workers ${spend['worker_usd']:.3f}).", file=out)
+
+    def busy(project_id):
+        return _lock_holder(master.project_state(project_id).project_path) is not None
+
+    for project_id in master.list_projects():
+        view = project_overview(master, history, project_id, is_busy=busy)
+        state = "running now" if view["busy"] else (
+            f"{len(view['ready'])} task(s) ready" if view["ready"] else "idle")
+        print(f"\n{view['name'] or project_id}: {state}", file=out)
+        for group, items in view["groups"].items():
+            if items:
+                print(f"  {group} ({len(items)}): " + "; ".join(items), file=out)
+        if view["needs_you"]:
+            print("  Waiting for you:", file=out)
+            for item in view["needs_you"]:
+                print(f"    - {item}", file=out)
+        if view["preview_url"]:
+            print(f"  Preview: {view['preview_url']}", file=out)
+            print(f"  Live:    {view['live_url']}", file=out)
+    return 0
+
+
+def _command_report(args, out):
+    from core.report import build_report, render_report
+    from core.session_store import FileSessionStore
+    from core.sqlite_history import SQLiteHistoryStore
+
+    config = _config(args)
+    paths = _paths()
+    session_id = args.session
+    if session_id is None:
+        sessions = sorted(FileSessionStore(paths.sessions_dir).list_sessions(),
+                          key=lambda s: s.updated_at)
+        if not sessions:
+            print("No sessions yet.", file=out)
+            return 0
+        session_id = sessions[-1].session_id
+    try:
+        report = build_report(SQLiteHistoryStore(paths.history_path), session_id, config.prices)
+    except ValueError as error:
+        print(f"error: {error}", file=out)
+        return 1
+    print(render_report(report), file=out, end="")
+    return 0
+
+
 # --- github ---------------------------------------------------------------------------------
 
 
@@ -350,8 +485,15 @@ def build_parser():
     parser = argparse.ArgumentParser(prog="ms", description="The Master System, for its owner.")
     parser.add_argument("--config", default=None, metavar="PATH")
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("status", help="Everything, in plain words.").set_defaults(
+        handler=_command_status)
+    report = commands.add_parser("report", help="A session's report (default: the latest).")
+    report.add_argument("session", nargs="?")
+    report.set_defaults(handler=_command_report)
     commands.add_parser("pause", help="Start nothing new.").set_defaults(handler=_command_pause)
     commands.add_parser("resume", help="Allow new work.").set_defaults(handler=_command_resume)
+    commands.add_parser("install", help="Put `ms` on your PATH.").set_defaults(
+        handler=_command_install)
     commands.add_parser("stop", help="Stop the current run now, and pause.").set_defaults(
         handler=_command_stop)
     daemon = commands.add_parser("daemon", help="The background service loop.")
