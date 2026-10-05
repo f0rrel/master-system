@@ -1,6 +1,7 @@
 """`ms`: the owner's command. Plain words in, plain text out.
 
-    ms status                  projects, tasks, what waits for you, today's spend, links
+    ms status [--details]      a headline, what needs you, news, what's next, spend, links
+    ms publish <project>       push develop and the preview site now
     ms report [session]        a session's report (default: the latest)
     ms chat <project> [--new]  talk to the planner: it drafts tasks with tests; `approve` queues them
     ms release <project>       release notes + a pull request develop -> main for you to merge
@@ -347,7 +348,7 @@ def project_overview(master, history, project_id, *, is_busy=None, max_failures=
             "preview_url": url + "develop/" if url else None, "live_url": url}
 
 
-def _command_status(args, out):
+def _status_details(args, out):
     from core.master import Master
     from core.report import spend_since
     from core.daemon import start_of_today_utc
@@ -388,6 +389,177 @@ def _command_status(args, out):
         if view["preview_url"]:
             print(f"  Preview: {view['preview_url']}", file=out)
             print(f"  Live:    {view['live_url']}", file=out)
+    return 0
+
+
+def _local(iso: str) -> str:
+    """A history timestamp as local time, e.g. 'Mon 21:48'."""
+    from datetime import datetime
+
+    return datetime.fromisoformat(iso).astimezone().strftime("%a %d %b, %H:%M")
+
+
+def _ago(iso: str, now=None) -> str:
+    from datetime import datetime, timezone
+
+    now = now or datetime.now(timezone.utc)
+    minutes = int((now - datetime.fromisoformat(iso)).total_seconds() // 60)
+    if minutes < 1:
+        return "just now"
+    if minutes < 60:
+        return f"{minutes} min ago"
+    hours = minutes // 60
+    return f"{hours} h {minutes % 60} min ago" if hours < 24 else _local(iso)
+
+
+def friendly_status(master, history, config, *, paused, last_looked, is_busy, spend,
+                    pending_release=None, stalled=(), now=None) -> str:
+    """`ms status` for the owner: a headline, then what needs them, news, what's next."""
+    from core.daemon import work_for
+    from core.history import EventType
+
+    lines = []
+    for project_id in master.list_projects():
+        project = master.project_state(project_id).project()
+        if project.get("auto_integrate") is not True:
+            continue
+        status = master.status(project_id)
+        name = status.get("name") or project_id
+        tasks = [t for t in status["tasks"] if t.get("status") != "cancelled"]
+        titles = {t["id"]: t.get("title") or t["id"] for t in tasks}
+        done = sum(1 for t in tasks if t.get("status") == "completed")
+        runnable, exhausted = work_for(status, history, max(3, 2 * len(config.worker.ladder)))
+
+        needs = [f"{t['id']} {titles[t['id']]}: it is blocked; tell the planner what to change "
+                 "(ms chat)" for t in tasks if t.get("status") == "blocked"]
+        needs += [f"{t} {titles[t]}: failed several attempts; change its description "
+                  "(ms chat)" for t in exhausted]
+        if project_id in stalled:
+            needs.append("The last run made no progress; the service waits for a change.")
+        if pending_release:
+            needs.append(f"Release {pending_release['version']} waits for your merge: "
+                         f"{pending_release.get('pr_url')}")
+        view = project_overview(master, history, project_id)
+        if view["groups"]["in develop"] and not pending_release:
+            needs.append(f"{len(view['groups']['in develop'])} finished task(s) are in the "
+                         "preview but not released; when you like them: ms release "
+                         f"{project_id}")
+
+        # Headline.
+        started = history.events(project_id=project_id, types=[EventType.ATTEMPT_STARTED])
+        open_attempt = None
+        if started:
+            last = started[-1]
+            ended = history.events(project_id=project_id, attempt_id=last.attempt_id,
+                                   types=[EventType.ATTEMPT_FINISHED,
+                                          EventType.ATTEMPT_INTERRUPTED])
+            open_attempt = None if ended else last
+        if is_busy(project_id) and open_attempt is not None:
+            head = (f"Working on {open_attempt.task_id} ({titles.get(open_attempt.task_id, '')}),"
+                    f" started {_ago(open_attempt.created_at, now)}.")
+        elif is_busy(project_id):
+            head = "Working (deciding the next step)."
+        elif paused:
+            head = "Paused (ms resume to continue)."
+        else:
+            head = "Idle."
+        head += f" {done} of {len(tasks)} tasks done."
+        head += (" Nothing needs you." if not needs else
+                 f" {len(needs)} thing{'s' if len(needs) > 1 else ''} need{'' if len(needs) > 1 else 's'} you.")
+        lines.append(f"{name}: {head}")
+
+        if needs:
+            lines.append("\n  Needs you")
+            lines += [f"    - {n}" for n in needs]
+
+        news = [e for e in history.events(project_id=project_id,
+                                          types=[EventType.INTEGRATION, EventType.RELEASE])
+                if e.created_at > last_looked]
+        news_lines = []
+        for e in news:
+            if e.type is EventType.INTEGRATION:
+                where = ("in the preview" if e.payload.get("base_branch") == project.get(
+                    "base_branch") else f"in {e.payload.get('base_branch')}")
+                news_lines.append(f"{_local(e.created_at)}  {e.task_id} "
+                                  f"{titles.get(e.task_id, '')}: done, {where}")
+            elif e.payload.get("stage") == "published":
+                news_lines.append(f"{_local(e.created_at)}  released "
+                                  f"{e.payload.get('version')}")
+        lines.append("\n  Done since you last looked")
+        lines += [f"    - {n}" for n in news_lines] or ["    (nothing new)"]
+
+        coming = [f"{t} {titles[t]}" for t in runnable]
+        coming += [f"{t['id']} {titles[t['id']]} (after "
+                   f"{', '.join(t.get('depends_on') or [])})" for t in tasks
+                   if t.get("status") == "planned" and t["id"] not in runnable
+                   and t["id"] not in exhausted]
+        lines.append("\n  Coming up")
+        lines += [f"    - {c}" for c in coming] or ["    (no tasks queued; plan more with "
+                                                    f"ms chat {project_id})"]
+        if view["preview_url"]:
+            lines.append(f"\n  Preview: {view['preview_url']}")
+            lines.append(f"  Live game: {view['live_url']}")
+        lines.append("")
+    lines.append(f"Spent today: ${spend['total_usd']:.2f} of ${config.budget.daily_usd:.2f}."
+                 + (" The service is paused." if paused else ""))
+    return "\n".join(lines) + "\n"
+
+
+def _command_status(args, out):
+    if args.details:
+        return _status_details(args, out)
+    from datetime import datetime, timedelta, timezone
+
+    from core.daemon import start_of_today_utc
+    from core.master import Master
+    from core.release import Releaser
+    from core.report import spend_since
+    from core.run_cli import _lock_holder
+    from core.sqlite_history import SQLiteHistoryStore
+
+    config = _config(args)
+    paths = _paths()
+    master = Master(config.run.projects_root)
+    history = SQLiteHistoryStore(paths.history_path)
+    marker = paths.state_dir / "last-looked"
+    try:
+        last_looked = marker.read_text().strip()
+    except OSError:
+        last_looked = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    import json
+
+    try:
+        memory = json.loads((paths.state_dir / "daemon-state.json").read_text())
+    except (OSError, ValueError):
+        memory = {}
+    releaser = Releaser(master, history, lambda repo: None, askpass_dir=paths.state_dir)
+    pending = None
+    for project_id in master.list_projects():
+        pending = pending or releaser.open_pending(project_id)
+    text = friendly_status(
+        master, history, config, paused=(paths.state_dir / "paused").exists(),
+        last_looked=last_looked,
+        is_busy=lambda p: _lock_holder(master.project_state(p).project_path) is not None,
+        spend=spend_since(history, start_of_today_utc(), config.prices, config.master.model),
+        pending_release=pending, stalled=set(memory.get("stalled", {})))
+    print(text, file=out, end="")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(datetime.now(timezone.utc).isoformat())
+    return 0
+
+
+def _command_publish(args, out):
+    from core.master import Master
+    from core.publish import Publisher
+    from core.sqlite_history import SQLiteHistoryStore
+
+    config = _config(args)
+    paths = _paths()
+    master = Master(config.run.projects_root)
+    publisher = Publisher(master, SQLiteHistoryStore(paths.history_path),
+                          lambda repo: github_app(config, repo), paths.state_dir)
+    lines = publisher(args.project)
+    print("\n".join(lines) if lines else "Already published; nothing changed.", file=out)
     return 0
 
 
@@ -679,8 +851,12 @@ def build_parser():
     parser = argparse.ArgumentParser(prog="ms", description="The Master System, for its owner.")
     parser.add_argument("--config", default=None, metavar="PATH")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("status", help="Everything, in plain words.").set_defaults(
-        handler=_command_status)
+    status = commands.add_parser("status", help="Everything, in plain words.")
+    status.add_argument("--details", action="store_true", help="The technical view.")
+    status.set_defaults(handler=_command_status)
+    publish = commands.add_parser("publish", help="Push develop and the preview site now.")
+    publish.add_argument("project")
+    publish.set_defaults(handler=_command_publish)
     report = commands.add_parser("report", help="A session's report (default: the latest).")
     report.add_argument("session", nargs="?")
     report.set_defaults(handler=_command_report)

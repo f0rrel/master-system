@@ -129,7 +129,7 @@ tasks:
 - id: ml-7
   milestone: m2-batch-2
   title: Debug panel with ?debug=1
-  status: in_progress
+  status: completed
   description: 'In www/index.html, when the page URL has ?debug=1, show a small fixed
     panel with id ''debug-panel'' on every screen (it must not exist without ?debug=1).
     Deal every solo level from a seed with MatchLogic.createRng (random seed unless

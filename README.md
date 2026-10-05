@@ -557,7 +557,8 @@ The approval prompt defaults to **no**. A `run_task` in a proposal is never exec
 ### The owner's command: `ms` (Milestone 3, hands-off)
 
 ```bash
-ms status             # projects, tasks by state, what waits for you, today's spend, links
+ms status [--details] # headline, needs you, done since you last looked, coming up, spend, links (local time)
+ms publish <project>  # push develop and the preview site now (the service does it after each run)
 ms report [session]   # a session's report (default: the latest)
 ms install            # put `ms` on PATH (~/.local/bin/ms)
 ms chat <project>     # the planner: describe what you want; it drafts tasks with tests; `approve` queues them

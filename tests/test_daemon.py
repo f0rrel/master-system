@@ -29,9 +29,11 @@ class FakeHistory:
             attempt_id=attempt_id, payload=payload or {},
             created_at=created_at or NOW.isoformat()))
 
-    def events(self, project_id=None, task_id=None, types=None, session_id=None, **_):
+    def events(self, project_id=None, task_id=None, types=None, session_id=None,
+               attempt_id=None, **_):
         return tuple(e for e in self.rows
                      if (session_id is None or getattr(e, "session_id", None) == session_id)
+                     and (attempt_id is None or e.attempt_id == attempt_id)
                      and (project_id is None or e.project_id == project_id)
                      and (task_id is None or e.task_id == task_id)
                      and (types is None or e.type in types))
@@ -330,7 +332,7 @@ def test_status_command_prints_plain_text(home, tmp_path):
     config = home / "config" / "master-system" / "config.toml"
     config.parent.mkdir(parents=True)
     config.write_text(f'[run]\nprojects_root = "{root}"\n')
-    code, out = run_ms("status")
+    code, out = run_ms("status", "--details")
     assert code == 0
     assert out.startswith("Master System: on. Spent today $0.000 of $0.50")
     assert "alpha: 1 task(s) ready" in out and "waiting (1): t1 T1" in out
@@ -362,3 +364,34 @@ def test_a_run_without_progress_stalls_the_project_until_a_human_acts(env):
     env.history.add(EventType.HUMAN_ACTION, payload={"action": "set_description"})
     env.daemon.cycle()
     assert len(env.runs) == 2
+
+
+def test_friendly_status_has_a_headline_and_plain_sections(env):
+    from core.ms import friendly_status
+
+    write_project(env.root, [task("t1", status="completed"), task("t2"),
+                             task("t3", status="blocked")])
+    env.history.add(EventType.INTEGRATION, task_id="t1", payload={"base_branch": "develop"})
+    config = load_config("/nonexistent")
+    text = friendly_status(env.daemon.master, env.history, config, paused=False,
+                           last_looked="2026-10-01T00:00:00+00:00",
+                           is_busy=lambda p: False,
+                           spend={"total_usd": 0.012}, now=NOW)
+    assert text.startswith("alpha: Idle. 1 of 3 tasks done. 1 thing needs you.")
+    assert "t3 T3: it is blocked" in text
+    assert "Done since you last looked" in text and "t1 T1: done, in develop" in text
+    assert "Coming up\n    - t2 T2" in text
+    assert "Spent today: $0.01 of $0.50." in text
+    assert "seq" not in text and "integration" not in text and "+00:00" not in text
+
+
+def test_friendly_status_shows_work_in_progress(env):
+    from core.ms import friendly_status
+
+    env.history.add(EventType.ATTEMPT_STARTED, task_id="t1", attempt_id="a1",
+                    created_at="2026-10-06T11:55:00+00:00")
+    text = friendly_status(env.daemon.master, env.history, load_config("/nonexistent"),
+                           paused=False, last_looked=NOW.isoformat(),
+                           is_busy=lambda p: True, spend={"total_usd": 0}, now=NOW)
+    assert text.startswith("alpha: Working on t1 (T1), started 5 min ago.")
+    assert "(nothing new)" in text
