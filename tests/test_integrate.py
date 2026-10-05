@@ -238,3 +238,105 @@ def test_the_cli_reports_a_refusal(setup, capsys):
 
     assert code == 1
     assert "not_verified" in capsys.readouterr().err
+
+
+# --- --rebase: replay onto a moved base, re-verify, integrate exactly that ---------------
+
+
+def move_base(setup, name="other.txt", content="someone else\n"):
+    (setup["repo"] / name).write_text(content)
+    git(setup["repo"], "add", name)
+    git(setup["repo"], "commit", "-q", "-m", "moved on")
+    return git(setup["repo"], "rev-parse", "main")
+
+
+def test_a_moved_base_is_rebased_reverified_and_integrated(setup):
+    attempt_id, result_sha = make_attempt(setup)
+    tip = move_base(setup)
+
+    result = integrate(setup["master"], setup["history"], "alpha", attempt_id,
+                       rebase=True, verifier=Verdict("pass"))
+
+    new_sha = git(setup["repo"], "rev-parse", "main")
+    assert result.method == "rebased_ff_merge"
+    assert result.result_sha == new_sha != result_sha
+    assert result.rebased_from == result_sha
+    assert git(setup["repo"], "rev-parse", f"{new_sha}^") == tip
+    assert (setup["repo"] / "feature.txt").exists() and (setup["repo"] / "other.txt").exists()
+    reverify = setup["history"].events(types=[EventType.VERIFICATION])[-1]
+    assert reverify.attempt_id == attempt_id
+    assert reverify.payload["result_sha"] == new_sha
+    assert reverify.payload["base_sha"] == tip
+    assert reverify.payload["rebased_from"] == result_sha
+    assert reverify.payload["verdict"] == "pass"
+    [event] = integration_events(setup)
+    assert event.payload["result_sha"] == new_sha
+    assert event.payload["rebased_from"] == result_sha
+    assert reverify.seq < event.seq
+
+
+def test_a_rebased_integration_is_idempotent(setup):
+    attempt_id, _ = make_attempt(setup)
+    move_base(setup)
+    integrate(setup["master"], setup["history"], "alpha", attempt_id, rebase=True,
+              verifier=Verdict("pass"))
+
+    again = integrate(setup["master"], setup["history"], "alpha", attempt_id, rebase=True,
+                      verifier=Verdict("pass"))
+
+    assert again.method == "already_integrated"
+    assert len(integration_events(setup)) == 1
+
+
+def test_a_conflicting_rebase_is_refused_and_changes_nothing(setup):
+    attempt_id, _ = make_attempt(setup)
+    tip = move_base(setup, "feature.txt", "a different feature\n")
+
+    with pytest.raises(IntegrationRefused) as refused:
+        integrate(setup["master"], setup["history"], "alpha", attempt_id, rebase=True,
+                  verifier=Verdict("pass"))
+
+    assert refused.value.reason == "rebase_conflict"
+    assert git(setup["repo"], "rev-parse", "main") == tip
+    assert integration_events(setup) == ()
+
+
+def test_a_rebased_result_that_fails_reverification_is_refused(setup):
+    attempt_id, _ = make_attempt(setup)
+    tip = move_base(setup)
+
+    with pytest.raises(IntegrationRefused) as refused:
+        integrate(setup["master"], setup["history"], "alpha", attempt_id, rebase=True,
+                  verifier=Verdict("fail"))
+
+    assert refused.value.reason == "reverification_failed"
+    assert git(setup["repo"], "rev-parse", "main") == tip
+    assert integration_events(setup) == ()
+    failed = setup["history"].events(types=[EventType.VERIFICATION])[-1].payload
+    assert failed["verdict"] == "fail" and failed["rebased_from"]
+
+
+def test_reverification_runs_the_real_acceptance_on_the_rebased_commit(setup):
+    setup["master"].set_task_acceptance("alpha", "t1", {
+        "commands": ["test -f feature.txt", "test -f other.txt"]})
+    attempt_id, _ = make_attempt(setup)  # the attempt's base has no other.txt yet
+    move_base(setup)
+    from core.acceptance_verifier import AcceptanceVerifier
+
+    result = integrate(setup["master"], setup["history"], "alpha", attempt_id, rebase=True,
+                       verifier=AcceptanceVerifier())
+
+    assert result.method == "rebased_ff_merge"
+    reverify = setup["history"].events(types=[EventType.VERIFICATION])[-1].payload
+    assert reverify["verdict"] == "pass"
+    assert [c["exit_code"] for c in reverify["evidence"]["commands_run"]] == [0, 0]
+
+
+def test_without_rebase_a_moved_base_still_refuses_with_a_hint(setup):
+    attempt_id, _ = make_attempt(setup)
+    move_base(setup)
+
+    with pytest.raises(IntegrationRefused, match="--rebase") as refused:
+        integrate(setup["master"], setup["history"], "alpha", attempt_id)
+
+    assert refused.value.reason == "base_moved"

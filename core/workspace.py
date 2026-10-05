@@ -159,14 +159,38 @@ class GitWorktrees:
 
     # --- the attempt ------------------------------------------------------
 
-    def create(self, repository, path, attempt_id: str, base_sha: str) -> Path:
+    def create(self, repository, path, attempt_id: str, base_sha: str,
+               branch: Optional[str] = None) -> Path:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         _git(
-            ["worktree", "add", str(path), "-b", self.branch_for(attempt_id), base_sha],
+            ["worktree", "add", str(path), "-b", branch or self.branch_for(attempt_id),
+             base_sha],
             repository,
         )
         return path
+
+    def free_path(self, project_id: str, name: str) -> Path:
+        """``<root>/<project>/<name>``, or ``<name>-2``, ``-3``... if taken."""
+        candidate, counter = self.root / project_id / name, 1
+        while candidate.exists():
+            counter += 1
+            candidate = self.root / project_id / f"{name}-{counter}"
+        return check_isolated(candidate, self._protected)
+
+    @staticmethod
+    def cherry_pick(path, base_sha: str, result_sha: str) -> Optional[str]:
+        """Replay base..result onto the worktree's HEAD; the new HEAD, or None on
+        conflict (the cherry-pick is aborted and the worktree left clean)."""
+        if base_sha == result_sha:
+            return _git(["rev-parse", "HEAD"], path).stdout.strip()
+        done = _git([*_COMMIT_CONFIG, "cherry-pick", "--allow-empty", "--keep-redundant-commits",
+                     f"{base_sha}..{result_sha}"], path, check=False,
+                    extra_env=_COMMIT_IDENTITY)
+        if done.returncode != 0:
+            _git(["cherry-pick", "--abort"], path, check=False)
+            return None
+        return _git(["rev-parse", "HEAD"], path).stdout.strip()
 
     def snapshot(self, path, base_sha: str, attempt_id: str) -> dict:
         """Commit everything in the worktree and describe base..result."""

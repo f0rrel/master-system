@@ -13,6 +13,7 @@ Commands:
     resume <session> [--until-stopped ...]
     status [<project>]
     report <session> [--json]                                    from history alone
+    integrate <project> <attempt> [--rebase]                     human only
     task describe <project> <task> (--text TEXT | --clear)      human edit, recorded
     task set-acceptance <project> <task> (--command C ... [--protect GLOB ...] | --clear)
 
@@ -255,6 +256,32 @@ def _command_status(ctx, args, out):
     return EXIT_OK
 
 
+# --- integrate ---------------------------------------------------------------------------
+
+
+def _command_integrate(ctx, args, out):
+    from core.attempts import IntegrationRefused, integrate
+
+    try:
+        result = integrate(
+            ctx.master, ctx.history, args.project_id, args.attempt_id, paths=ctx.paths,
+            rebase=args.rebase, verifier=build_verifier(ctx.config),
+            worker_env=build_worker_env(ctx.config) if args.rebase else None,
+            verification_timeout_s=ctx.config.run.verification_timeout_s,
+        )
+    except IntegrationRefused as error:
+        print(f"error: refused ({error.reason}): {error}", file=sys.stderr)
+        return EXIT_ERROR
+    if result.method == "already_integrated":
+        print(f"already integrated: {result.result_sha} is on {result.base_branch}", file=out)
+    else:
+        print(f"integrated {result.attempt_id}: {result.base_branch} "
+              f"{result.previous_sha[:12]} -> {result.result_sha[:12]} ({result.method})"
+              + (f", rebased from {result.rebased_from[:12]} and re-verified"
+                 if result.rebased_from else ""), file=out)
+    return EXIT_OK
+
+
 # --- report ----------------------------------------------------------------------------
 
 
@@ -338,6 +365,14 @@ def build_parser():
     resume.add_argument("session_id")
     run_options(resume)
     resume.set_defaults(handler=_command_resume)
+
+    integrate_cmd = commands.add_parser(
+        "integrate", help="Human only: move the base branch to a verified attempt's result.")
+    integrate_cmd.add_argument("project_id")
+    integrate_cmd.add_argument("attempt_id")
+    integrate_cmd.add_argument("--rebase", action="store_true",
+                               help="If the base moved: replay, re-verify, then integrate.")
+    integrate_cmd.set_defaults(handler=_command_integrate)
 
     report = commands.add_parser("report", help="The session's report, from history alone.")
     report.add_argument("session_id")

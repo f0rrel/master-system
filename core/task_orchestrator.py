@@ -54,7 +54,7 @@ def default_worker_env() -> dict:
                               path_dirs=[node_bin] if node_bin else [])
 
 
-def _process_records(workspace) -> list:
+def process_records(workspace) -> list:
     """What the orchestrator observed about each process: ids, exit, logs."""
     return [
         {
@@ -286,7 +286,7 @@ class TaskOrchestrator:
             "outcome": outcome,
             "worker_reported_status": exec_res.status if exec_res is not None else None,
             "worker": worker,
-            "processes": _process_records(workspace),
+            "processes": process_records(workspace),
             **facts,
         }
         if exec_res is not None:
@@ -363,7 +363,7 @@ class TaskOrchestrator:
                 error_type=type(error).__name__,
                 message=str(error),
                 deadline_at=verify_deadline_at,
-                processes=_process_records(verification_workspace),
+                processes=process_records(verification_workspace),
             )
             raise
 
@@ -374,7 +374,7 @@ class TaskOrchestrator:
             findings=jsonable(list(ver_res.findings)),
             evidence=jsonable(ver_res.evidence),
             deadline_at=verify_deadline_at,
-            processes=_process_records(verification_workspace),
+            processes=process_records(verification_workspace),
         )
 
         result["verification"] = {
