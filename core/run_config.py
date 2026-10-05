@@ -28,6 +28,14 @@ attempt_timeout_s = 1800
 verification_timeout_s = 1800
 # projects_root = "/path/to/projects"
 
+[budget]                          # priced spend caps (USD)
+daily_usd = 0.50
+run_usd = 0.20
+
+[daemon]                          # the background service (ms daemon)
+interval_s = 300
+ntfy_server = "https://ntfy.sh"   # the topic is in ~/.config/master-system/ntfy-topic
+
 [prices]                          # USD per million tokens, by model name
 "deepseek-v4-flash" = { input = 0.44, output = 1.32, cached_input = 0.0028 }
 ```
@@ -44,7 +52,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Optional
 
-__all__ = ["ConfigError", "MasterConfig", "RunConfig", "RunSettings", "WorkerConfig",
+__all__ = ["BudgetSettings", "ConfigError", "DaemonSettings", "MasterConfig", "RunConfig",
+           "RunSettings", "WorkerConfig",
            "default_config_path", "load_config"]
 
 PROVIDERS = ("deepseek", "ollama", "opencode")
@@ -95,10 +104,28 @@ class RunSettings:
 
 
 @dataclass(frozen=True)
+class BudgetSettings:
+    #: Total priced spend (Master + planner + worker) allowed per local day.
+    daily_usd: float = 0.50
+    #: Master spend allowed per run.
+    run_usd: float = 0.20
+
+
+@dataclass(frozen=True)
+class DaemonSettings:
+    #: Seconds between the background service's cycles.
+    interval_s: float = 300
+    #: The ntfy server; the topic is in ~/.config/master-system/ntfy-topic.
+    ntfy_server: str = "https://ntfy.sh"
+
+
+@dataclass(frozen=True)
 class RunConfig:
     master: MasterConfig = field(default_factory=MasterConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     run: RunSettings = field(default_factory=RunSettings)
+    budget: BudgetSettings = field(default_factory=BudgetSettings)
+    daemon: DaemonSettings = field(default_factory=DaemonSettings)
     #: model name -> {"input": usd_per_m, "output": usd_per_m, "cached_input": usd_per_m}
     prices: Mapping[str, Mapping[str, float]] = field(default_factory=lambda: {
         "deepseek-v4-flash": {"input": 0.44, "output": 1.32, "cached_input": 0.0028},
@@ -134,7 +161,7 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
     except (OSError, tomllib.TOMLDecodeError) as error:
         raise ConfigError(f"cannot read {path}: {error}") from error
 
-    unknown = sorted(set(data) - {"master", "worker", "run", "prices"})
+    unknown = sorted(set(data) - {"master", "worker", "run", "prices", "budget", "daemon"})
     if unknown:
         raise ConfigError(f"unknown sections {unknown} in {path}")
 
@@ -191,4 +218,16 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
             raise ConfigError(f"[prices] {model!r} rates must be non-negative numbers")
         prices[model] = {k: float(v) for k, v in rates.items()}
 
-    return RunConfig(master=master, worker=worker, run=run, prices=prices, source=path)
+    b = _section(data, "budget", ("daily_usd", "run_usd"))
+    budget = BudgetSettings(
+        daily_usd=_positive(b, "budget", "daily_usd", BudgetSettings.daily_usd),
+        run_usd=_positive(b, "budget", "run_usd", BudgetSettings.run_usd),
+    )
+    d = _section(data, "daemon", ("interval_s", "ntfy_server"))
+    daemon = DaemonSettings(
+        interval_s=_positive(d, "daemon", "interval_s", DaemonSettings.interval_s),
+        ntfy_server=str(d.get("ntfy_server", DaemonSettings.ntfy_server)).rstrip("/"),
+    )
+
+    return RunConfig(master=master, worker=worker, run=run, prices=prices,
+                     budget=budget, daemon=daemon, source=path)

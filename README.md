@@ -554,6 +554,28 @@ python -m core.reason_cli "..." --provider deepseek --dry-run      # show only, 
 
 The approval prompt defaults to **no**. A `run_task` in a proposal is never executed here.
 
+### The owner's command: `ms` (Milestone 3, hands-off)
+
+```bash
+ms service install    # the background service: starts at login, processes approved tasks
+ms pause | ms resume  # start nothing new / allow new work (a running task finishes)
+ms stop               # stop the current run now (recorded as interrupted), and pause
+ms notify setup       # phone notifications via ntfy: prints the private topic to subscribe to
+ms notify test
+ms daemon [--once]    # the service loop itself (systemd runs this)
+```
+
+The service (`core/daemon.py`, systemd user unit `master-system.service`) checks every
+`[daemon] interval_s` seconds: if not paused and today's priced spend (Master + worker, from
+history) is under `[budget] daily_usd`, it starts one run per idle project that has work, with
+a run cap of `min([budget] run_usd, what is left today)`, through `core.run_cli` in a child
+process (`core/host.py`), so every run_cli safety rule applies. Work = a task that is
+`in_progress`, or `planned` with its dependencies completed, has acceptance commands, and has
+fewer than 3 failed attempts since the last human action on it (otherwise the owner is asked,
+once). After each run the owner gets a short phone notification: done, blocked, errors, spend
+today, and the preview link. The Master's key is read from `~/.config/master-system/master.env`
+into the run's environment only.
+
 ### Run the autonomous loop (`core/run_cli.py`)
 
 ```bash
@@ -807,6 +829,9 @@ Add a row whenever an architectural decision is made or reversed.
 | Tasks gain a human-only `manual_check` (how to check the result by hand); it is **not** part of `spec_hash`, is copied into `attempt_started`, and the report prints it under each completion | The report must show it from history alone; rewording a manual check should not invalidate verified evidence | Requested by the owner; exclusion from `spec_hash` taken without the owner |
 | Attempt commits are named `<task id>: <task title>` when the attempt is snapshotted, not at integration | Integration must land exactly the verified SHA (D1); renaming at integration would change it | Requested by the owner; placement taken without the owner |
 | `integrate` accepts a unique attempt-id prefix of 8+ characters | The report prints 12 | Requested by the owner |
+| M3 hands-off plan approved (`docs/plans/m3-hands-off.md`), H-D1..H-D6 as proposed, start on login | The owner's role: talk to a planner, play-test develop, approve releases | **Approved (2026-10-06)** |
+| A background service starts runs on its own: approved, ready tasks with acceptance; daily and per-run caps; no retry after 3 failures since the last human action; ntfy notifications | Hands-off; it cannot spend on a hopeless task every day | **Approved (2026-10-06)**; details taken without the owner |
+| `core/host.py` joins the process-starting modules (the service's own runs and systemd unit; never workers) | The boundary test lists who may start processes | Taken without the owner |
 | Merged Milestone 1 to main (2026-10-05) | Milestone 1 complete and reviewed; `main` fast-forwarded to `m1-contain-verify`, tagged `m1-contain-verify` | **Approved (2026-10-05)** |
 
 ---

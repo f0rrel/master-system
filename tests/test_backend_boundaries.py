@@ -7,8 +7,9 @@ CORE = Path(__file__).resolve().parent.parent / "core"
 
 #: Modules that implement ExecutionBackend or VerificationBackend.
 BACKENDS = ["opencode_backend.py", "ollama_backend.py", "acceptance_verifier.py"]
-#: The only core modules allowed to start processes.
-PROCESS_STARTERS = {"worker_process.py", "workspace.py", "attempts.py"}
+#: The only core modules allowed to start processes. ``host.py`` starts the
+#: control plane's own runs and systemd unit (the background service), never workers.
+PROCESS_STARTERS = {"worker_process.py", "workspace.py", "attempts.py", "host.py"}
 
 
 def imported(path):

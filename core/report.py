@@ -28,7 +28,7 @@ from core.evidence import spec_hash
 from core.history import EventType, HistoryStore
 from core.usage import add_usage
 
-__all__ = ["build_report", "master_cost_usd", "render_report"]
+__all__ = ["build_report", "master_cost_usd", "render_report", "spend_since"]
 
 _RUN_ENDS = {EventType.RUN_STOPPED: "stopped", EventType.RUN_ERROR: "error",
              EventType.RUN_INTERRUPTED: "interrupted"}
@@ -83,6 +83,40 @@ def master_cost_usd(history: HistoryStore, session_id: str, prices: Mapping,
                 raise ValueError(f"no price for the Master model of {reasoner!r}")
             total += cost
     return round(total, 6)
+
+
+def spend_since(history: HistoryStore, since_iso: str, prices: Mapping,
+                default_model: Optional[str] = None) -> dict:
+    """Priced spend recorded at or after ``since_iso``, across all projects.
+
+    Master and planner calls are priced from their usage. A worker's claimed
+    usage is priced when its model has a price; otherwise the cost the service
+    reported is used (0 for free models). Unpriced Master calls count as
+    ``unpriced_calls`` so a cap can refuse to guess.
+    """
+    master = worker = 0.0
+    unpriced = 0
+    for e in history.events(types=[EventType.DECISION, EventType.RUN_STOPPED,
+                                   EventType.ATTEMPT_FINISHED]):
+        if e.created_at < since_iso:
+            continue
+        if e.type is EventType.ATTEMPT_FINISHED:
+            usage = e.payload.get("worker_reported_usage") or {}
+            model = (e.payload.get("artifacts") or {}).get("model")
+            cost = _price(usage, model, prices) if model else None
+            worker += cost if cost is not None else float(usage.get("reported_cost_usd") or 0)
+            continue
+        for usage in (e.payload.get("usage"), e.payload.get("failed_call_usage")):
+            if not usage:
+                continue
+            cost = _price(add_usage([usage]),
+                          _model_of(e.payload.get("reasoner")) or default_model, prices)
+            if cost is None:
+                unpriced += 1
+            else:
+                master += cost
+    return {"master_usd": round(master, 6), "worker_usd": round(worker, 6),
+            "total_usd": round(master + worker, 6), "unpriced_calls": unpriced}
 
 
 def _completes(payload) -> bool:
