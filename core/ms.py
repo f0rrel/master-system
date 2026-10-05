@@ -147,8 +147,11 @@ def release_ready_notice(releaser):
             return []
         from core.workspace import branch_tip
 
+        from core.host import git as host_git
+        from core.release import released_ref
+
         tip = branch_tip(repo, develop)
-        if tip and not is_ancestor(repo, tip, release):
+        if tip and not is_ancestor(repo, tip, released_ref(host_git, repo, release)):
             return ["Release ready: develop has work that is not released yet. "
                     "Say `release` in `ms chat`, or run `ms release`."]
         return []
@@ -319,7 +322,11 @@ def project_overview(master, history, project_id, *, is_busy=None, max_failures=
         elif state == "completed" and task["id"] in integrations and release:
             sha = integrations[task["id"]]
             try:
-                shipped = bool(sha) and is_ancestor(repo, sha, release)
+                from core.host import git as host_git
+                from core.release import released_ref
+
+                shipped = bool(sha) and is_ancestor(repo, sha,
+                                                    released_ref(host_git, repo, release))
             except Exception:
                 shipped = False
             groups["released" if shipped else "in develop"].append(label)

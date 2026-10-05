@@ -146,3 +146,10 @@ def test_a_closed_pr_releases_nothing(env):
     env["app"].pr = {"number": 7, "state": "closed", "merged": False}
     assert "closed without merging" in env["releaser"].watch("ml")[0]
     assert env["releaser"].open_pending("ml") is None
+
+
+def test_a_local_main_ahead_of_github_does_not_count_as_released(env):
+    repo = env["repo"]
+    git(repo, "merge", "-q", "--ff-only", "develop")  # integrated locally, never pushed
+    result = env["releaser"].prepare("ml")
+    assert result["opened"] and result["tasks"] == ["ml-9", "ml-10"]

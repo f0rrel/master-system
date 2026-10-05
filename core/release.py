@@ -32,9 +32,23 @@ from core.history import EventType
 __all__ = ["Releaser", "release_notes"]
 
 
+def released_ref(git, repo, release_branch) -> str:
+    """What GitHub's release branch was at the last fetch (else the local branch).
+
+    The dedicated clone's local release branch can be ahead of GitHub's (work
+    integrated there before Milestone 3); only what GitHub serves is released.
+    """
+    ref = f"refs/ms-release/{release_branch}"
+    try:
+        git(["rev-parse", "--verify", "-q", ref], repo)
+        return ref
+    except RuntimeError:
+        return f"refs/heads/{release_branch}"
+
+
 def _shipped(git, repo, sha, release_branch) -> bool:
     try:
-        git(["merge-base", "--is-ancestor", sha, f"refs/heads/{release_branch}"], repo)
+        git(["merge-base", "--is-ancestor", sha, released_ref(git, repo, release_branch)], repo)
         return True
     except RuntimeError:
         return False
@@ -154,6 +168,11 @@ class Releaser:
     def prepare(self, project_id) -> dict:
         """Write the notes, push develop, open or update the release PR."""
         repo, develop, release, repo_name = self._setup(project_id)
+        try:
+            self._git(["fetch", "-q", self._remote_url(repo_name),
+                       f"+refs/heads/{release}:refs/ms-release/{release}"], repo)
+        except RuntimeError:
+            pass  # offline: judge by the last fetch
         pending = self.open_pending(project_id)
         version = pending["version"] if pending else self.next_version(project_id, repo)
         since = None
@@ -231,11 +250,11 @@ class Releaser:
 
     def _fetch(self, app, repo, release) -> None:
         """Bring the merged release branch into the dedicated clone (fast-forward only)."""
-        from core.workspace import branch_tip, fast_forward
+        from core.workspace import branch_tip, fast_forward, is_ancestor
 
         url = self._remote_url(app.repo)
         self._git(["fetch", "-q", url, f"+refs/heads/{release}:refs/ms-release/{release}"], repo)
         new = self._git(["rev-parse", f"refs/ms-release/{release}"], repo)
         old = branch_tip(repo, release)
-        if old != new:
+        if old != new and is_ancestor(repo, old, new):
             fast_forward(repo, release, old, new)
