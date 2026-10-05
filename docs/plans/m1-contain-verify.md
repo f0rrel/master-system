@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **Waiting for owner approval.** No code is written until the owner approves. |
+| Status | **Approved by the owner (2026-10-05)**, including P1–P8, with three additions (A-backup, A-grace, A-uvlock below). |
 | Branch | `m1-contain-verify` (from `claude-week` `dab0928`) |
 | Closes | C1, C2, H1, M1, M2, and the history-path part of L5. M3 partly (item 11). |
 | Baseline | 983 passed, 1 skipped, 5 integration tests deselected |
@@ -17,6 +17,14 @@ round-trip (M3), policy by transition (M3), the attempt-budget change (M3),
 DBOS (M4), the run CLI (M2), new workers.
 
 ---
+
+## 0. Owner additions at approval
+
+- **A-backup:** before the v1→v2 history migration, copy the database to
+  `history.sqlite.bak-v1-<timestamp>` next to it; refuse to migrate if the copy fails. Tested.
+- **A-grace:** workers run as `timeout --signal=TERM --kill-after=30s <deadline> ...`, so a
+  worker gets a 30 s grace period before SIGKILL. `timed_out` is recorded either way.
+- **A-uvlock:** `uv.lock` is committed.
 
 ## 1. Concrete problems found in the given decisions
 
@@ -125,7 +133,7 @@ AttemptWorkspace(path, base_sha, result_sha=None, deadline=<monotonic>, deadline
 ### 2.5 Shared worker process helper (`core/worker_process.py`, new)
 
 `run_process(argv, *, cwd, deadline, lock_fd, grace=10, env=None) -> ProcessOutcome`
-- Launches `["timeout", f"--kill-after={grace}s", f"{secs}s", *argv]` with:
+- Launches `["timeout", "--signal=TERM", "--kill-after=30s", f"{secs}s", *argv]` (grace configurable, default 30 s) with:
   - `start_new_session=True` (a new process group and session);
   - `pass_fds=(lock_fd,)` when there is a lock;
   - stdout and stderr captured;
@@ -328,7 +336,8 @@ Integration does not change task status.
 New event types `attempt_process` and `integration` need the SQLite `CHECK`
 constraint widened, so `SCHEMA_VERSION` becomes 2.
 
-On opening a v1 database, `SQLiteHistoryStore` migrates it in one transaction:
+On opening a v1 database, `SQLiteHistoryStore` first copies it to
+`history.sqlite.bak-v1-<timestamp>` (refusing to migrate if the copy fails), then migrates it in one transaction:
 1. create `events_v2`;
 2. copy every row (`seq` preserved);
 3. drop the old table (this also drops its triggers);

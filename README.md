@@ -554,7 +554,8 @@ a script against the code.
 - Acceptance:
   - [ ] `kill -9` during a worker: recovery is refused until the worker exits, the worktree is kept, and its diff stats are recorded.
   - [ ] A worker that edits a protected test gets `fail`.
-  - [ ] Re-titling or reopening a task invalidates an earlier pass.
+  - [ ] Re-titling a task or changing its acceptance invalidates an earlier pass.
+    ("Reopening invalidates a pass" moved to Milestone 3, decision P7.)
   - [ ] An attempt past its deadline is killed and recorded as `timed_out`.
   - [ ] No worker can reach project state, sessions or history.
 
@@ -582,6 +583,7 @@ a script against the code.
   - [ ] An operation approved from another process resumes and applies exactly that operation, with no model call.
   - [ ] A stale approval is refused.
   - [ ] Spec edits, cancel, reopen and milestone completion wait for a human.
+  - [ ] Reopening a task invalidates an earlier pass (moved here from Milestone 1, P7).
   - [ ] A new session doesn't reset the budget.
 
 **4. Durable runtime (DBOS spike)**
@@ -668,6 +670,17 @@ Add a row whenever an architectural decision is made or reversed.
 | Stop self-hosting (`projects/ai-system`) until approvals work (Milestone 3); dogfood on a toy repo | Avoid self-modification by the back door | **Approved (2026-10-05)** |
 | Five-milestone roadmap (§12) | The review's sequencing: contain, run, approve, durable runtime, plans | **Approved (2026-10-05)** |
 | DBOS spike in Milestone 4 | Test the escape hatch before building more homemade durability | **Approved (2026-10-05)** |
+| `uv.lock` is committed | Reproducible dev environments | **Approved (2026-10-05)** |
+| M1 plan P1: state dir `$XDG_DATA_HOME/master-system/` (history, sessions); worktrees in the sibling `master-system-worktrees/` | Worktrees inside the state dir would be refused by the isolation rule | **Approved (2026-10-05)** |
+| M1 plan P2: workers run under coreutils `timeout --signal=TERM --kill-after=30s`, so the deadline holds even if the loop dies | An orphaned worker would otherwise hold the inherited lock forever | **Approved (2026-10-05)** |
+| M1 plan P3: the orchestrator generates the attempt id, so `attempt_started` (with base SHA and worktree) is written before `git worktree add` | Intent before side effect | **Approved (2026-10-05)** |
+| M1 plan P4: integration is fast-forward only, idempotent by SHA; a moved base is refused | Merges with conflicts need judgement | **Approved (2026-10-05)** |
+| M1 plan P5: recovery runs on lock acquisition by history users (SessionRunner, the loop, integrate), not by the `core.master` / `reason_cli` state CLIs | `master.py` may not import history; human edits don't depend on closed records | **Approved (2026-10-05)** |
+| M1 plan P6: the completion gate compares spec_hash with the spec *after* the operation | Retitle-and-complete in one operation must not pass | **Approved (2026-10-05)** |
+| M1 plan P7: "reopen invalidates a pass" moved to Milestone 3 | spec_hash cannot detect a reopen; needs transition policy | **Approved (2026-10-05)** |
+| M1 plan P8: verification has its own deadline (30 min total, 10 min per command) | Acceptance commands need a bound too | **Approved (2026-10-05)** |
+| Cancel deferred | Killing a recorded PID risks killing an unrelated process after PID reuse | **Approved (2026-10-05)** |
+| History DB is copied to `history.sqlite.bak-v1-<timestamp>` before the v1→v2 migration; a failed copy refuses the migration | A schema rebuild must be reversible | **Approved (2026-10-05)** |
 
 ---
 
@@ -711,8 +724,8 @@ These apply to AI agents (Claude Code, OpenCode, Codex, …) and humans alike.
 - **Never** let model or worker output mutate project state except through Master and policy.
 - **Never** add provider, model or worker names above the adapter modules.
 - **Never** auto-replay an attempt whose outcome is unknown.
-- **Never** commit runtime state (`sessions/`, `var/`, `.run.lock`, `.venv/`, `uv.lock`
-  unless the owner decides otherwise) or secrets (`.env`, API keys).
+- **Never** commit runtime state (`sessions/`, `var/`, `.run.lock`, `.venv/`) or secrets
+  (`.env`, API keys). `uv.lock` **is** committed (approved 2026-10-05).
 - **Never** mark `projects/ai-system` tasks completed on the owner's behalf.
 - Add a dependency only with a decision-log entry explaining why.
 - Every behaviour change comes with tests. Prefer scenario tests (crash, forgery,
