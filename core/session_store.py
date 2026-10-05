@@ -29,6 +29,7 @@ if __package__ in (None, ""):
 
 import yaml
 
+from core.paths import RuntimePaths
 from core.project_state import write_yaml_atomically
 from core.work_session import (
     InvalidSessionError,
@@ -36,7 +37,6 @@ from core.work_session import (
 )
 
 
-DEFAULT_SESSIONS_ROOT = Path(__file__).resolve().parent.parent / "sessions"
 SESSION_SUFFIX = ".yaml"
 
 
@@ -59,7 +59,7 @@ class FileSessionStore:
     """SessionStore backed by one YAML file per session."""
 
     def __init__(self, root=None):
-        self.root = Path(root) if root is not None else DEFAULT_SESSIONS_ROOT
+        self.root = Path(root) if root is not None else RuntimePaths.default().sessions_dir
         self.root.mkdir(parents=True, exist_ok=True)
 
     # --- locations -------------------------------------------------------

@@ -16,11 +16,13 @@ from pathlib import Path
 from typing import Optional
 
 from core.history import EventType, HistoryEvent, prepare_event
+from core.paths import RuntimePaths
 
-__all__ = ["DEFAULT_HISTORY_PATH", "SCHEMA_VERSION", "SQLiteHistoryStore"]
+__all__ = ["BUSY_TIMEOUT_MS", "SCHEMA_VERSION", "SQLiteHistoryStore"]
 
-DEFAULT_HISTORY_PATH = Path(__file__).resolve().parent.parent / "var" / "history.sqlite"
 SCHEMA_VERSION = 1
+#: How long a writer waits for another connection's lock before failing.
+BUSY_TIMEOUT_MS = 5000
 
 _TYPES = ", ".join(f"'{t.value}'" for t in EventType)
 
@@ -72,9 +74,12 @@ class SQLiteHistoryStore:
     """HistoryStore backed by one SQLite file, created on first use."""
 
     def __init__(self, path=None):
-        self.path = Path(path) if path is not None else DEFAULT_HISTORY_PATH
+        self.path = Path(path) if path is not None else RuntimePaths.default().history_path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._connection = sqlite3.connect(str(self.path))
+        self._connection = sqlite3.connect(
+            str(self.path), timeout=BUSY_TIMEOUT_MS / 1000
+        )
+        self._connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         self._connection.execute("PRAGMA journal_mode=WAL")
         self._connection.execute("PRAGMA synchronous=FULL")
         with self._connection:
@@ -91,6 +96,9 @@ class SQLiteHistoryStore:
                     f"history schema version {stored[0]} is not supported "
                     f"(expected {SCHEMA_VERSION})"
                 )
+
+    def busy_timeout_ms(self) -> int:
+        return self._connection.execute("PRAGMA busy_timeout").fetchone()[0]
 
     def close(self) -> None:
         self._connection.close()

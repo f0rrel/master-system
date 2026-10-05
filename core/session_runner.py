@@ -54,6 +54,7 @@ from core.evidence import DEFAULT_MAX_ATTEMPTS
 from core.execution import ExecutionBackend
 from core.history import EventType, HistoryStore
 from core.master import Master
+from core.paths import RuntimePaths
 from core.provider import ReasoningProvider
 from core.run_lock import ProjectLock
 from core.session_store import FileSessionStore
@@ -85,6 +86,7 @@ class SessionRunner:
         verification_backend: VerificationBackend,
         store=None,
         history: Optional[HistoryStore] = None,
+        paths: Optional[RuntimePaths] = None,
         request: Optional[str] = None,
         max_steps: int = 20,
         max_retries: int = DEFAULT_MAX_RETRIES,
@@ -94,11 +96,13 @@ class SessionRunner:
         self._provider = provider
         self._execution_backend = execution_backend
         self._verification_backend = verification_backend
-        self._store = store if store is not None else FileSessionStore()
+        paths = paths if paths is not None else RuntimePaths.default()
+        self._paths = paths
+        self._store = store if store is not None else FileSessionStore(paths.sessions_dir)
         if history is None:
             from core.sqlite_history import SQLiteHistoryStore
 
-            history = SQLiteHistoryStore()
+            history = SQLiteHistoryStore(paths.history_path)
         self._history = history
         self._request = request
         self._max_steps = max_steps

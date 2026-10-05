@@ -404,12 +404,19 @@ deletes are aborted by triggers.
 | `projects/<id>/milestones.yaml` | `milestones: [{id, name, status}]` | yes | Master |
 | `projects/<id>/tasks.yaml` | `tasks: [{id, milestone, title, status, assigned_to?, depends_on?}]` | yes | Master |
 | `projects/<id>/.run.lock` | the holder description (informational only) | no (gitignored) | ProjectLock |
-| `sessions/<session_id>.yaml` | WorkSession records | no (gitignored) | SessionRunner |
-| `var/history.sqlite` | the event history | no (gitignored) | HistoryStore |
+| `$XDG_DATA_HOME/master-system/sessions/<session_id>.yaml` | WorkSession records | no (outside the repo) | SessionRunner |
+| `$XDG_DATA_HOME/master-system/history.sqlite` | the event history | no (outside the repo) | HistoryStore |
 
-**Caution:** all of these sit inside the repository. If a worker ever runs with this
-repo as its workspace, it can edit the control plane's own state. Milestone 1 moves them
-out (gap C2).
+`$XDG_DATA_HOME` defaults to `~/.local/share`. Both paths are configurable
+(`core/paths.py: RuntimePaths`). Before Milestone 1 they defaulted to `sessions/` and
+`var/history.sqlite` inside the repository; those are not moved automatically. If they
+exist on your machine, move them once:
+
+```bash
+mkdir -p ~/.local/share/master-system
+mv sessions ~/.local/share/master-system/sessions
+mv var/history.sqlite* ~/.local/share/master-system/
+```
 
 There is no `acceptance` / definition-of-done field on tasks yet; the title is the only
 spec (gap C1).
