@@ -199,7 +199,7 @@ def test_observe_reports_a_missing_worktree(tmp_path, worktrees):
 def test_the_workspace_runs_processes_in_itself_and_records_them(tmp_path):
     spawned = []
     workspace = AttemptWorkspace(
-        path=tmp_path, base_sha="b", deadline=time.monotonic() + 30,
+        path=tmp_path, base_sha="b", log_dir=tmp_path / "logs", deadline=time.monotonic() + 30,
         deadline_at="later", on_spawn=lambda pid, pgid: spawned.append(pid),
     )
 
@@ -211,7 +211,7 @@ def test_the_workspace_runs_processes_in_itself_and_records_them(tmp_path):
 
 
 def test_a_per_call_timeout_never_extends_the_deadline(tmp_path):
-    workspace = AttemptWorkspace(path=tmp_path, base_sha="b",
+    workspace = AttemptWorkspace(path=tmp_path, base_sha="b", log_dir=tmp_path / "logs",
                                  deadline=time.monotonic() + 1, deadline_at="soon",
                                  grace=1)
 

@@ -83,6 +83,7 @@ def workspace_for(path, seconds=60, **kwargs):
     from core.workspace import AttemptWorkspace
 
     Path(path).mkdir(parents=True, exist_ok=True)
+    log_dir = kwargs.pop("log_dir", None) or _FACTORY.mktemp("logs")
     return AttemptWorkspace(path=Path(path), base_sha=kwargs.pop("base_sha", "base"),
                             deadline=time.monotonic() + seconds, deadline_at="later",
-                            **kwargs)
+                            log_dir=log_dir, **kwargs)

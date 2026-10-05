@@ -339,3 +339,30 @@ def test_a_missing_base_branch_is_refused(tmp_path):
     loop.run("alpha")
 
     assert refusal(history)["reason"] == "repository_unusable"
+
+
+# --- process logs ---------------------------------------------------------------
+
+
+def test_process_logs_are_recorded_with_their_hashes_outside_the_worktree(
+        tmp_path, tmp_path_factory):
+    import hashlib
+    from core.paths import RuntimePaths
+
+    runtime_paths = RuntimePaths(state_dir=tmp_path_factory.mktemp("state"),
+                                 worktrees_root=tmp_path_factory.mktemp("wt") / "root")
+
+    class Talks:
+        def execute(self, task, context, *, workspace):
+            workspace.run(["sh", "-c", "echo hello from the worker"])
+            return ExecutionResult(status="success")
+
+    result, history, *_ = run_once(tmp_path, Talks(), paths=runtime_paths)
+
+    started = payload(history, EventType.ATTEMPT_STARTED)
+    process = payload(history, EventType.ATTEMPT_FINISHED)["processes"][0]
+    log = Path(process["stdout_log"]["path"])
+    assert log.read_text() == "hello from the worker\n"
+    assert process["stdout_log"]["sha256"] == hashlib.sha256(log.read_bytes()).hexdigest()
+    assert runtime_paths.state_dir in log.parents
+    assert Path(started["worktree"]) not in log.parents

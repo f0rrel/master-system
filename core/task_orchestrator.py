@@ -47,6 +47,21 @@ def _deadline(seconds: float):
     return time.monotonic() + seconds, at.isoformat(timespec="seconds")
 
 
+def _process_records(workspace) -> list:
+    """What the orchestrator observed about each process: ids, exit, logs."""
+    return [
+        {
+            "pid": p.pid,
+            "pgid": p.pgid,
+            "returncode": p.returncode,
+            "timed_out": p.timed_out,
+            "stdout_log": p.stdout_log.to_dict() if p.stdout_log else None,
+            "stderr_log": p.stderr_log.to_dict() if p.stderr_log else None,
+        }
+        for p in workspace.processes
+    ]
+
+
 def default_worktrees(master: Master, paths: Optional[RuntimePaths] = None) -> GitWorktrees:
     paths = paths if paths is not None else RuntimePaths.default()
     return GitWorktrees(
@@ -81,6 +96,7 @@ class TaskOrchestrator:
         worktrees: Optional[GitWorktrees] = None,
         attempt_timeout_s: float = DEFAULT_ATTEMPT_TIMEOUT_S,
         verification_timeout_s: float = DEFAULT_VERIFICATION_TIMEOUT_S,
+        log_root: Optional[Path] = None,
     ):
         if attempt_timeout_s <= 0 or verification_timeout_s <= 0:
             raise ValueError("timeouts must be positive")
@@ -92,6 +108,11 @@ class TaskOrchestrator:
         self._worktrees = worktrees if worktrees is not None else default_worktrees(master)
         self._attempt_timeout_s = attempt_timeout_s
         self._verification_timeout_s = verification_timeout_s
+        #: Process logs live in the state dir, never in the worktree.
+        self._log_root = (
+            Path(log_root) if log_root is not None
+            else RuntimePaths.default().state_dir / "logs"
+        )
 
     @property
     def worktrees(self) -> GitWorktrees:
@@ -215,11 +236,14 @@ class TaskOrchestrator:
             )
             raise
 
+        log_dir = self._log_root / project_id / attempt_id
         workspace = AttemptWorkspace(
             path=worktree,
             base_sha=base_sha,
             deadline=deadline,
             deadline_at=deadline_at,
+            log_dir=log_dir,
+            phase="worker",
             lock_fd=lock_fd,
             on_spawn=recorder("worker", deadline_at),
         )
@@ -249,11 +273,7 @@ class TaskOrchestrator:
             "outcome": outcome,
             "worker_reported_status": exec_res.status if exec_res is not None else None,
             "worker": worker,
-            "processes": [
-                {"pid": p.pid, "pgid": p.pgid, "returncode": p.returncode,
-                 "timed_out": p.timed_out}
-                for p in workspace.processes
-            ],
+            "processes": _process_records(workspace),
             **facts,
         }
         if exec_res is not None:
@@ -296,6 +316,8 @@ class TaskOrchestrator:
             result_sha=facts["result_sha"],
             deadline=verify_deadline,
             deadline_at=verify_deadline_at,
+            log_dir=log_dir,
+            phase="verification",
             lock_fd=lock_fd,
             on_spawn=recorder("verification", verify_deadline_at),
         )
@@ -326,6 +348,7 @@ class TaskOrchestrator:
                 error_type=type(error).__name__,
                 message=str(error),
                 deadline_at=verify_deadline_at,
+                processes=_process_records(verification_workspace),
             )
             raise
 
@@ -336,6 +359,7 @@ class TaskOrchestrator:
             findings=jsonable(list(ver_res.findings)),
             evidence=jsonable(ver_res.evidence),
             deadline_at=verify_deadline_at,
+            processes=_process_records(verification_workspace),
         )
 
         result["verification"] = {

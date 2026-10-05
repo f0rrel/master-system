@@ -209,6 +209,7 @@ class AutonomousLoop:
             ),
             attempt_timeout_s=attempt_timeout_s,
             verification_timeout_s=verification_timeout_s,
+            log_root=(paths if paths is not None else RuntimePaths.default()).state_dir / "logs",
         )
 
     @property

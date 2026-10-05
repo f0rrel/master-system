@@ -285,6 +285,10 @@ class AttemptWorkspace:
     base_sha: str
     deadline: float
     deadline_at: str
+    #: Where process output is written, under the state dir, never in the worktree.
+    log_dir: Path
+    #: ``worker`` or ``verification``; names the log files.
+    phase: str = "worker"
     result_sha: Optional[str] = None
     lock_fd: Optional[int] = None
     on_spawn: Optional[Callable[[int, int], None]] = None
@@ -304,8 +308,9 @@ class AttemptWorkspace:
         if timeout is not None:
             deadline = min(deadline, self.clock() + timeout)
         outcome = run_process(
-            argv, cwd=self.path, deadline=deadline, lock_fd=self.lock_fd,
-            grace=self.grace, env=env, on_spawn=self.on_spawn, clock=self.clock,
+            argv, cwd=self.path, deadline=deadline, log_dir=self.log_dir,
+            log_name=self.phase, lock_fd=self.lock_fd, grace=self.grace, env=env,
+            on_spawn=self.on_spawn, clock=self.clock,
         )
         self.processes.append(outcome)
         return outcome
