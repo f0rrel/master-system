@@ -29,9 +29,10 @@ class FakeHistory:
             attempt_id=attempt_id, payload=payload or {},
             created_at=created_at or NOW.isoformat()))
 
-    def events(self, project_id=None, task_id=None, types=None, **_):
+    def events(self, project_id=None, task_id=None, types=None, session_id=None, **_):
         return tuple(e for e in self.rows
-                     if (project_id is None or e.project_id == project_id)
+                     if (session_id is None or getattr(e, "session_id", None) == session_id)
+                     and (project_id is None or e.project_id == project_id)
                      and (task_id is None or e.task_id == task_id)
                      and (types is None or e.type in types))
 
@@ -106,7 +107,7 @@ def test_a_cycle_runs_one_session_per_project_with_work(env):
     [request] = env.runs
     assert request == RunRequest("alpha", "alpha-auto-20261006-120000", 0.2)
     assert "ran alpha-auto-20261006-120000" in log[0]
-    assert env.notifier.sent[-1]["title"] == "alpha: run finished"
+    assert env.notifier.sent[-2]["title"] == "alpha: run finished"
 
 
 def test_a_finished_task_is_reported_as_done(env):
@@ -187,7 +188,7 @@ def test_a_failing_after_run_hook_is_reported_not_raised(env):
 
     env.daemon.after_run = [broken]
     env.daemon.cycle()
-    assert "after-run step failed: push refused" in env.notifier.sent[-1]["message"]
+    assert "after-run step failed: push refused" in env.notifier.sent[-2]["message"]
 
 
 def test_start_of_today_is_local_midnight_in_utc():
@@ -350,3 +351,14 @@ def test_a_project_that_did_not_opt_in_is_never_run(env):
     del data["auto_integrate"]
     project_yaml.write_text(yaml.safe_dump(data))
     assert env.daemon.cycle() == [] and env.runs == []
+
+
+def test_a_run_without_progress_stalls_the_project_until_a_human_acts(env):
+    env.daemon.cycle()
+    assert len(env.runs) == 1
+    assert env.notifier.sent[-1]["title"] == "alpha: needs you"
+    assert env.daemon.cycle() == ["alpha: stalled; waiting for the owner"]
+    assert len(env.runs) == 1
+    env.history.add(EventType.HUMAN_ACTION, payload={"action": "set_description"})
+    env.daemon.cycle()
+    assert len(env.runs) == 2

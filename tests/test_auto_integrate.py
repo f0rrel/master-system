@@ -133,3 +133,24 @@ def test_without_auto_integrate_nothing_is_integrated(toy, monkeypatch):  # noqa
     _, history = run(toy, monkeypatch, [start, run_task, done])
     assert history.events(types=[EventType.INTEGRATION]) == ()
     assert task_status(toy) == "completed"
+
+
+def test_a_master_that_keeps_completing_is_stopped_and_sees_why(dev, monkeypatch):
+    fake_worker(dev, also_on_develop=("greet.py", "def greet(name):\\n    return 'Yo ' + name\\n"))
+    start, run_task, done = ops()
+    master_replies = [start, run_task, done, done]
+    out, history = run(dev, monkeypatch, master_replies)
+    assert "completion refused twice" in out or "operation_failed" in out
+    assert len(history.events(types=[EventType.ATTEMPT_STARTED])) == 1
+
+
+def test_masters_context_says_a_passed_attempt_is_not_integrated(dev, monkeypatch):
+    from core.evidence import HistoryEvidence
+
+    fake_worker(dev, also_on_develop=("greet.py", "def greet(name):\\n    return 'Yo ' + name\\n"))
+    start, run_task, done = ops()
+    _, history = run(dev, monkeypatch, [start, run_task, done, done])
+    evidence = HistoryEvidence(history, integration_required=lambda project_id: True)
+    context = evidence.for_project("toy", ["fix-greet"])
+    latest = context["execution_evidence"]["tasks"]["fix-greet"]["latest_attempt"]
+    assert "NOT in the development branch" in latest["integration"]

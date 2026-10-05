@@ -307,6 +307,8 @@ class HistoryEvidence:
         for task_id in task_ids:
             every = attempts_for_task(self._history, project_id, task_id)
             here = attempts_for_task(self._history, project_id, task_id, **scope)
+            not_integrated = (bool(every) and self._integration_required(project_id)
+                              and every[-1].verdict == "pass" and not every[-1].integrated)
             tasks[task_id] = {
                 "attempts_this_session": len(here),
                 "attempts_total": len(every),
@@ -319,6 +321,13 @@ class HistoryEvidence:
                     if every else None
                 ),
             }
+            if not_integrated:
+                # H-D3: completing is refused until a passing attempt is in the
+                # development branch; the way forward is a new attempt.
+                tasks[task_id]["latest_attempt"]["integration"] = (
+                    "NOT in the development branch (it conflicts with newer work), so the "
+                    "task cannot be completed: set it in_progress if needed, then run_task "
+                    "again; the new attempt starts from the current base")
 
         recent = []
         for event in self._history.events(

@@ -199,6 +199,7 @@ class AutonomousLoop:
         #: The project lock, when the caller already holds it. Without one,
         #: run() takes the lock itself for the duration of the run.
         self._lock = lock
+        self._not_integrated_refusals = 0
         self._evidence = HistoryEvidence(
             self._history, session_id=session_id, max_attempts=max_attempts_per_task,
             integration_required=auto_integrate.applies if auto_integrate else None,
@@ -539,6 +540,12 @@ class AutonomousLoop:
             # work) is not a question for a human: the task runs again from
             # the new base. Refused, and Master decides again.
             if gate_reason == "not_integrated":
+                refused_before = self._not_integrated_refusals
+                self._not_integrated_refusals += 1
+                if refused_before:
+                    return stop(STOP_OPERATION_FAILED, decision,
+                                "completion refused twice: the latest attempt is not "
+                                "integrated; Master did not run the task again")
                 self._record_refusal(
                     run_id, project_id, steps, decision.operation, gate_reason,
                     "the latest attempt passed but is not in the development branch (it "

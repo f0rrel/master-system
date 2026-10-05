@@ -209,6 +209,11 @@ class Daemon:
             if self.is_busy(project_id):
                 log.append(f"{project_id}: busy")
                 continue
+            stalled = memory.get("stalled", {}).get(project_id)
+            if stalled is not None and stalled == self._human_mark(project_id):
+                log.append(f"{project_id}: stalled; waiting for the owner")
+                continue
+            memory.get("stalled", {}).pop(project_id, None)
             before = self.master.status(project_id)
             runnable, exhausted = work_for(before, self.history, self.max_failures)
             for task_id in exhausted:
@@ -239,12 +244,26 @@ class Daemon:
                     extra += hook(project_id, session_id) or []
                 except Exception as error:  # a hook failure must not stop the service
                     extra.append(f"after-run step failed: {error}")
-            self._report_changes(memory, project_id, session_id, before, code, extra)
+            progressed = self._report_changes(memory, project_id, session_id, before, code,
+                                              extra)
+            if not progressed:
+                # The same run would happen again in five minutes: wait for a
+                # human action (a task edit, a new task, a reopen) instead.
+                memory.setdefault("stalled", {})[project_id] = self._human_mark(project_id)
+                self.notifier.send(f"{project_id}: needs you",
+                                   "The last run made no progress (no attempt, no task "
+                                   "finished). The service waits until a task is changed or "
+                                   "added; see `ms status` and `ms report`.",
+                                   tags="raising_hand", priority="high")
             spent = self.spent_today()
             if spent >= daily:
                 break
         self._remember(memory)
         return log
+
+    def _human_mark(self, project_id) -> int:
+        events = self.history.events(project_id=project_id, types=[EventType.HUMAN_ACTION])
+        return events[-1].seq if events else 0
 
     def _hands_off(self, project_id) -> bool:
         """Only projects that opted in (project.yaml ``auto_integrate: true``) are run."""
@@ -282,6 +301,9 @@ class Daemon:
         for task_id in blocked:
             memory.setdefault("notified", {})[f"blocked:{project_id}:{task_id}:{session_id}"] = \
                 self.now().isoformat()
+        attempts = self.history.events(session_id=session_id, types=[EventType.ATTEMPT_STARTED])
+        changed = any(old.get(t["id"]) != t.get("status") for t in after.get("tasks") or [])
+        return bool(attempts) or changed
 
     def serve(self, sleep: Callable[[float], None] = time.sleep,
               should_stop: Callable[[], bool] = lambda: False, out=None) -> None:
