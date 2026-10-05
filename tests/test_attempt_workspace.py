@@ -366,3 +366,16 @@ def test_process_logs_are_recorded_with_their_hashes_outside_the_worktree(
     assert process["stdout_log"]["sha256"] == hashlib.sha256(log.read_bytes()).hexdigest()
     assert runtime_paths.state_dir in log.parents
     assert Path(started["worktree"]) not in log.parents
+
+
+
+def test_the_workers_usage_claim_is_recorded(tmp_path):
+    class Counts:
+        def execute(self, task, context, *, workspace):
+            return ExecutionResult(status="success",
+                                   usage={"input_tokens": 1200, "output_tokens": 30})
+
+    result, history, *_ = run_once(tmp_path, Counts())
+
+    finished = payload(history, EventType.ATTEMPT_FINISHED)
+    assert finished["worker_reported_usage"] == {"input_tokens": 1200, "output_tokens": 30}

@@ -294,6 +294,7 @@ class TaskOrchestrator:
                 reason=exec_res.reason,
                 artifacts=jsonable(exec_res.artifacts),
                 state_updates=jsonable(exec_res.state_updates),
+                worker_reported_usage=jsonable(exec_res.usage),
             )
         if raised is not None:
             finished.update(error_type=type(raised).__name__, message=str(raised))

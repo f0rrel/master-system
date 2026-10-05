@@ -28,6 +28,10 @@ class ExecutionResult:
     reason: str = ""
     artifacts: Mapping[str, object] = field(default_factory=dict)
     state_updates: Mapping[str, object] = field(default_factory=dict)
+    #: Token and cost usage as the worker reports it: a claim, used only for
+    #: accounting. Neutral keys: input_tokens, output_tokens, reasoning_tokens,
+    #: cached_input_tokens, cache_write_tokens, reported_cost_usd.
+    usage: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self):
         if not isinstance(self.status, str) or self.status not in VALID_STATUSES:
@@ -38,6 +42,7 @@ class ExecutionResult:
         # Normalize to immutable mappings
         object.__setattr__(self, "artifacts", dict(self.artifacts))
         object.__setattr__(self, "state_updates", dict(self.state_updates))
+        object.__setattr__(self, "usage", dict(self.usage))
 
 
 @runtime_checkable
