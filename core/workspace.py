@@ -26,6 +26,11 @@ from core.worker_process import DEFAULT_GRACE_S, ProcessOutcome, run_process
 
 __all__ = [
     "AttemptWorkspace",
+    "branch_tip",
+    "checkout_of",
+    "fast_forward",
+    "has_tracked_changes",
+    "is_ancestor",
     "GitWorktrees",
     "IsolationError",
     "MAX_LISTED_PATHS",
@@ -208,6 +213,62 @@ class GitWorktrees:
             if diff.returncode == 0:
                 facts["diffstat"] = _numstat(diff.stdout)
         return facts
+
+
+# --- integration (used only by the human integrate command) ---------------
+
+
+def branch_tip(repository, branch: str) -> Optional[str]:
+    done = _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}"],
+                repository, check=False)
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
+def is_ancestor(repository, ancestor: str, descendant: str) -> bool:
+    done = _git(["merge-base", "--is-ancestor", ancestor, descendant], repository,
+                check=False)
+    if done.returncode not in (0, 1):
+        raise WorkspaceError(f"git merge-base failed: {done.stderr.strip()}")
+    return done.returncode == 0
+
+
+def checkout_of(repository, branch: str) -> Optional[Path]:
+    """The worktree that has ``branch`` checked out, if any."""
+    listing = _git(["worktree", "list", "--porcelain"], repository).stdout
+    path = None
+    for line in listing.splitlines():
+        if line.startswith("worktree "):
+            path = Path(line[len("worktree "):])
+        elif line == f"branch refs/heads/{branch}" and path is not None:
+            return path
+    return None
+
+
+def has_tracked_changes(path) -> bool:
+    status = _git(["status", "--porcelain", "--untracked-files=no"], path)
+    return bool(status.stdout.strip())
+
+
+def fast_forward(repository, branch: str, expected_tip: str, result_sha: str) -> str:
+    """Advance ``branch`` from ``expected_tip`` to ``result_sha``; never merge.
+
+    If the branch is checked out somewhere, that checkout is fast-forwarded
+    (refused if it has uncommitted changes), so its files stay consistent.
+    Otherwise the ref is moved atomically, only if it still points at
+    ``expected_tip``. Returns the method used.
+    """
+    checkout = checkout_of(repository, branch)
+    if checkout is not None:
+        if has_tracked_changes(checkout):
+            raise WorkspaceError(
+                f"{checkout} has {branch!r} checked out with uncommitted changes"
+            )
+        if branch_tip(repository, branch) != expected_tip:
+            raise WorkspaceError(f"{branch!r} moved while integrating")
+        _git(["merge", "--ff-only", "-q", result_sha], checkout)
+        return "ff_merge"
+    _git(["update-ref", f"refs/heads/{branch}", result_sha, expected_tip], repository)
+    return "update_ref"
 
 
 @dataclass(frozen=True)

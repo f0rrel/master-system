@@ -288,7 +288,10 @@ express it as an operation, and the system carries it out:
 - You can then record the outcome with an operation. Marking a task
   "completed" applies on its own only when its latest attempt finished, was made
   against the current spec, and was verified as "pass"; otherwise it waits for
-  a human. Changing a task's title makes earlier evidence stale. You can mark it "blocked" whenever
+  a human. Changing a task's title makes earlier evidence stale.
+- An attempt's work reaches the project's real branch only when a human
+  integrates it. You may ask for that with integrate_attempt (naming the
+  attempt); it always waits for a human, and it never changes task status. You can mark it "blocked" whenever
   the evidence supports that.
 So a task's text describing implementation or testing does not mean you must do
 that yourself, and does not mean you cannot advance it. Judge progress by the

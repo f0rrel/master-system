@@ -509,6 +509,11 @@ class AutonomousLoop:
             operation = decision.operation
             spec = SPECS.get(operation.operation)
 
+            # Policy gates INTEGRATE above; this keeps that true even if an
+            # impact level is ever mis-set.
+            if spec is not None and spec.kind is OperationKind.INTEGRATE:
+                return stop(STOP_APPROVAL, decision, approval_reason="policy")
+
             # run_task: the only way the worker runs. It changes no project
             # state and is refused unless the task is already in_progress in
             # the project this loop is running.

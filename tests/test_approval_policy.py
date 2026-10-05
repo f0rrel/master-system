@@ -84,8 +84,19 @@ def gated_specs(monkeypatch):
 # --- the allowlist stays routine, and stays explicit ---------------------
 
 
-def test_every_existing_operation_is_routine():
-    assert {spec.impact for spec in SPECS.values()} == {ImpactLevel.ROUTINE}
+def test_every_operation_but_integrate_is_routine():
+    impacts = {name: spec.impact for name, spec in SPECS.items()}
+
+    assert impacts.pop("integrate_attempt") is ImpactLevel.CRITICAL
+    assert set(impacts.values()) == {ImpactLevel.ROUTINE}
+
+
+@pytest.mark.parametrize("attempt_id", ["a" * 32, "anything", "0"])
+def test_integrate_attempt_is_gated_whatever_its_arguments(attempt_id):
+    operation = Operation.propose({"operation": "integrate_attempt", "project_id": "p",
+                                   "task_id": "t", "attempt_id": attempt_id})
+
+    assert requires_approval(operation) is True
 
 
 def test_the_allowlist_is_unchanged_by_the_impact_field():
@@ -97,6 +108,7 @@ def test_the_allowlist_is_unchanged_by_the_impact_field():
         "create_task",
         "update_task",
         "run_task",
+        "integrate_attempt",
     }
 
 
@@ -123,7 +135,7 @@ def test_routine_operations_need_no_approval():
         "run_task": {"project_id": "alpha", "task_id": "t1"},
     }
 
-    assert set(valid) == set(SPECS)
+    assert set(valid) == set(SPECS) - {"integrate_attempt"}
     for name, arguments in valid.items():
         assert requires_approval(Operation.propose(
             dict(operation=name, **arguments)

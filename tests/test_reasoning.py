@@ -1322,6 +1322,7 @@ def test_the_allowlist_is_exactly_the_documented_operations():
         "create_task",
         "update_task",
         "run_task",
+        "integrate_attempt",
     }
 
 

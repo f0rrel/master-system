@@ -143,6 +143,7 @@ class RequestError(Enum):
     NOT_APPROVED = "not_approved"
     EXPLICITLY_REJECTED = "explicitly_rejected"
     DISPATCH_ONLY = "dispatch_only"
+    HUMAN_ONLY = "human_only"
 
 
 class ResultStatus(Enum):
@@ -212,6 +213,10 @@ class OperationKind(Enum):
 
     STATE = "state"
     DISPATCH = "dispatch"
+    #: Merges an attempt's result into the real branch. Always CRITICAL, so a
+    #: model can only request it; a human performs it with
+    #: ``python -m core.attempts integrate``.
+    INTEGRATE = "integrate"
 
 
 @dataclass(frozen=True)
@@ -248,9 +253,10 @@ class OperationSpec:
 # details -- worker, model, workspace and prompt are orchestration concerns --
 # and it changes no project state.
 #
-# Every entry is ROUTINE. There is deliberately no operation here that promotes
-# a workspace or merges, so ELEVATED and CRITICAL are currently unreachable
-# rather than merely restricted.
+# ``integrate_attempt`` is the one INTEGRATE entry and the one CRITICAL one: it
+# would merge an attempt's result into the project's real branch, so policy
+# always gates it. Master may request it; only a human performs it, through
+# ``python -m core.attempts integrate``. Every other entry is ROUTINE.
 SPECS = MappingProxyType(
     {
         "inspect_project": OperationSpec(
@@ -285,6 +291,12 @@ SPECS = MappingProxyType(
             ("project_id", "task_id"),
             impact=ImpactLevel.ROUTINE,
             kind=OperationKind.DISPATCH,
+        ),
+        "integrate_attempt": OperationSpec(
+            None,
+            ("project_id", "task_id", "attempt_id"),
+            impact=ImpactLevel.CRITICAL,
+            kind=OperationKind.INTEGRATE,
         ),
     }
 )
@@ -513,6 +525,18 @@ class OperationResult:
         )
 
     @classmethod
+    def human_only(cls, operation):
+        return cls(
+            operation=operation,
+            status=ResultStatus.REJECTED,
+            reason=RequestError.HUMAN_ONLY,
+            message=(
+                f"{operation} is performed only by a human, with "
+                "'python -m core.attempts integrate'"
+            ),
+        )
+
+    @classmethod
     def dispatch_only(cls, operation):
         return cls(
             operation=operation,
@@ -610,6 +634,8 @@ class ReasoningInterface:
         spec = SPECS.get(operation.operation)
         if spec is not None and spec.kind is OperationKind.DISPATCH:
             return OperationResult.dispatch_only(operation.operation)
+        if spec is not None and spec.kind is OperationKind.INTEGRATE:
+            return OperationResult.human_only(operation.operation)
 
         if (
             not operation.is_approved

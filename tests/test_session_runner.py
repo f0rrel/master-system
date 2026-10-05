@@ -340,13 +340,13 @@ def test_exhausting_the_attempt_budget_needs_a_human(projects, tmp_path):
     assert runner._execution_backend.calls == ["t1", "t1"]
 
 
-def test_no_operation_is_policy_gated_today():
+def test_only_integration_is_policy_gated_today():
     """A fact about the current policy, asserted so a change is noticed."""
     from core.reasoning import SPECS, ImpactLevel
 
     gated = [n for n, s in SPECS.items() if s.impact is not ImpactLevel.ROUTINE]
 
-    assert gated == [], f"operations became gated: {gated}"
+    assert gated == ["integrate_attempt"], f"gated operations changed: {gated}"
 
 
 def test_a_stale_pending_request_is_cleared_by_a_later_run(projects, tmp_path):
