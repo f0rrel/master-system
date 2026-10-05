@@ -765,6 +765,7 @@ Add a row whenever an architectural decision is made or reversed.
 | *Process:* plan commit 7 was split into 7a (loop holds the lock) and 7b (orchestrator owns the workspace) | It was bigger than planned | Per the owner's instruction to split large commits |
 | Worker output goes to log files under the state dir (path + sha256 in history); the helper waits on the process, not its pipes | A finished worker with a background child was reported `timed_out` (independent review) | **Approved (2026-10-05)**, implemented |
 | `ProjectLock.release` closes its descriptor and never calls `LOCK_UN` | Unlocking would release the lock for a worker that escaped its group (independent review) | **Approved (2026-10-05)**, implemented |
+| Worker and verification processes get an allowlisted environment (`core/worker_env.py`): `PATH` = the newest Node >= 22 from nvm's install directory (found by directory name, no shell startup files) + `/usr/local/bin:/usr/bin:/bin`; `HOME` and `XDG_*` = a dedicated worker home; `LANG`/`LC_ALL`/`TERM`/`TZ`; `CI=1`; no secrets (secret-looking extras are refused) | Workers must not see the Master's keys; the managed project needs Node 22 (owner upgraded the user's Node to 22 via nvm, 2026-10-05; system Node 18 untouched) | **Approved (2026-10-05)**, implemented (M2) |
 | Merged Milestone 1 to main (2026-10-05) | Milestone 1 complete and reviewed; `main` fast-forwarded to `m1-contain-verify`, tagged `m1-contain-verify` | **Approved (2026-10-05)** |
 
 ---

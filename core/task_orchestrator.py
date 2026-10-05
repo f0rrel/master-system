@@ -13,6 +13,7 @@ from core.history import EventType, HistoryStore, jsonable, new_event_id
 from core.master import Master
 from core.paths import RuntimePaths
 from core.verification import VerificationBackend, VerificationResult
+from core.worker_env import default_worker_home, find_node_bin, worker_environment
 from core.workspace import (
     AttemptWorkspace,
     GitWorktrees,
@@ -45,6 +46,12 @@ def _deadline(seconds: float):
     """A monotonic deadline and its wall-clock rendering for the record."""
     at = datetime.now(timezone.utc) + timedelta(seconds=seconds)
     return time.monotonic() + seconds, at.isoformat(timespec="seconds")
+
+
+def default_worker_env() -> dict:
+    node_bin = find_node_bin()
+    return worker_environment(default_worker_home(),
+                              path_dirs=[node_bin] if node_bin else [])
 
 
 def _process_records(workspace) -> list:
@@ -97,6 +104,7 @@ class TaskOrchestrator:
         attempt_timeout_s: float = DEFAULT_ATTEMPT_TIMEOUT_S,
         verification_timeout_s: float = DEFAULT_VERIFICATION_TIMEOUT_S,
         log_root: Optional[Path] = None,
+        worker_env: Optional[Mapping[str, str]] = None,
     ):
         if attempt_timeout_s <= 0 or verification_timeout_s <= 0:
             raise ValueError("timeouts must be positive")
@@ -108,6 +116,10 @@ class TaskOrchestrator:
         self._worktrees = worktrees if worktrees is not None else default_worktrees(master)
         self._attempt_timeout_s = attempt_timeout_s
         self._verification_timeout_s = verification_timeout_s
+        #: Every worker and verification process gets exactly this environment
+        #: (an allowlist; no secrets). Default: core.worker_env with the
+        #: default worker home and the newest Node >= 22 found, if any.
+        self._worker_env = dict(worker_env) if worker_env is not None else default_worker_env()
         #: Process logs live in the state dir, never in the worktree.
         self._log_root = (
             Path(log_root) if log_root is not None
@@ -244,6 +256,7 @@ class TaskOrchestrator:
             deadline_at=deadline_at,
             log_dir=log_dir,
             phase="worker",
+            env=self._worker_env,
             lock_fd=lock_fd,
             on_spawn=recorder("worker", deadline_at),
         )
@@ -318,6 +331,7 @@ class TaskOrchestrator:
             deadline_at=verify_deadline_at,
             log_dir=log_dir,
             phase="verification",
+            env=self._worker_env,
             lock_fd=lock_fd,
             on_spawn=recorder("verification", verify_deadline_at),
         )

@@ -20,7 +20,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Optional, Sequence
+from typing import Callable, Iterable, Mapping, Optional, Sequence
 
 from core.worker_process import DEFAULT_GRACE_S, ProcessOutcome, run_process
 
@@ -289,6 +289,9 @@ class AttemptWorkspace:
     log_dir: Path
     #: ``worker`` or ``verification``; names the log files.
     phase: str = "worker"
+    #: The allowlisted environment every process gets (core/worker_env.py).
+    #: None only in unit tests that call a backend directly.
+    env: Optional[Mapping[str, str]] = None
     result_sha: Optional[str] = None
     lock_fd: Optional[int] = None
     on_spawn: Optional[Callable[[int, int], None]] = None
@@ -309,7 +312,8 @@ class AttemptWorkspace:
             deadline = min(deadline, self.clock() + timeout)
         outcome = run_process(
             argv, cwd=self.path, deadline=deadline, log_dir=self.log_dir,
-            log_name=self.phase, lock_fd=self.lock_fd, grace=self.grace, env=env,
+            log_name=self.phase, lock_fd=self.lock_fd, grace=self.grace,
+            env=env if env is not None else self.env,
             on_spawn=self.on_spawn, clock=self.clock,
         )
         self.processes.append(outcome)
