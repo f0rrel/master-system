@@ -3,11 +3,12 @@ tasks:
   milestone: m2-overnight
   title: Seeded random number generator
   status: completed
-  description: 'In www/js/match-logic.js, inside the marked section ''TASK SECTION ml-1'', add createRng(seed):
-    a deterministic generator (for example mulberry32) returning floats in [0, 1), and export it as api.createRng.
-    The board functions already accept an rng parameter. Read tests/tasks/ml-1-seeded-rng.test.js for
-    the exact requirements. Change nothing outside that section unless strictly needed. Replace old code;
-    don''t leave the previous implementation behind as a fallback.'
+  description: 'In www/js/match-logic.js, inside the marked section ''TASK SECTION
+    ml-1'', add createRng(seed): a deterministic generator (for example mulberry32)
+    returning floats in [0, 1), and export it as api.createRng. The board functions
+    already accept an rng parameter. Read tests/tasks/ml-1-seeded-rng.test.js for
+    the exact requirements. Change nothing outside that section unless strictly needed.
+    Replace old code; don''t leave the previous implementation behind as a fallback.'
   acceptance:
     commands:
     - npm ci --prefer-offline --no-audit --no-fund
@@ -24,11 +25,12 @@ tasks:
   milestone: m2-overnight
   title: Shuffle the board in place when no moves are left
   status: completed
-  description: 'In www/js/match-logic.js, inside ''TASK SECTION ml-2'', add shuffleBoard(board, rng):
-    return a NEW board that rearranges the same tiles (same cells, same type counts) so it has no matches
-    and at least one legal move; do not modify the input; deterministic for a given rng. Export it as
-    api.shuffleBoard. Then, in www/index.html, where the game says ''No moves left — board reshuffled''
-    and deals a fresh board, use MatchLogic.shuffleBoard(session.board) instead. Requirements: tests/tasks/ml-2-shuffle.test.js.
+  description: 'In www/js/match-logic.js, inside ''TASK SECTION ml-2'', add shuffleBoard(board,
+    rng): return a NEW board that rearranges the same tiles (same cells, same type
+    counts) so it has no matches and at least one legal move; do not modify the input;
+    deterministic for a given rng. Export it as api.shuffleBoard. Then, in www/index.html,
+    where the game says ''No moves left — board reshuffled'' and deals a fresh board,
+    use MatchLogic.shuffleBoard(session.board) instead. Requirements: tests/tasks/ml-2-shuffle.test.js.
     Replace old code; don''t leave the previous implementation behind as a fallback.'
   acceptance:
     commands:
@@ -41,11 +43,12 @@ tasks:
   milestone: m2-overnight
   title: Extract the scoring rules into scoreMatch
   status: completed
-  description: 'In www/js/match-logic.js, inside ''TASK SECTION ml-3'', add scoreMatch({size, maxRun,
-    combo, buffMult}) implementing the game''s existing scoring: size * BASE_POINTS * combo * sizeBonus
-    (2 for a run of 5+, 1.5 for 4, else 1), rounded; then, if buffMult is given, multiplied by it and
-    rounded again. Export it as api.scoreMatch, and make resolveCascade in www/index.html use it instead
-    of computing the score inline. Requirements: tests/tasks/ml-3-scoring.test.js.'
+  description: 'In www/js/match-logic.js, inside ''TASK SECTION ml-3'', add scoreMatch({size,
+    maxRun, combo, buffMult}) implementing the game''s existing scoring: size * BASE_POINTS
+    * combo * sizeBonus (2 for a run of 5+, 1.5 for 4, else 1), rounded; then, if
+    buffMult is given, multiplied by it and rounded again. Export it as api.scoreMatch,
+    and make resolveCascade in www/index.html use it instead of computing the score
+    inline. Requirements: tests/tasks/ml-3-scoring.test.js.'
   acceptance:
     commands:
     - npm ci --prefer-offline --no-audit --no-fund
@@ -57,11 +60,12 @@ tasks:
   milestone: m2-overnight
   title: Hint button
   status: completed
-  description: 'In www/js/match-logic.js, inside ''TASK SECTION ml-4'', add findHint(board): return {a:
-    {q, r}, b: {q, r}}, two adjacent cells whose swap makes a match, or null; do not modify the board.
-    Export it as api.findHint. In www/index.html add a visible button with id ''hint-btn'' on the game
-    screen; clicking it adds the CSS class ''hint'' (give it a visible style) to exactly those two tiles,
-    without using up a move. Requirements: tests/tasks/ml-4-hint.test.js and tests/tasks/ml-4-hint.spec.js.
+  description: 'In www/js/match-logic.js, inside ''TASK SECTION ml-4'', add findHint(board):
+    return {a: {q, r}, b: {q, r}}, two adjacent cells whose swap makes a match, or
+    null; do not modify the board. Export it as api.findHint. In www/index.html add
+    a visible button with id ''hint-btn'' on the game screen; clicking it adds the
+    CSS class ''hint'' (give it a visible style) to exactly those two tiles, without
+    using up a move. Requirements: tests/tasks/ml-4-hint.test.js and tests/tasks/ml-4-hint.spec.js.
     Replace old code; don''t leave the previous implementation behind as a fallback.'
   acceptance:
     commands:
@@ -75,11 +79,11 @@ tasks:
   milestone: m2-overnight
   title: Persist progress in localStorage
   status: completed
-  description: 'In www/index.html, make the Storage object fall back to localStorage when window.storage
-    is not available, for both load and save, so progress (gems, unlocked legends, the chosen legend,
-    unlocked levels) survives a reload. Keep window.storage as the first choice when it exists. Requirements:
-    tests/tasks/ml-5-persist.spec.js. Replace old code; don''t leave the previous implementation behind
-    as a fallback.'
+  description: 'In www/index.html, make the Storage object fall back to localStorage
+    when window.storage is not available, for both load and save, so progress (gems,
+    unlocked legends, the chosen legend, unlocked levels) survives a reload. Keep
+    window.storage as the first choice when it exists. Requirements: tests/tasks/ml-5-persist.spec.js.
+    Replace old code; don''t leave the previous implementation behind as a fallback.'
   acceptance:
     commands:
     - npm ci --prefer-offline --no-audit --no-fund
@@ -90,15 +94,16 @@ tasks:
 - id: ml-6
   milestone: m2-batch-2
   title: Resume an unfinished level after closing the game
-  status: planned
-  description: 'In www/index.html, after every move in a solo level save the level being played (level
-    id, board, score, moves left, power charge) through the existing Storage object under the key ''ml_session''.
-    Clear it when the level ends (win or loss). On startup, if a saved level exists, show a button with
-    id ''btn-continue'' on the home screen whose text names the level (for example ''Continue Level 2'');
-    clicking it restores exactly that level, board, score and moves. When nothing is saved the button
-    is not visible. Note: the game''s .menu-btn CSS overrides the hidden attribute, so hide it with style
-    or a class. Requirements: tests/tasks/ml-6-resume-level.spec.js. Replace old code; don''t leave the
-    previous implementation behind as a fallback.'
+  status: completed
+  description: 'In www/index.html, after every move in a solo level save the level
+    being played (level id, board, score, moves left, power charge) through the existing
+    Storage object under the key ''ml_session''. Clear it when the level ends (win
+    or loss). On startup, if a saved level exists, show a button with id ''btn-continue''
+    on the home screen whose text names the level (for example ''Continue Level 2'');
+    clicking it restores exactly that level, board, score and moves. When nothing
+    is saved the button is not visible. Note: the game''s .menu-btn CSS overrides
+    the hidden attribute, so hide it with style or a class. Requirements: tests/tasks/ml-6-resume-level.spec.js.
+    Replace old code; don''t leave the previous implementation behind as a fallback.'
   acceptance:
     commands:
     - npm ci --prefer-offline --no-audit --no-fund
@@ -111,7 +116,8 @@ tasks:
     - package-lock.json
     - playwright.config.js
     - .nvmrc
-  manual_check: '1. Open www/index.html (or the app), start Level 1 and play two or three moves.
+  manual_check: '1. Open www/index.html (or the app), start Level 1 and play two or
+    three moves.
 
     2. Note the score and moves left, then close the tab or the app completely.
 
@@ -123,17 +129,20 @@ tasks:
 - id: ml-7
   milestone: m2-batch-2
   title: Debug panel with ?debug=1
-  status: planned
-  description: 'In www/index.html, when the page URL has ?debug=1, show a small fixed panel with id ''debug-panel''
-    on every screen (it must not exist without ?debug=1). Deal every solo level from a seed with MatchLogic.createRng
-    (random seed unless one is set) and keep it as session.seed, so a board is reproducible. The panel
-    has: #debug-seed (current seed), #debug-seed-input and #debug-seed-apply (restart the current level,
-    or level 1, dealt from that seed); #debug-force-stuck (replace the board with one that has no legal
-    move and run the game''s normal ''No moves left - board reshuffled'' path); #debug-progress (the saved
-    progress JSON, kept up to date) and #debug-clear-progress (delete saved progress and reset to a new
-    player); #debug-level (a select with levels 1-6) and #debug-go-level (start that level even if locked,
-    without unlocking it). Keep the panel small so it does not cover the board. Requirements: tests/tasks/ml-7-debug-panel.spec.js.
-    Replace old code; don''t leave the previous implementation behind as a fallback.'
+  status: completed
+  description: 'In www/index.html, when the page URL has ?debug=1, show a small fixed
+    panel with id ''debug-panel'' on every screen (it must not exist without ?debug=1).
+    Deal every solo level from a seed with MatchLogic.createRng (random seed unless
+    one is set) and keep it as session.seed, so a board is reproducible. The panel
+    has: #debug-seed (current seed), #debug-seed-input and #debug-seed-apply (restart
+    the current level, or level 1, dealt from that seed); #debug-force-stuck (replace
+    the board with one that has no legal move and run the game''s normal ''No moves
+    left - board reshuffled'' path); #debug-progress (the saved progress JSON, kept
+    up to date) and #debug-clear-progress (delete saved progress and reset to a new
+    player); #debug-level (a select with levels 1-6) and #debug-go-level (start that
+    level even if locked, without unlocking it). Keep the panel small so it does not
+    cover the board. Requirements: tests/tasks/ml-7-debug-panel.spec.js. Replace old
+    code; don''t leave the previous implementation behind as a fallback.'
   acceptance:
     commands:
     - npm ci --prefer-offline --no-audit --no-fund
@@ -145,25 +154,28 @@ tasks:
 
     2. Open www/index.html?debug=1: a small panel is visible on the home screen.
 
-    3. Start Level 1, note the seed; enter 12345 and press the seed button: the level restarts; do it
-    twice and check the board is identical both times.
+    3. Start Level 1, note the seed; enter 12345 and press the seed button: the level
+    restarts; do it twice and check the board is identical both times.
 
-    4. Press ''stuck'': the toast says the board was reshuffled and you can still make a move.
+    4. Press ''stuck'': the toast says the board was reshuffled and you can still
+    make a move.
 
-    5. Choose another legend: the progress field shows it; press clear and reload: back to Marcus.
+    5. Choose another legend: the progress field shows it; press clear and reload:
+    back to Marcus.
 
     6. Choose level 5 and press go: Chapter 5 starts although it is locked.'
 - id: ml-8
   milestone: m2-batch-2
   title: Star rating on the results screen
-  status: planned
-  description: 'In www/js/match-logic.js, inside ''TASK SECTION ml-8'', add starsForScore(score, target):
-    0 below the target, 1 at or above it, 2 at or above 1.25 x target, 3 at or above 1.5 x target; export
-    it as api.starsForScore. In www/index.html, add an element with id ''res-stars'' to the results screen:
-    its data-stars attribute is the rating and its text is that many filled stars followed by empty ones,
-    three in total (for example ''★★☆''); a loss shows ''☆☆☆''. Requirements: tests/tasks/ml-8-stars.test.js
-    and tests/tasks/ml-8-stars.spec.js. Replace old code; don''t leave the previous implementation behind
-    as a fallback.'
+  status: completed
+  description: 'In www/js/match-logic.js, inside ''TASK SECTION ml-8'', add starsForScore(score,
+    target): 0 below the target, 1 at or above it, 2 at or above 1.25 x target, 3
+    at or above 1.5 x target; export it as api.starsForScore. In www/index.html, add
+    an element with id ''res-stars'' to the results screen: its data-stars attribute
+    is the rating and its text is that many filled stars followed by empty ones, three
+    in total (for example ''★★☆''); a loss shows ''☆☆☆''. Requirements: tests/tasks/ml-8-stars.test.js
+    and tests/tasks/ml-8-stars.spec.js. Replace old code; don''t leave the previous
+    implementation behind as a fallback.'
   acceptance:
     commands:
     - npm ci --prefer-offline --no-audit --no-fund
@@ -172,7 +184,8 @@ tasks:
     - npx playwright test tests/tasks/ml-8-stars.spec.js
     - npx playwright test tests/smoke
     protected_paths: *id002
-  manual_check: '1. Win Level 1 just above the target (1800): the results screen shows ★☆☆.
+  manual_check: '1. Win Level 1 just above the target (1800): the results screen shows
+    ★☆☆.
 
     2. Win a level with 1.5 x the target or more: ★★★.
 
