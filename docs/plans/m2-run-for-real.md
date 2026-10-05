@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **Waiting for owner approval.** No Milestone 2 code and no Match Legends prep before approval. |
+| Status | **Approved by the owner (2026-10-05)** with D1–D4 decided (§0) and one addition: the five tasks must be independent (§2.3). |
 | Branch | `m2-run-for-real` (from `main` = `e68cea8`, tag `m1-contain-verify`) |
 | Closes | H5. Partly M4 (human edits made through `run_cli` are recorded) and L7 (if D1 = A). |
 | Baseline | 1140 passed, 1 skipped, 5 integration tests deselected |
@@ -20,7 +20,57 @@ secrets** in their environment.
 
 ---
 
-## 0. Decisions needed from the owner
+## 0. Owner decisions (2026-10-05)
+
+- **D1 = A.** `integrate --rebase` is human-only. It cherry-picks onto the current base,
+  re-runs acceptance on the new commit, and refuses on conflict. The re-run is recorded
+  as a **new `verification` event bound to the rebased SHA**, and integration
+  fast-forwards **exactly to that verified SHA**, nothing else.
+- **D2:** the Master default is **DeepSeek V4 Flash**, configurable.
+- **D3:** the worker gets a dedicated, spend-limited key in its own worker home. The
+  environment allowlist (§1.3) is approved; no other secrets reach workers.
+- **D4:** one real probe was approved. Findings below.
+- Also approved: the human-only `description` (in `spec_hash`), the disabled push URL,
+  `human_action`, and token accounting in the providers (worker usage as a claim).
+- **Addition:** the five overnight tasks must be independent: no `depends_on`, and none
+  may need another task's code, because attempts start from the base branch. New gap
+  N2 in README §11; its fix (dependencies count only when integrated) is Milestone 3.
+
+### D4 probe findings (one real call, 2026-10-05)
+
+The call was `opencode run --format json --dir <tmp git repo> "Create a file named
+hello.txt ... containing exactly the text: hi"`, using the owner's existing OpenCode
+setup (empty `opencode.json`, so the default model) and **without `--auto`**.
+
+- **Edits inside `--dir` need no `--auto`.** `hello.txt` was written; exit code 0,
+  about 2 s, nothing on stderr.
+  - `--auto` stays **off**.
+  - Whether a shell command (`bash` tool) or a write outside `--dir` would prompt and
+    stall in run mode was **not** probed: one call only. The worker home's
+    `opencode.json` will set permissions explicitly. This is checked in the
+    supervised smoke run (step 4) before any overnight run.
+- **The event stream** is one JSON object per line on stdout, with
+  `{type, timestamp (ms), sessionID, part}`. Types seen:
+  - `step_start`;
+  - `tool_use` (`part.tool`, `part.state.{status,input,output}`);
+  - `text` (`part.text`: the final summary);
+  - `step_finish` (`part.reason`: `tool-calls` or `stop`; `part.tokens`:
+    `{total, input, output, reasoning, cache: {read, write}}`; `part.cost` in USD).
+- **Usage:**
+  - **Tokens:** `worker_reported_usage` is the sum over all `step_finish` events of
+    `input`, `output`, `reasoning`, `cache.read` and `cache.write`. `input` excludes
+    cached tokens (the probe: 6,053 + 273 input, 1,792 + 7,680 cache reads,
+    100 output).
+  - **Cost:** the probe reported `cost: 0` (the default model is free). `reported_cost_usd`
+    is the sum of `part.cost`; the price table is the fallback when it is 0 and the
+    model is known to be paid.
+- **No model name appears in the events.** The configured worker model (`--model`, from
+  config) is recorded as opaque provenance for pricing.
+- **OpenCode keeps its own state** (`opencode.db`, a `snapshot/` git store,
+  `tool-output/`) under `$XDG_DATA_HOME/opencode`. With `HOME`/`XDG_*` pointing into the
+  worker home (§1.3), that state lands in the worker home, not in the owner's.
+
+## 0b. Decisions as originally proposed
 
 | # | Question | Options | Recommendation |
 | --- | --- | --- | --- |
@@ -269,18 +319,29 @@ protected_paths: ["tests/*", "package.json", "package-lock.json", "playwright.co
 `package.json` is protected because it defines the scripts and dependencies; none of
 these tasks needs a new dependency.
 
+**Independence rule (owner addition).** No `depends_on`, and no task needs another's
+code. Re-checked against the original proposal:
+
+| Task | Independent? | Why |
+| --- | --- | --- |
+| ml-1 seeded-rng | yes | Prep already threads an `rng` parameter (default `Math.random`) through the board functions; ml-1 only adds `createRng(seed)` and uses it per level. |
+| ml-2 shuffle-in-place | **was not** (`depends_on ml-1`) → **fixed** | Its test now supplies its own deterministic rng function, so it needs only the `rng` parameter that prep provides, not ml-1's `createRng`. `depends_on` removed. |
+| ml-3 scoring-rules | yes | Moves existing scoring code; no other task's code. |
+| ml-4 hint | yes | Uses only `hasPossibleMove`-style logic already in the base. |
+| ml-5 persist-progress | yes | Only the `Storage` object. |
+
+Tasks 1–4 all add to `match-logic.js`, so a rebase can still conflict on adjacent
+hunks. To limit that, prep creates one marked, empty section per task in the file, and
+each task's description names its section.
+
 | Task | What | Acceptance test (written in prep) | Files mostly touched |
 | --- | --- | --- | --- |
 | **ml-1 seeded-rng** | `MatchLogic.createRng(seed)` (mulberry32) and an `rng` passed through every random choice, so a board can be reproduced from a seed | The same seed gives identical playable boards; different seeds differ; a seeded board has no matches and has a move | `match-logic.js` |
-| **ml-2 shuffle-in-place** | Replace "No moves left — board reshuffled" (which today deals a *new* board) with `shuffleBoard(board, rng)`: permute the existing tiles into a match-free, playable arrangement | The multiset of tile types is preserved, there are no matches, `hasPossibleMove` is true, and it is deterministic with a seeded rng | `match-logic.js` + 3 lines in `index.html` |
+| **ml-2 shuffle-in-place** | Replace "No moves left — board reshuffled" (which today deals a *new* board) with `shuffleBoard(board, rng)`: permute the existing tiles into a match-free, playable arrangement | The multiset of tile types is preserved, there are no matches, `hasPossibleMove` is true, and it is deterministic **for an rng the test supplies itself** (so it does not need ml-1's `createRng`) | `match-logic.js` + 3 lines in `index.html` |
 | **ml-3 scoring-rules** | Move scoring out of `resolveCascade` into `scoreMatch({size, maxRun, combo, buffMult})`, with the same rules (4-run ×1.5, 5-run ×2, combo multiplier, buff rounding) | A table of cases, including buff rounding | `match-logic.js` + `resolveCascade` |
 | **ml-4 hint** | `findHint(board)` returns an adjacent pair whose swap matches, or `null`; a 💡 button highlights it | Unit test of `findHint` on hand-built boards; Playwright: the button exists and highlights exactly 2 tiles | `match-logic.js`, `index.html` (new button) |
 | **ml-5 persist-progress** | `Storage` falls back to `localStorage` when `window.storage` is absent, as the README suggests | Playwright: select a free avatar, reload, and the selection persists | `index.html` (`Storage` object only) |
 
-Dependencies: `ml-2 depends_on ml-1` (it needs the seeded rng). The others are
-independent. Tasks 1–4 all add to `match-logic.js`, so cherry-picks can still conflict
-on adjacent hunks. To limit that, each task's description says where in the file to
-add its function: each task gets its own marked section, created in prep.
 
 ---
 

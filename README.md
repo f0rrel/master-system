@@ -581,6 +581,7 @@ C1, C2, H1, M2, L5.
 | L4 | LOW | Legacy parser path, `proposal._decision`, experiments in the repo root. | Delete or move; keep docstrings short; write ADRs. |
 | L6 | LOW | Attempt worktrees and `attempt/*` branches are never cleaned up. Acceptance commands leave their by-products (for example `__pycache__`) in the worktree. | A cleanup command for integrated or abandoned attempts. |
 | L7 | LOW | Integration is fast-forward only; a base that moved on means re-running the task. | Decide in Milestone 2 whether rebasing or merging is worth the judgement it needs. |
+| N2 | MEDIUM | A task whose dependency is completed but not integrated can start against a base that lacks it: attempts start from `base_branch`, and readiness counts a dependency as satisfied once it is `completed`. | **Milestone 3:** dependencies count as satisfied only when integrated. Until then, tasks run in one unattended session must be independent. |
 
 ---
 
