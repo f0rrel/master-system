@@ -6,6 +6,16 @@ README decision log (§13).
 
 ## Unreleased (branch `m3-hands-off`)
 
+### 2026-10-06: planner chat usability
+- A multi-line paste arrives as one message (bracketed paste, lines arriving together, or a
+  block between two lines containing only """); `ms chat <project> --file request.txt`
+  sends a file as the first message; a hint at the start explains this.
+- Replies wrap to the terminal width (at most 100 columns), indented with blank lines around
+  them; questions are numbered; the cost line is dimmed; drafts show one header per task
+  with labelled Size, Files, What it does, How to check by hand and Tests lines.
+- Line editing (arrow keys, history) and visible wrapping of the input line, via readline.
+- The owner's daily cap is now $0.60.
+
 ### 2026-10-06: quick fixes
 - `ms status` finishes releases the owner merged on GitHub (tag, GitHub Release, live site),
   checking GitHub at most once a minute, so nothing waits for the service to be busy.

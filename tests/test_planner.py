@@ -189,9 +189,10 @@ def test_the_chat_loop_drives_a_whole_conversation(env):
     out = io.StringIO()
     assert chat_loop(chat, read=lambda prompt: next(lines), out=out) == 0
     text = out.getvalue()
-    assert "planner> Plan ready." in text and "? Bye too?" in text
+    assert "\n  Plan ready.\n" in text and "   1.  Bye too?" in text
     assert "draft updated: 1 task(s)" in text
     assert "EPIC epic-hi: Friendlier greetings" in text
+    assert "── t-2: Say hi ──" in text and "  Size:" in text and "How to check by hand:" in text
     assert "All checks passed" in text and "Queued t-2" in text
     assert "[this chat: $" in text
 
@@ -210,3 +211,43 @@ def test_a_saved_chat_continues(env, tmp_path):
     chat.turn("go")
     again = env["chat"]([], chat_id=chat.state.chat_id)
     assert again.state.draft == draft() and again.state.messages[0]["text"] == "go"
+
+
+def test_a_triple_quote_block_is_one_message():
+    from core.ms import read_message
+
+    lines = iter(['"""', "line one", "", "line two", '"""'])
+    assert read_message(lambda p: next(lines), pending=lambda: False) == "line one\n\nline two"
+
+
+def test_a_paste_arriving_at_once_is_one_message():
+    from core.ms import read_message
+
+    lines = iter(["first", "second", "third"])
+    waiting = iter([True, True, False])
+    assert read_message(lambda p: next(lines), pending=lambda: next(waiting)) == \
+        "first\nsecond\nthird"
+
+
+def test_a_file_is_sent_as_the_first_message(env):
+    chat = env["chat"]([answer(None, reply="Got the whole request.")])
+    out = io.StringIO()
+    lines = iter(["quit"])
+    chat_loop(chat, read=lambda prompt: next(lines), out=out,
+              first_message="many\nlines\nof request", pending=lambda: False)
+    assert chat.state.messages[0]["text"] == "many\nlines\nof request"
+    assert len(chat._provider.prompts) == 1
+
+
+def test_replies_wrap_to_the_width_and_are_indented(env):
+    from core.ms import _print_answer
+
+    chat = env["chat"]([])
+    out = io.StringIO()
+    _print_answer({"reply": "word " * 60, "questions": ["q " * 70], "draft_changed": False},
+                  chat, out)
+    for line in out.getvalue().splitlines():
+        assert len(line) <= 100
+    reply_lines = [l for l in out.getvalue().splitlines() if l.startswith("  word")]
+    assert len(reply_lines) >= 3
+    assert "\x1b[2m" not in out.getvalue()  # not a terminal: no colour codes

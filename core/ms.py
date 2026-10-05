@@ -791,16 +791,101 @@ def latest_open_chat(store_dir: Path, project_id: str):
 CHAT_HELP = ("Type what you want in plain words. Commands: show (the draft), check (run the "
              "checks), approve (queue the tasks), discard, release (open the release pull "
              "request), help, quit.")
+PASTE_HINT = ('To send several lines as one message, just paste them, or put them between '
+              'two lines containing only """.')
 
 
-def chat_loop(chat, read=input, out=None, releaser=None):
+def _width(out) -> int:
+    import shutil
+
+    return min(100, shutil.get_terminal_size((100, 24)).columns)
+
+
+def _dim(text, out) -> str:
+    isatty = getattr(out, "isatty", lambda: False)()
+    return f"\033[2m{text}\033[0m" if isatty else text
+
+
+def setup_line_editing() -> None:
+    """Arrow keys, history, visible wrapping and bracketed paste for input()."""
+    try:
+        import readline
+    except ImportError:
+        return
+    for setting in ("set enable-bracketed-paste on", "set horizontal-scroll-mode off"):
+        try:
+            readline.parse_and_bind(setting)
+        except Exception:
+            pass
+
+
+def _pending_input(timeout=0.05) -> bool:
+    """True when more pasted text is already waiting on a terminal stdin."""
+    import select
+
+    try:
+        if not sys.stdin.isatty():
+            return False
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        return bool(ready)
+    except (OSError, ValueError):
+        return False
+
+
+def read_message(read, pending=_pending_input) -> str:
+    """One owner message: a line, a paste (lines arriving together), or a \"\"\" block."""
+    first = read("you> ")
+    if first.strip() == '"""':
+        lines = []
+        while True:
+            line = read("... ")
+            if line.strip() == '"""':
+                return "\n".join(lines).strip()
+            lines.append(line)
+    lines = [first]
+    while pending():
+        try:
+            lines.append(read(""))
+        except EOFError:
+            break
+    return "\n".join(lines).strip()
+
+
+def _print_answer(answer, chat, out) -> None:
+    from core.planner import _wrap
+
+    width = _width(out)
+    print("", file=out)
+    print("\n".join(_wrap(answer["reply"], width, "  ")) or "  (no reply)", file=out)
+    if answer["questions"]:
+        print("", file=out)
+        print("  Questions:", file=out)
+        for n, question in enumerate(answer["questions"], 1):
+            print("", file=out)
+            wrapped = _wrap(question, width, "       ")
+            wrapped[0] = f"  {n:>2}.  " + wrapped[0].lstrip()
+            print("\n".join(wrapped), file=out)
+    if answer["draft_changed"]:
+        tasks = len((chat.state.draft or {}).get("tasks") or [])
+        print("", file=out)
+        print(f"  (draft updated: {tasks} task(s); `show` to read it, `check` to test it)",
+              file=out)
+    print("", file=out)
+    print(_dim(f"  [this chat: ${chat.state.cost_usd:.4f} of ${chat.max_cost_usd:.2f}]", out),
+          file=out)
+    print("", file=out)
+
+
+def chat_loop(chat, read=input, out=None, releaser=None, first_message=None,
+              pending=_pending_input):
     """The conversation. ``read`` returns the owner's next line (EOFError ends it)."""
     from core.planner import DraftProblem, render_draft
 
     out = out or sys.stdout
+    queued = [first_message] if first_message else []
     while True:
         try:
-            line = read("you> ").strip()
+            line = queued.pop(0) if queued else read_message(read, pending)
         except (EOFError, KeyboardInterrupt):
             print("\nBye. The chat is saved; `ms chat` continues it.", file=out)
             return 0
@@ -812,11 +897,13 @@ def chat_loop(chat, read=input, out=None, releaser=None):
                 print("The chat is saved; `ms chat` continues it.", file=out)
                 return 0
             if command == "help":
-                print(CHAT_HELP, file=out)
+                print(CHAT_HELP + "\n" + PASTE_HINT, file=out)
             elif command == "show":
-                print(render_draft(chat.state.draft, chat.state.check), file=out)
+                print("", file=out)
+                print(render_draft(chat.state.draft, chat.state.check, _width(out)), file=out)
                 for problem in chat.problems() if chat.state.draft else []:
                     print(f"  (incomplete) {problem}", file=out)
+                print("", file=out)
             elif command == "check":
                 print("Checking the tests on the latest code (this can take a few minutes)...",
                       file=out, flush=True)
@@ -843,16 +930,7 @@ def chat_loop(chat, read=input, out=None, releaser=None):
                 print("Discarded. Nothing was queued.", file=out)
                 return 0
             else:
-                answer = chat.turn(line)
-                print(f"planner> {answer['reply']}", file=out)
-                for question in answer["questions"]:
-                    print(f"  ? {question}", file=out)
-                if answer["draft_changed"]:
-                    tasks = len((chat.state.draft or {}).get("tasks") or [])
-                    print(f"  (draft updated: {tasks} task(s); `show` to read it, `check` to "
-                          "test it)", file=out)
-                print(f"  [this chat: ${chat.state.cost_usd:.4f} of "
-                      f"${chat.max_cost_usd:.2f}]", file=out)
+                _print_answer(chat.turn(line), chat, out)
         except DraftProblem as problem:
             print(f"  {problem}", file=out)
         except Exception as error:  # the provider or git failed; the chat is saved
@@ -861,6 +939,13 @@ def chat_loop(chat, read=input, out=None, releaser=None):
 
 def _command_chat(args, out):
     config = _config(args)
+    first = None
+    if args.file:
+        try:
+            first = Path(args.file).expanduser().read_text().strip()
+        except OSError as error:
+            print(f"Cannot read {args.file}: {error}", file=out)
+            return 1
     chat_id = None if args.new else latest_open_chat(_paths().state_dir / "planner",
                                                      args.project)
     chat = build_planner(config, args.project, chat_id)
@@ -868,7 +953,9 @@ def _command_chat(args, out):
           f"${config.planner.chat_usd:.2f} per chat)"
           + (f", continuing chat {chat_id}" if chat_id else "") + ".", file=out)
     print(CHAT_HELP, file=out)
-    return chat_loop(chat, out=out, releaser=build_releaser(config))
+    print(PASTE_HINT, file=out)
+    setup_line_editing()
+    return chat_loop(chat, out=out, releaser=build_releaser(config), first_message=first)
 
 
 # --- release -------------------------------------------------------------------------------
@@ -1041,6 +1128,7 @@ def build_parser():
     chat = commands.add_parser("chat", help="Talk to the planner about what you want.")
     chat.add_argument("project")
     chat.add_argument("--new", action="store_true", help="Start a new chat.")
+    chat.add_argument("--file", default=None, help="Send this file as the first message.")
     chat.set_defaults(handler=_command_chat)
     github = commands.add_parser("github", help="Set up and check the GitHub App.")
     github.add_argument("action", choices=["setup", "check"])

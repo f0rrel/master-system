@@ -176,30 +176,56 @@ def task_records(draft, settings) -> list:
     return records
 
 
-def render_draft(draft, check=None) -> str:
+def _wrap(text, width, indent):
+    import textwrap
+
+    out = []
+    for paragraph in str(text or "").splitlines() or [""]:
+        out += textwrap.wrap(paragraph, width=max(30, width - len(indent)),
+                             break_long_words=False, break_on_hyphens=False) or [""]
+    return [indent + line if line else "" for line in out]
+
+
+def _labelled(label, text, width, indent="  "):
+    """'Label:  text' with continuation lines aligned under the text."""
+    pad = indent + " " * 22
+    lines = _wrap(text, width, pad)
+    if not lines:
+        return [f"{indent}{label + ':':<22}"]
+    lines[0] = f"{indent}{label + ':':<22}" + lines[0].lstrip()
+    return lines
+
+
+def render_draft(draft, check=None, width: int = 100) -> str:
     if not draft:
-        return "No draft yet."
+        return "  No draft yet."
     epic = draft.get("epic") or {}
     lines = [f"EPIC {epic.get('id')}: {epic.get('title')}"]
     if epic.get("description"):
-        lines.append(f"  {epic['description']}")
+        lines += _wrap(epic["description"], width, "  ")
     for task in draft.get("tasks") or []:
-        deps = f" (after {', '.join(task['depends_on'])})" if task.get("depends_on") else ""
-        lines.append(f"\n  {task.get('id')} [{task.get('size')}] {task.get('title')}{deps}")
-        lines.append("    " + str(task.get("description", "")).replace("\n", "\n    "))
-        for test in task.get("tests") or []:
-            lines.append(f"    test: {test.get('path')} "
-                         f"({len(str(test.get('content', '')).splitlines())} lines)")
-        lines.append("    check by hand: "
-                     + str(task.get("manual_check", "")).replace("\n", "\n      "))
+        header = f"── {task.get('id')}: {task.get('title')} "
+        lines += ["", header + "─" * max(3, min(width, 60) - len(header))]
+        size = str(task.get("size"))
+        if task.get("depends_on"):
+            size += f" (after {', '.join(task['depends_on'])})"
+        lines += _labelled("Size", size, width)
+        files = task.get("files") or []
+        lines += _labelled("Files", ", ".join(files) if files else "(not given)", width)
+        lines += _labelled("What it does", task.get("description", ""), width)
+        lines += _labelled("How to check by hand", task.get("manual_check", ""), width)
+        tests = [f"{t.get('path')} ({len(str(t.get('content', '')).splitlines())} lines)"
+                 for t in task.get("tests") or []]
+        lines += _labelled("Tests", "; ".join(tests) or "(none)", width)
+        if task.get("test_commands"):
+            lines += _labelled("Test commands", "; ".join(task["test_commands"]), width)
     if check:
         lines.append("\nChecks: " + ("all passed, ready to approve" if check["ok"]
                                      else "FAILED (see below)"))
         for item in check["items"]:
             if not item["ok"]:
-                lines.append(f"  !! {item['what']}: {item['note']}")
+                lines += _wrap(f"!! {item['what']}: {item['note']}", width, "  ")
     return "\n".join(lines)
-
 
 SYSTEM = """You are the planner for the software project "{name}". Its owner tells you, in \
 plain language, what they want. You turn that into an EPIC split into small TASKS that a \
@@ -235,7 +261,8 @@ Answer with ONE JSON object only:
   "read_files": ["path", ...],
   "draft": null or {{"epic": {{"id": "...", "title": "...", "description": "..."}},
             "tasks": [{{"id": "...", "title": "...", "size": "small|medium|hard",
-                        "depends_on": [], "description": "...", "manual_check": "...",
+                        "depends_on": [], "files": ["files it will change"],
+                        "description": "...", "manual_check": "...",
                         "tests": [{{"path": "...", "content": "..."}}],
                         "test_commands": ["..."]}}]}}}}
 "draft" is the COMPLETE current draft whenever you change it (it replaces the previous one), \
