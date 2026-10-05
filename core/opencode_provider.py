@@ -100,6 +100,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from core.usage import add_usage, make_usage
 from core.provider import ProviderError, ReasoningProvider
 
 __all__ = [
@@ -177,8 +178,10 @@ class OpenCodeProvider(ReasoningProvider):
         deadline = time.monotonic() + self.total_timeout
 
         session_id = self._create_session()
+        self.last_usage = None
         self._submit(session_id, prompt)
         messages = self._await_completion(session_id, deadline)
+        self.last_usage = _usage(messages)
 
         return self._reply_text(messages)
 
@@ -381,6 +384,26 @@ class OpenCodeProvider(ReasoningProvider):
 
 def _is_text(value):
     return isinstance(value, str) and bool(value.strip())
+
+
+def _usage(messages):
+    """Sum the assistant messages' ``tokens`` and ``cost``."""
+    parts = []
+    for message in messages:
+        info = message.get("info") if isinstance(message, dict) else None
+        if not isinstance(info, dict) or info.get("role") != "assistant":
+            continue
+        tokens = info.get("tokens") if isinstance(info.get("tokens"), dict) else {}
+        cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
+        parts.append(make_usage(
+            input_tokens=tokens.get("input") or 0,
+            output_tokens=tokens.get("output") or 0,
+            reasoning_tokens=tokens.get("reasoning") or 0,
+            cached_input_tokens=cache.get("read") or 0,
+            cache_write_tokens=cache.get("write") or 0,
+            reported_cost_usd=info.get("cost") or 0,
+        ))
+    return add_usage(parts) if parts else None
 
 
 def _is_completed(info):

@@ -718,6 +718,7 @@ def test_the_adapter_adds_no_third_party_dependency():
         "urllib.request",
         "pathlib",
         "core.provider",
+        "core.usage",
     }
 
 

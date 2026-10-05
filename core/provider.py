@@ -70,6 +70,12 @@ class ReasoningProvider(ABC):
     #: Short human-readable identifier, used in output and errors.
     name = "provider"
 
+    #: Token usage of the most recent ``complete`` call, in the shape of
+    #: :func:`core.usage.make_usage`, or None when the backend does not report
+    #: it. Set even when the reply turns out to be unusable, because the call
+    #: was still paid for. Accounting only; never interpreted.
+    last_usage = None
+
     @abstractmethod
     def complete(self, prompt, schema=None):
         """Return the model's reply to prompt as text.

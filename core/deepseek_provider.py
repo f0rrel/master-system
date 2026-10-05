@@ -40,6 +40,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from core.usage import make_usage
 from core.provider import ProviderError, ReasoningProvider
 
 __all__ = [
@@ -57,6 +58,24 @@ DEFAULT_MAX_COMPLETION_TOKENS = 4000
 
 # Temperature 0 for reproducible behavior when possible
 GENERATION_OPTIONS = {"temperature": 0}
+
+
+def _usage(payload):
+    """DeepSeek's ``usage``: prompt tokens split into cache hits and misses."""
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    prompt = usage.get("prompt_tokens") or 0
+    hit = usage.get("prompt_cache_hit_tokens") or 0
+    miss = usage.get("prompt_cache_miss_tokens")
+    details = usage.get("completion_tokens_details")
+    reasoning = details.get("reasoning_tokens") if isinstance(details, dict) else 0
+    return make_usage(
+        input_tokens=miss if isinstance(miss, int) else max(prompt - hit, 0),
+        cached_input_tokens=hit,
+        output_tokens=usage.get("completion_tokens") or 0,
+        reasoning_tokens=reasoning or 0,
+    )
 
 
 class DeepSeekProvider(ReasoningProvider):
@@ -110,7 +129,9 @@ class DeepSeekProvider(ReasoningProvider):
             except Exception:
                 pass
 
+        self.last_usage = None
         payload = self._post("/chat/completions", request_body, api_key)
+        self.last_usage = _usage(payload)
 
         try:
             choices = payload["choices"]

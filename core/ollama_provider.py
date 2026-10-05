@@ -45,6 +45,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from core.usage import from_counts
 from core.provider import ProviderError, ReasoningProvider
 
 __all__ = ["DEFAULT_BASE_URL", "DEFAULT_MODEL", "OllamaProvider"]
@@ -85,7 +86,13 @@ class OllamaProvider(ReasoningProvider):
         if schema is not None:
             request_body["format"] = schema
 
+        self.last_usage = None
         payload = self._post("/api/chat", request_body)
+        if isinstance(payload, dict):
+            self.last_usage = from_counts(
+                input=payload.get("prompt_eval_count") or 0,
+                output=payload.get("eval_count") or 0,
+            )
 
         try:
             content = payload["message"]["content"]
