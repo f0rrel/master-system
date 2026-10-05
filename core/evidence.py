@@ -91,7 +91,13 @@ def attempts_for_task(
             continue
         payload = event.payload
         if event.type is EventType.ATTEMPT_FINISHED:
-            record["outcome"] = payload.get("status") or "error"
+            if "outcome" in payload:
+                outcome = payload["outcome"]
+                if outcome == "finished":
+                    outcome = payload.get("worker_reported_status") or "finished"
+            else:  # recorded before Milestone 1
+                outcome = payload.get("status") or "error"
+            record["outcome"] = outcome
         elif event.type is EventType.ATTEMPT_INTERRUPTED:
             if record["outcome"] == "unfinished":
                 record["outcome"] = "interrupted"

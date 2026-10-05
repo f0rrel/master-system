@@ -53,13 +53,20 @@ class VerificationBackend(Protocol):
         task: Mapping[str, object],
         context: Mapping[str, object],
         evidence: Mapping[str, object] | None = None,
+        *,
+        workspace,
     ) -> VerificationResult:
         """Verify the specified task/work attempt.
 
         Args:
             task: Authoritative task representation (read-only).
             context: Minimal read-only project/context information.
-            evidence: Optional evidence from execution (artifacts, logs, etc.).
+            evidence: Facts the orchestrator observed about the attempt
+                (base/result SHA, files changed, diff stats, outcome). Never
+                the worker's own artifacts.
+            workspace: The orchestrator's :class:`core.workspace.AttemptWorkspace`
+                for the attempt, with ``result_sha`` set. Processes start only
+                through ``workspace.run``.
 
         Returns:
             VerificationResult assessment.

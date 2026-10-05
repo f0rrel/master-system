@@ -31,7 +31,7 @@ def make_project(root, tasks):
 
 
 class DummyVerifier:
-    def verify(self, task, context, evidence=None):
+    def verify(self, task, context, evidence=None, workspace=None):
         return VerificationResult(
             verdict="pass",
             summary="ok",
@@ -41,7 +41,7 @@ class DummyVerifier:
 
 
 class AnotherVerifier:
-    def verify(self, task, context, evidence=None):
+    def verify(self, task, context, evidence=None, workspace=None):
         return VerificationResult(verdict="fail", summary="issues found")
 
 

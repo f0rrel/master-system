@@ -187,6 +187,7 @@ class SessionRunner:
             session_id=session.session_id,
             max_attempts_per_task=self._max_attempts_per_task,
             lock=lock,
+            paths=self._paths,
         )
         try:
             result = loop.run(session.project_id)

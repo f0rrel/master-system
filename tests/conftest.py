@@ -53,3 +53,35 @@ def git_repo(tmp_path):
 @pytest.fixture
 def runtime_paths(tmp_path):
     return RuntimePaths(state_dir=tmp_path / "state", worktrees_root=tmp_path / "worktrees")
+
+
+_FACTORY = None
+
+
+@pytest.fixture(autouse=True)
+def _remember_tmp_factory(tmp_path_factory):
+    global _FACTORY
+    _FACTORY = tmp_path_factory
+
+
+def attach_repository(project_path, files=None, base_branch="main") -> Path:
+    """Give a test project a git repository outside every protected path."""
+    import yaml
+
+    repo = make_repo(_FACTORY.mktemp("repo"), files)
+    project_file = Path(project_path) / "project.yaml"
+    data = yaml.safe_load(project_file.read_text())
+    data.update(repository=str(repo), base_branch=base_branch)
+    project_file.write_text(yaml.safe_dump(data))
+    return repo
+
+
+def workspace_for(path, seconds=60, **kwargs):
+    """An AttemptWorkspace for unit tests that call a backend or verifier directly."""
+    import time
+
+    from core.workspace import AttemptWorkspace
+
+    return AttemptWorkspace(path=Path(path), base_sha=kwargs.pop("base_sha", "base"),
+                            deadline=time.monotonic() + seconds, deadline_at="later",
+                            **kwargs)

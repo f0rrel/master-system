@@ -25,7 +25,7 @@ class TaskExecutionRunner:
         self._master = master
         self._backend = backend
 
-    def execute(self, project_id: str, task_id: str) -> ExecutionResult:
+    def execute(self, project_id: str, task_id: str, *, workspace) -> ExecutionResult:
         """Execute the specified task via the configured backend.
 
         Args:
@@ -39,7 +39,7 @@ class TaskExecutionRunner:
             ExecutionError: If the task cannot be executed as a valid candidate.
         """
         task, context = self.prepare(project_id, task_id)
-        return self.invoke(task, context)
+        return self.invoke(task, context, workspace)
 
     def prepare(self, project_id: str, task_id: str):
         """Check the task is executable and build its context. No side effects.
@@ -96,9 +96,9 @@ class TaskExecutionRunner:
         }
         return task, context
 
-    def invoke(self, task, context) -> ExecutionResult:
+    def invoke(self, task, context, workspace) -> ExecutionResult:
         """Run the backend once on a prepared task. This is the side effect."""
-        result = self._backend.execute(task, context)
+        result = self._backend.execute(task, context, workspace=workspace)
         if not isinstance(result, ExecutionResult):
             raise ExecutionError(
                 f"backend returned unexpected result type {type(result).__name__}"

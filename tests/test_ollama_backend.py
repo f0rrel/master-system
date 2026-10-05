@@ -14,6 +14,7 @@ import pytest
 
 sys.path.insert(0, ".")
 
+from conftest import attach_repository, workspace_for
 from core.execution import ExecutionBackend, ExecutionResult
 from core.execution_runner import TaskExecutionRunner
 from core.master import Master
@@ -370,9 +371,10 @@ def test_the_backend_never_mutates_authoritative_state(tmp_path):
         done_reply("done"),
     )
 
+    (tmp_path / "ws").mkdir()
     result = TaskExecutionRunner(
-        master, OllamaExecutionBackend(workdir=tmp_path / "ws", transport=transport)
-    ).execute("p", "t1")
+        master, OllamaExecutionBackend(transport=transport)
+    ).execute("p", "t1", workspace=workspace_for(tmp_path / "ws"))
 
     assert result.status == "success"
     assert master.status("p") == before
@@ -383,9 +385,10 @@ def test_state_updates_are_empty_so_nothing_can_leak(tmp_path):
     master = Master(root)
     transport = FakeTransport(done_reply())
 
+    (tmp_path / "ws").mkdir()
     result = TaskExecutionRunner(
-        master, OllamaExecutionBackend(workdir=tmp_path / "ws", transport=transport)
-    ).execute("p", "t1")
+        master, OllamaExecutionBackend(transport=transport)
+    ).execute("p", "t1", workspace=workspace_for(tmp_path / "ws"))
 
     assert result.state_updates == {}
 
@@ -399,12 +402,14 @@ def test_the_runner_passes_the_task_through_untouched(tmp_path):
     seen = {}
 
     class RecordingBackend:
-        def execute(self, task, context):
+        def execute(self, task, context, workspace=None):
             seen["task"] = dict(task)
             seen["context"] = dict(context)
             return ExecutionResult(status="success", reason="ok")
 
-    TaskExecutionRunner(master, RecordingBackend()).execute("p", "t1")
+    TaskExecutionRunner(master, RecordingBackend()).execute(
+        "p", "t1", workspace=workspace_for(tmp_path)
+    )
 
     assert seen["task"]["id"] == "t1"
     assert seen["context"]["project_id"] == "p"
@@ -501,22 +506,15 @@ def dispatch(task_id):
 class SubprocessPytestVerifier:
     """Deterministic verification: run the worker's real tests for real."""
 
-    def verify(self, task, context, evidence=None):
+    def verify(self, task, context, evidence=None, *, workspace):
         from core.verification import VerificationResult
 
-        workdir = (evidence or {}).get("workdir")
-        if not workdir:
-            return VerificationResult(verdict="unable_to_verify", summary="no workdir")
-        import subprocess
-
-        done = subprocess.run(
-            [sys.executable, "-m", "pytest", "-q"], cwd=workdir,
-            capture_output=True, text=True, timeout=120,
-        )
+        done = workspace.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+                             timeout=120)
         return VerificationResult(
             verdict="pass" if done.returncode == 0 else "fail",
             summary=done.stdout.strip().splitlines()[-1] if done.stdout.strip() else "",
-            evidence={"workdir": workdir, "exit_code": done.returncode},
+            evidence={"exit_code": done.returncode},
         )
 
 
@@ -534,13 +532,10 @@ def test_the_full_loop_runs_through_ollama_without_touching_the_loop(tmp_path):
         "status": "planned",
         "title": "In greet.py define greet(name) returning 'Hello, ' + name. Make the test pass.",
     }])
-    work = tmp_path / "ws"
-    work.mkdir()
-    (work / "test_greet.py").write_text(
-        "from greet import greet\n\n\ndef test_greet():\n    assert greet('Ada') == 'Hello, Ada'\n"
-    )
-
-    baseline = SubprocessPytestVerifier()
+    attach_repository(root / "p", files={
+        "test_greet.py": "from greet import greet\n\n\ndef test_greet():\n"
+                         "    assert greet('Ada') == 'Hello, Ada'\n",
+    })
     master = Master(root)
     provider = ScriptedProvider(
         act("t1", "in_progress"), dispatch("t1"), act("t1", "completed")
@@ -556,7 +551,7 @@ def test_the_full_loop_runs_through_ollama_without_touching_the_loop(tmp_path):
     loop = AutonomousLoop(
         master,
         provider,
-        OllamaExecutionBackend(workdir=work, model="qwen3:8b", transport=transport),
+        OllamaExecutionBackend(model="qwen3:8b", transport=transport),
         SubprocessPytestVerifier(),
         request="Work on t1.",
         max_steps=5,
@@ -566,7 +561,9 @@ def test_the_full_loop_runs_through_ollama_without_touching_the_loop(tmp_path):
     assert result.stop_reason == STOP_NO_WORK
     assert result.last_output["execution"]["status"] == "success"
     assert result.last_output["verification"]["verdict"] == "pass"
-    assert (work / "greet.py").exists()
+    from core.history import EventType
+    started = loop.history.events(types=[EventType.ATTEMPT_STARTED])[0].payload
+    assert (Path(started["worktree"]) / "greet.py").exists()
     assert master.status("p")["tasks"][0]["status"] == "completed"
 
 
@@ -578,40 +575,34 @@ def test_the_loop_is_unchanged_by_which_backend_it_was_given(tmp_path):
     class AlwaysPasses:
         """What is compared here is the loop, not the verifier."""
 
-        def verify(self, task, context, evidence=None):
+        def verify(self, task, context, evidence=None, workspace=None):
             return VerificationResult(verdict="pass", summary="ok")
 
     def run_with(backend_factory):
         scratch = tmp_path / backend_factory.__name__
         root = make_project(scratch, [{"id": "t1", "status": "planned", "title": "Do X"}])
-        work = scratch / "ws"
-        work.mkdir()
+        attach_repository(root / "p")
         master = Master(root)
         provider = ScriptedProvider(
             act("t1", "in_progress"), dispatch("t1"), act("t1", "completed")
         )
         loop = AutonomousLoop(
-            master, provider, backend_factory(work),
+            master, provider, backend_factory(),
             AlwaysPasses(), request="r", max_steps=5,
         )
         return loop.run("p"), master
 
-    def via_ollama(work):
-        return OllamaExecutionBackend(
-            workdir=work, transport=FakeTransport(done_reply("nothing to do"))
-        )
+    def via_ollama():
+        return OllamaExecutionBackend(transport=FakeTransport(done_reply("nothing to do")))
 
     class SomeOtherLocalRuntime:
         """Stands in for whatever replaces Ollama next year."""
 
-        def __init__(self, workdir):
-            self._workdir = workdir
-
-        def execute(self, task, context):
+        def execute(self, task, context, workspace=None):
             return ExecutionResult(status="success", reason="other runtime did it")
 
-    def via_other(work):
-        return SomeOtherLocalRuntime(work)
+    def via_other():
+        return SomeOtherLocalRuntime()
 
     a, master_a = run_with(via_ollama)
     b, master_b = run_with(via_other)

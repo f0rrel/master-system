@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from conftest import attach_repository, make_repo
 from core.autonomous_loop import (
     STOP_APPROVAL,
     STOP_ATTEMPT_LIMIT,
@@ -70,6 +71,7 @@ def _write_project(root, project_id="alpha"):
             }
         )
     )
+    attach_repository(project)
     return project.parent
 
 
@@ -95,7 +97,7 @@ class FakeExecutionBackend:
         self._result = result or ExecutionResult(status="success", reason="ok")
         self.calls = []
 
-    def execute(self, task, context):
+    def execute(self, task, context, workspace=None):
         self.calls.append(dict(task)["id"])
         return self._result
 
@@ -107,7 +109,7 @@ class FakeVerificationBackend:
         )
         self.calls = []
 
-    def verify(self, task, context, evidence=None):
+    def verify(self, task, context, evidence=None, workspace=None):
         self.calls.append(dict(task)["id"])
         return self._result
 
@@ -536,7 +538,8 @@ def write_project():
     project = PROJECTS / "alpha-project"
     project.mkdir(parents=True, exist_ok=True)
     (project / "project.yaml").write_text(
-        yaml.safe_dump({{"id": "alpha", "name": "alpha", "status": "active"}})
+        yaml.safe_dump({{"id": "alpha", "name": "alpha", "status": "active",
+                        "repository": {repository!r}, "base_branch": "main"}})
     )
     (project / "milestones.yaml").write_text(
         yaml.safe_dump({{"milestones": [MILESTONE]}})
@@ -561,13 +564,13 @@ class Backend:
     def __init__(self):
         self.calls = []
 
-    def execute(self, task, context):
+    def execute(self, task, context, workspace=None):
         self.calls.append(task["id"])
         return ExecutionResult(status="success", reason="ok")
 
 
 class Verifier:
-    def verify(self, task, context, evidence=None):
+    def verify(self, task, context, evidence=None, workspace=None):
         return VerificationResult(verdict="pass", summary="looks good")
 
 
@@ -657,7 +660,8 @@ def _run_phase(root, phase):
     if not script.exists():
         script.write_text(
             textwrap.dedent(RESUME_SCRIPT).format(
-                repo=str(Path(__file__).resolve().parent.parent), root=str(root)
+                repo=str(Path(__file__).resolve().parent.parent), root=str(root),
+                repository=str(make_repo(Path(root) / "managed-repo")),
             )
         )
     done = subprocess.run(

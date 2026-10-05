@@ -49,12 +49,17 @@ class ExecutionBackend(Protocol):
     ProjectState directly.
     """
 
-    def execute(self, task: Mapping[str, object], context: Mapping[str, object]) -> ExecutionResult:
+    def execute(self, task: Mapping[str, object], context: Mapping[str, object],
+                *, workspace) -> ExecutionResult:
         """Execute the specified task using this backend.
 
         Args:
             task: Authoritative task representation (read-only view).
             context: Minimal read-only execution context.
+            workspace: The :class:`core.workspace.AttemptWorkspace` the
+                orchestrator created for this attempt. The backend works only
+                there, starts processes only through ``workspace.run``, and
+                stops by ``workspace.deadline``. It never chooses a location.
 
         Returns:
             ExecutionResult containing outcome and proposed state updates.

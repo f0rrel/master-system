@@ -10,6 +10,7 @@ import json
 import pytest
 import yaml
 
+from conftest import attach_repository
 from core.autonomous_loop import (
     STOP_APPROVAL,
     STOP_MASTER,
@@ -41,6 +42,7 @@ def write_project(root, project_id="alpha", tasks=None):
         yaml.safe_dump({"milestones": [MILESTONE]})
     )
     (project / "tasks.yaml").write_text(yaml.safe_dump({"tasks": tasks or []}))
+    attach_repository(project)
     return project
 
 
@@ -87,7 +89,7 @@ class FakeExecutionBackend:
         self._result = result or ExecutionResult(status="success", reason="ok")
         self.calls = []
 
-    def execute(self, task, context):
+    def execute(self, task, context, workspace=None):
         self.calls.append((dict(task), dict(context)))
         return self._result
 
@@ -99,7 +101,7 @@ class FakeVerificationBackend:
         )
         self.calls = []
 
-    def verify(self, task, context, evidence=None):
+    def verify(self, task, context, evidence=None, workspace=None):
         self.calls.append((dict(task), dict(context), dict(evidence or {})))
         return self._result
 

@@ -60,7 +60,15 @@ from core.reasoning import (
 )
 from core.reasoning_engine import ReasoningEngine, ReasoningError
 from core.run_lock import ProjectLock
-from core.task_orchestrator import TaskOrchestrator
+from core.paths import RuntimePaths
+from core.task_orchestrator import (
+    DEFAULT_ATTEMPT_TIMEOUT_S,
+    DEFAULT_VERIFICATION_TIMEOUT_S,
+    TaskOrchestrator,
+    WorkspaceRefusal,
+    default_worktrees,
+)
+from core.workspace import GitWorktrees
 from core.verification import VerificationBackend
 from core.work_manager import calculate_readiness
 
@@ -157,6 +165,10 @@ class AutonomousLoop:
         session_id: Optional[str] = None,
         max_attempts_per_task: int = DEFAULT_MAX_ATTEMPTS,
         lock: Optional[ProjectLock] = None,
+        paths: Optional[RuntimePaths] = None,
+        worktrees: Optional[GitWorktrees] = None,
+        attempt_timeout_s: float = DEFAULT_ATTEMPT_TIMEOUT_S,
+        verification_timeout_s: float = DEFAULT_VERIFICATION_TIMEOUT_S,
     ):
         if not isinstance(master, Master):
             raise TypeError(f"expected a Master, got {type(master).__name__}")
@@ -191,6 +203,11 @@ class AutonomousLoop:
             execution_backend,
             verification_backend,
             history=self._history,
+            worktrees=(
+                worktrees if worktrees is not None else default_worktrees(master, paths)
+            ),
+            attempt_timeout_s=attempt_timeout_s,
+            verification_timeout_s=verification_timeout_s,
         )
 
     @property
@@ -488,6 +505,8 @@ class AutonomousLoop:
                 else:
                     try:
                         self._orchestrator.prepare(project_id, task_id)
+                    except WorkspaceRefusal as error:
+                        refusal = (error.reason, str(error))
                     except ExecutionError as error:
                         refusal = ("not_executable", str(error))
                 if refusal is None and self._evidence.attempt_limit_reached(
@@ -514,6 +533,7 @@ class AutonomousLoop:
                     run_id=run_id,
                     session_id=self._session_id,
                     step=steps,
+                    lock_fd=self._lock.fileno(),
                 )
                 continue
 

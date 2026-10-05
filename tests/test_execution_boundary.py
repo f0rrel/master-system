@@ -32,12 +32,12 @@ def make_project(root, tasks):
 
 
 class DummyBackend:
-    def execute(self, task, context):
+    def execute(self, task, context, workspace=None):
         return ExecutionResult(status="success", reason="done")
 
 
 class AnotherBackend:
-    def execute(self, task, context):
+    def execute(self, task, context, workspace=None):
         return ExecutionResult(status="failed", reason="bad")
 
 

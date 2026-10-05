@@ -10,6 +10,7 @@ import json
 import pytest
 import yaml
 
+from conftest import attach_repository
 from core.autonomous_loop import (
     STOP_APPROVAL,
     STOP_ATTEMPT_LIMIT,
@@ -36,6 +37,7 @@ def write_project(root, tasks):
     )
     (project / "milestones.yaml").write_text(yaml.safe_dump({"milestones": [MILESTONE]}))
     (project / "tasks.yaml").write_text(yaml.safe_dump({"tasks": tasks}))
+    attach_repository(project)
 
 
 def task(task_id="t1", status="in_progress"):
@@ -62,7 +64,7 @@ class Backend:
         self._result = result or ExecutionResult(status="success", reason="ok")
         self.calls = []
 
-    def execute(self, task, context):
+    def execute(self, task, context, workspace=None):
         self.calls.append(task["id"])
         return self._result
 
@@ -71,7 +73,7 @@ class Verifier:
     def __init__(self, verdict="pass", summary="ok"):
         self._result = VerificationResult(verdict=verdict, summary=summary)
 
-    def verify(self, task, context, evidence=None):
+    def verify(self, task, context, evidence=None, workspace=None):
         return self._result
 
 

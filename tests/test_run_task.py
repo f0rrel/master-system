@@ -10,6 +10,7 @@ import json
 import pytest
 import yaml
 
+from conftest import attach_repository
 from core.autonomous_loop import (
     STOP_MASTER,
     STOP_NO_WORK,
@@ -41,6 +42,7 @@ def write_project(root, tasks):
     )
     (project / "milestones.yaml").write_text(yaml.safe_dump({"milestones": [MILESTONE]}))
     (project / "tasks.yaml").write_text(yaml.safe_dump({"tasks": tasks}))
+    attach_repository(project)
     return project
 
 
@@ -69,7 +71,7 @@ class Backend:
         self._error = error
         self.calls = []
 
-    def execute(self, task, context):
+    def execute(self, task, context, workspace=None):
         self.calls.append(task["id"])
         if self._error is not None:
             raise self._error
@@ -82,7 +84,7 @@ class Verifier:
         self._error = error
         self.calls = []
 
-    def verify(self, task, context, evidence=None):
+    def verify(self, task, context, evidence=None, workspace=None):
         self.calls.append(task["id"])
         if self._error is not None:
             raise self._error
@@ -299,7 +301,8 @@ def test_an_attempt_is_recorded_as_intent_then_outcome(tmp_path):
     )
     assert started.attempt_id == finished.attempt_id == verified.attempt_id
     assert result.last_output["attempt_id"] == started.attempt_id
-    assert finished.payload["status"] == "success"
+    assert finished.payload["outcome"] == "finished"
+    assert finished.payload["worker_reported_status"] == "success"
     assert finished.payload["worker"].endswith("Backend")
     assert verified.payload["verdict"] == "pass"
     assert {e.run_id for e in history.events()} == {result.run_id}
@@ -340,7 +343,7 @@ def test_a_worker_that_raises_still_finishes_its_attempt(tmp_path):
 
     finished = history.events(types=[EventType.ATTEMPT_FINISHED])
     assert len(finished) == 1
-    assert finished[0].payload["status"] == "error"
+    assert finished[0].payload["outcome"] == "error"
     assert finished[0].payload["error_type"] == "RuntimeError"
     assert verifier.calls == []
     assert types(history)[-1] is EventType.RUN_ERROR
@@ -368,7 +371,7 @@ def test_a_transport_retry_inside_the_worker_is_one_attempt(tmp_path):
         def __init__(self):
             self.transport_calls = 0
 
-        def execute(self, task, context):
+        def execute(self, task, context, workspace=None):
             for _ in range(3):
                 self.transport_calls += 1
                 if self.transport_calls == 3:

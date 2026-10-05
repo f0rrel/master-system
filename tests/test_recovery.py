@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from conftest import attach_repository
 from core.autonomous_loop import STOP_MASTER
 from core.execution import ExecutionResult
 from core.history import EventType
@@ -44,6 +45,7 @@ def write_project(root):
         {"id": "t1", "milestone": "m1", "title": "T1", "status": "planned",
          "assigned_to": "master"}
     ]}))
+    attach_repository(project)
     return project
 
 
@@ -82,7 +84,7 @@ class Backend:
         self._error = error
         self.calls = []
 
-    def execute(self, task, context):
+    def execute(self, task, context, workspace=None):
         self.calls.append(task["id"])
         if self._error is not None:
             raise self._error
@@ -90,7 +92,7 @@ class Backend:
 
 
 class Verifier:
-    def verify(self, task, context, evidence=None):
+    def verify(self, task, context, evidence=None, workspace=None):
         return VerificationResult(verdict="pass", summary="checked")
 
 
@@ -172,7 +174,7 @@ class Scripted(ReasoningProvider):
 
 
 class Backend:
-    def execute(self, task, context):
+    def execute(self, task, context, workspace=None):
         if mode == "crash":
             (ROOT / "worker-touched-workspace").write_text("half done")
             os._exit(9)
@@ -180,7 +182,7 @@ class Backend:
 
 
 class Verifier:
-    def verify(self, task, context, evidence=None):
+    def verify(self, task, context, evidence=None, workspace=None):
         return VerificationResult(verdict="pass", summary="checked")
 
 

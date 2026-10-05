@@ -3,6 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, ".")
 
+from conftest import attach_repository
 from core.master import Master
 from core.reasoning_engine import ReasoningEngine
 from core.reasoning import ReasoningInterface, Decision
@@ -27,6 +28,7 @@ def make_project(root, tasks):
             for d in t["depends_on"]:
                 lines.append(f"      - {d}")
     (proj / "tasks.yaml").write_text("\n".join(lines) + "\n")
+    attach_repository(proj)
     return Path(root) / "projects"
 
 
@@ -59,9 +61,9 @@ def test_qa_pass_does_not_auto_complete(tmp_path):
     root = make_project(tmp_path, [{"id": "t1", "status": "in_progress"}])
     m = Master(root)
     class FE(ExecutionBackend):
-        def execute(self, t, c): return ExecutionResult(status="success")
+        def execute(self, t, c, workspace=None): return ExecutionResult(status="success")
     class FV(VerificationBackend):
-        def verify(self, t, c, e=None): return VerificationResult(verdict="pass")
+        def verify(self, t, c, e=None, workspace=None): return VerificationResult(verdict="pass")
     orch = TaskOrchestrator(m, FE(), FV())
     before = m.status("p")
     orch.orchestrate("p", "t1")
@@ -76,9 +78,9 @@ def test_exec_success_does_not_auto_complete(tmp_path):
     root = make_project(tmp_path, [{"id": "t1", "status": "in_progress"}])
     m = Master(root)
     class FE(ExecutionBackend):
-        def execute(self, t, c): return ExecutionResult(status="success")
+        def execute(self, t, c, workspace=None): return ExecutionResult(status="success")
     class FV(VerificationBackend):
-        def verify(self, t, c, e=None): return VerificationResult(verdict="fail")
+        def verify(self, t, c, e=None, workspace=None): return VerificationResult(verdict="fail")
     orch = TaskOrchestrator(m, FE(), FV())
     before = m.status("p")
     orch.orchestrate("p", "t1")
@@ -93,9 +95,9 @@ def test_exec_failure_does_not_auto_retry(tmp_path):
     root = make_project(tmp_path, [{"id": "t1", "status": "in_progress"}])
     m = Master(root)
     class FE(ExecutionBackend):
-        def execute(self, t, c): return ExecutionResult(status="failed")
+        def execute(self, t, c, workspace=None): return ExecutionResult(status="failed")
     class FV(VerificationBackend):
-        def verify(self, t, c, e=None): return VerificationResult(verdict="fail")
+        def verify(self, t, c, e=None, workspace=None): return VerificationResult(verdict="fail")
     orch = TaskOrchestrator(m, FE(), FV())
     before = m.status("p")
     orch.orchestrate("p", "t1")
@@ -110,9 +112,9 @@ def test_orchestrator_does_not_mutate(tmp_path):
     root = make_project(tmp_path, [{"id": "t1", "status": "in_progress"}])
     m = Master(root)
     class FE(ExecutionBackend):
-        def execute(self, t, c): return ExecutionResult(status="success")
+        def execute(self, t, c, workspace=None): return ExecutionResult(status="success")
     class FV(VerificationBackend):
-        def verify(self, t, c, e=None): return VerificationResult(verdict="pass")
+        def verify(self, t, c, e=None, workspace=None): return VerificationResult(verdict="pass")
     orch = TaskOrchestrator(m, FE(), FV())
     before = m.status("p")
     orch.orchestrate("p", "t1")

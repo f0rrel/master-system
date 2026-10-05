@@ -3,6 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, ".")
 
+from conftest import attach_repository
 from core.execution import ExecutionResult, ExecutionBackend
 from core.verification import VerificationResult, VerificationBackend
 from core.master import Master
@@ -32,13 +33,14 @@ def make_project(root, tasks):
             for d in t["depends_on"]:
                 lines.append(f"      - {d}")
     (proj / "tasks.yaml").write_text("\n".join(lines) + "\n")
+    attach_repository(proj)
     return Path(root) / "projects"
 
 
 class FakeExec(ExecutionBackend):
     def __init__(self, result=None):
         self.result = result or ExecutionResult(status="success", artifacts={"e": 1})
-    def execute(self, task, context):
+    def execute(self, task, context, workspace=None):
         return self.result
 
 
@@ -46,7 +48,7 @@ class FakeVerify(VerificationBackend):
     def __init__(self, verdict="pass", summary="ok"):
         self.verdict = verdict
         self.summary = summary
-    def verify(self, task, context, evidence=None):
+    def verify(self, task, context, evidence=None, workspace=None):
         return VerificationResult(verdict=self.verdict, summary=self.summary, findings=[{"issue": self.summary}] if self.summary else [], evidence=evidence or {})
 
 

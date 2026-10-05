@@ -563,8 +563,10 @@ a script against the code.
   - [ ] A worker that edits a protected test gets `fail`.
   - [ ] Re-titling a task or changing its acceptance invalidates an earlier pass.
     ("Reopening invalidates a pass" moved to Milestone 3, decision P7.)
-  - [ ] An attempt past its deadline is killed and recorded as `timed_out`.
-  - [ ] No worker can reach project state, sessions or history.
+  - [x] An attempt past its deadline is killed and recorded as `timed_out`.
+    (`tests/test_attempt_workspace.py`, `tests/test_worker_process.py`)
+  - [x] No worker can reach project state, sessions or history.
+    (`tests/test_attempt_workspace.py`, `tests/test_workspace.py`, `tests/test_paths.py`)
 
 **2. Run it for real**
 

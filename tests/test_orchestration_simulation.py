@@ -3,6 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, ".")
 
+from conftest import attach_repository, workspace_for
 from core.execution import ExecutionResult, ExecutionBackend
 from core.execution_runner import TaskExecutionRunner
 from core.verification import VerificationResult, VerificationBackend
@@ -28,6 +29,7 @@ def make_project(root, tasks):
             for d in t["depends_on"]:
                 lines.append(f"      - {d}")
     (proj / "tasks.yaml").write_text("\n".join(lines) + "\n")
+    attach_repository(proj)
     return Path(root) / "projects"
 
 
@@ -35,7 +37,7 @@ class FakeExec(ExecutionBackend):
     def __init__(self, result=None):
         self.result = result or ExecutionResult(status="success", artifacts={"evidence": "ok"})
         self.calls = []
-    def execute(self, task, context):
+    def execute(self, task, context, workspace=None):
         self.calls.append((dict(task), dict(context)))
         return self.result
 
@@ -45,7 +47,7 @@ class FakeVerify(VerificationBackend):
         self.verdict = verdict
         self.summary = summary
         self.calls = []
-    def verify(self, task, context, evidence=None):
+    def verify(self, task, context, evidence=None, workspace=None):
         self.calls.append((dict(task), dict(context), dict(evidence) if evidence else {}))
         return VerificationResult(verdict=self.verdict, summary=self.summary, evidence=evidence or {})
 
@@ -64,7 +66,7 @@ def test_success_pass_loop(tmp_path):
     before = m.status("p")
     execb = FakeExec()
     runner = TaskExecutionRunner(m, execb)
-    exec_res = runner.execute("p", "t1")
+    exec_res = runner.execute("p", "t1", workspace=workspace_for(tmp_path))
     assert exec_res.status == "success"
     ver = FakeVerify("pass")
     task = before["tasks"][0]
@@ -81,7 +83,7 @@ def test_success_fail_loop(tmp_path):
     before = m.status("p")
     execb = FakeExec()
     runner = TaskExecutionRunner(m, execb)
-    exec_res = runner.execute("p", "t1")
+    exec_res = runner.execute("p", "t1", workspace=workspace_for(tmp_path))
     ver = FakeVerify("fail", "issues")
     task = before["tasks"][0]
     vres = ver.verify(task, {"project_id": "p"}, exec_res.artifacts)
@@ -96,7 +98,7 @@ def test_success_needs_human(tmp_path):
     before = m.status("p")
     execb = FakeExec()
     runner = TaskExecutionRunner(m, execb)
-    exec_res = runner.execute("p", "t1")
+    exec_res = runner.execute("p", "t1", workspace=workspace_for(tmp_path))
     ver = FakeVerify("needs_human")
     task = before["tasks"][0]
     vres = ver.verify(task, {"project_id": "p"}, exec_res.artifacts)
@@ -111,7 +113,7 @@ def test_execution_failure_loop(tmp_path):
     before = m.status("p")
     execb = FakeExec(result=ExecutionResult(status="failed", reason="boom"))
     runner = TaskExecutionRunner(m, execb)
-    exec_res = runner.execute("p", "t1")
+    exec_res = runner.execute("p", "t1", workspace=workspace_for(tmp_path))
     assert exec_res.status == "failed"
     ver = FakeVerify("fail")
     task = before["tasks"][0]
