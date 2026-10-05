@@ -31,6 +31,7 @@ from core.master import Master
 from core.provider import ReasoningProvider
 from core.session_runner import SessionRunner
 from core.session_store import FileSessionStore
+from core.sqlite_history import SQLiteHistoryStore
 from core.verification import VerificationResult
 from core.work_session import SessionStatus
 
@@ -141,6 +142,7 @@ def make_runner(projects, replies, tmp_path, **kwargs):
         FakeExecutionBackend(),
         FakeVerificationBackend(),
         store=FileSessionStore(tmp_path / "sessions"),
+        history=SQLiteHistoryStore(tmp_path / "history.sqlite"),
         **kwargs,
     )
 
@@ -308,6 +310,7 @@ def test_completing_without_passing_evidence_needs_a_human(projects, tmp_path):
         FakeExecutionBackend(),
         FakeVerificationBackend(VerificationResult(verdict="fail", summary="no")),
         store=FileSessionStore(tmp_path / "sessions"),
+        history=SQLiteHistoryStore(tmp_path / "history.sqlite"),
     )
 
     session = runner.start("alpha", "finish t1", "run-1")
@@ -512,6 +515,7 @@ from core.master import Master
 from core.provider import ReasoningProvider
 from core.session_runner import SessionRunner
 from core.session_store import FileSessionStore
+from core.sqlite_history import SQLiteHistoryStore
 from core.verification import VerificationResult
 
 ROOT = Path({root!r})
@@ -591,7 +595,8 @@ def dispatch(task_id):
 def runner(replies, backend):
     return SessionRunner(
         Master(PROJECTS), Once(replies), Backend() if backend is None else backend,
-        Verifier(), store=FileSessionStore(SESSIONS), max_steps=4,
+        Verifier(), store=FileSessionStore(SESSIONS),
+        history=SQLiteHistoryStore(ROOT / "history.sqlite"), max_steps=4,
     )
 
 

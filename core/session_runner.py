@@ -6,14 +6,30 @@ not change what the loop does: it constructs the existing
 it once, and translates the resulting
 :class:`core.autonomous_loop.LoopResult` into durable session fields.
 
-The loop is deliberately left alone. Per-step persistence would need a hook
-inside ``AutonomousLoop.run()``, and adding one for this milestone would put a
-durability concern into the module whose job is bounded decision sequencing.
-So a session is saved at the boundaries that already exist in the problem:
-created, started, and finished. A process that dies mid-run therefore resumes
-from its last completed step rather than from the step it was in, which is the
-honest V1 guarantee and is why the session records ``steps_completed`` as a
-count rather than pretending to be a checkpoint log.
+Per-step durability lives in history, not in the session. The loop appends
+every decision, operation result and attempt to an append-only
+:class:`core.history.HistoryStore` as it happens; the session file itself is
+saved only when a run starts and when it ends. So after a crash the session
+says "running", and history says exactly how far the run got.
+
+Recovery
+--------
+Every run holds the project's :class:`core.run_lock.ProjectLock`. A session
+found in RUNNING while that lock can be acquired was left by a process that no
+longer exists. Before running again, the runner marks every run of that
+session with no recorded end as ``run_interrupted``, and every attempt with no
+recorded outcome as ``attempt_interrupted``, adds the interrupted runs' steps
+from history, and stops the session with ``interrupted``. Nothing is replayed:
+the worker may or may not have changed the workspace, so the interrupted
+attempt is shown to Master as evidence and Master decides what to do.
+
+If the lock is held, the session is still running somewhere and resuming it is
+refused without touching anything.
+
+An exception during a run -- a worker or verifier that raised -- is recorded by
+the loop as ``run_error``; the runner stops the session with ``error`` and
+re-raises. A session is never left claiming to run after its process has
+handled the failure.
 
 Why nothing is stored about the worker
 --------------------------------------
@@ -36,11 +52,21 @@ from core.autonomous_loop import (
 )
 from core.evidence import DEFAULT_MAX_ATTEMPTS
 from core.execution import ExecutionBackend
+from core.history import EventType, HistoryStore
 from core.master import Master
 from core.provider import ReasoningProvider
+from core.run_lock import ProjectLock
 from core.session_store import FileSessionStore
 from core.verification import VerificationBackend
 from core.work_session import SessionStatus, WorkSession, status_for_stop_reason
+
+
+#: Session-level stop reasons, set by the runner rather than the loop.
+STOP_ERROR = "error"
+STOP_INTERRUPTED = "interrupted"
+
+_RUN_ENDS = (EventType.RUN_STOPPED, EventType.RUN_ERROR, EventType.RUN_INTERRUPTED)
+_ATTEMPT_ENDS = (EventType.ATTEMPT_FINISHED, EventType.ATTEMPT_INTERRUPTED)
 
 
 class SessionRunner:
@@ -58,6 +84,7 @@ class SessionRunner:
         execution_backend: ExecutionBackend,
         verification_backend: VerificationBackend,
         store=None,
+        history: Optional[HistoryStore] = None,
         request: Optional[str] = None,
         max_steps: int = 20,
         max_retries: int = DEFAULT_MAX_RETRIES,
@@ -68,6 +95,11 @@ class SessionRunner:
         self._execution_backend = execution_backend
         self._verification_backend = verification_backend
         self._store = store if store is not None else FileSessionStore()
+        if history is None:
+            from core.sqlite_history import SQLiteHistoryStore
+
+            history = SQLiteHistoryStore()
+        self._history = history
         self._request = request
         self._max_steps = max_steps
         self._max_retries = max_retries
@@ -77,6 +109,10 @@ class SessionRunner:
     def store(self):
         return self._store
 
+    @property
+    def history(self) -> HistoryStore:
+        return self._history
+
     # --- lifecycle -------------------------------------------------------
 
     def start(self, project_id: str, objective: str, session_id: str) -> WorkSession:
@@ -85,31 +121,54 @@ class SessionRunner:
         The session is persisted before any work starts, so a crash during the
         first run still leaves a resumable record rather than nothing at all.
         """
-        session = self._store.create(
-            WorkSession.create(
-                session_id=session_id,
-                project_id=project_id,
-                objective=objective,
-            )
+        new = WorkSession.create(
+            session_id=session_id, project_id=project_id, objective=objective
         )
-        return self.resume(session.session_id)
+        with self._lock(project_id, session_id):
+            self._store.create(new)
+            return self._run(session_id)
 
     def resume(self, session_id: str) -> WorkSession:
         """Load a persisted session, run one bounded pass, save, return it.
 
         Safe to call in a brand-new process: nothing is carried over from a
-        previous one. Project and task state are re-read through Master, and
-        the request is rebuilt from the session's own objective.
+        previous one. Project and task state are re-read through Master,
+        execution evidence is re-read from history, and the request is rebuilt
+        from the session's own objective.
+
+        Raises :class:`core.run_lock.ProjectBusyError`, changing nothing, while
+        another process holds the project.
         """
         session = self._store.load(session_id)
+        self._require_resumable(session)
+        with self._lock(session.project_id, session_id):
+            return self._run(session_id)
 
+    # --- one locked run --------------------------------------------------
+
+    def _lock(self, project_id: str, session_id: str) -> ProjectLock:
+        project_path = self._master.project_state(project_id).project_path
+        return ProjectLock(project_path, holder=f"session={session_id}")
+
+    @staticmethod
+    def _require_resumable(session: WorkSession) -> None:
         if not session.can_resume():
             raise ValueError(
-                f"session {session_id!r} is {session.status.value} and cannot be resumed"
+                f"session {session.session_id!r} is {session.status.value} "
+                "and cannot be resumed"
             )
 
-        # Only claim to be running once we are about to be. A session left as
-        # RUNNING by a crashed process is therefore never written here.
+    def _run(self, session_id: str) -> WorkSession:
+        """Run once. The caller holds the project lock."""
+        # Re-read under the lock: whatever was loaded before acquiring it may
+        # already be out of date.
+        session = self._store.load(session_id)
+        self._require_resumable(session)
+
+        if session.status is SessionStatus.RUNNING:
+            # We hold the lock, so the process that set RUNNING is gone.
+            session = self._recover(session)
+
         session = self._store.save(session.evolve(status=SessionStatus.RUNNING))
 
         loop = AutonomousLoop(
@@ -120,12 +179,81 @@ class SessionRunner:
             request=self._request or session.objective,
             max_steps=self._max_steps,
             max_retries=self._max_retries,
+            history=self._history,
             session_id=session.session_id,
             max_attempts_per_task=self._max_attempts_per_task,
         )
-        result = loop.run(session.project_id)
+        try:
+            result = loop.run(session.project_id)
+        except BaseException:
+            # The loop has already recorded run_error. Leave the session in an
+            # honest state, then let the failure reach the caller.
+            self._store.save(
+                session.evolve(
+                    status=SessionStatus.STOPPED,
+                    last_stop_reason=STOP_ERROR,
+                    steps_completed=session.steps_completed
+                    + self._steps_in_run(loop.run_id),
+                )
+            )
+            raise
 
         return self._store.save(self._apply_result(session, result))
+
+    # --- recovery --------------------------------------------------------
+
+    def _steps_in_run(self, run_id: Optional[str]) -> int:
+        if run_id is None:
+            return 0
+        return len(self._history.events(run_id=run_id, types=[EventType.DECISION]))
+
+    def _recover(self, session: WorkSession) -> WorkSession:
+        """Close out runs and attempts a dead process left open. No replay."""
+        events = self._history.events(session_id=session.session_id)
+        ended_runs = {e.run_id for e in events if e.type in _RUN_ENDS}
+        open_runs = [
+            e.run_id
+            for e in events
+            if e.type is EventType.RUN_STARTED and e.run_id not in ended_runs
+        ]
+        ended_attempts = {e.attempt_id for e in events if e.type in _ATTEMPT_ENDS}
+
+        steps = 0
+        for run_id in open_runs:
+            for event in events:
+                if (
+                    event.run_id == run_id
+                    and event.type is EventType.ATTEMPT_STARTED
+                    and event.attempt_id not in ended_attempts
+                ):
+                    self._history.append(
+                        type=EventType.ATTEMPT_INTERRUPTED,
+                        run_id=run_id,
+                        session_id=session.session_id,
+                        project_id=event.project_id,
+                        task_id=event.task_id,
+                        attempt_id=event.attempt_id,
+                        payload={
+                            "reason": "the process ended before the attempt's "
+                            "outcome was recorded"
+                        },
+                    )
+            self._history.append(
+                type=EventType.RUN_INTERRUPTED,
+                run_id=run_id,
+                session_id=session.session_id,
+                project_id=session.project_id,
+                payload={"reason": "the process ended before the run's end was recorded"},
+            )
+            steps += self._steps_in_run(run_id)
+
+        return self._store.save(
+            session.evolve(
+                status=SessionStatus.STOPPED,
+                last_stop_reason=STOP_INTERRUPTED,
+                steps_completed=session.steps_completed + steps,
+            )
+        )
 
     # --- translating a run into durable state ----------------------------
 

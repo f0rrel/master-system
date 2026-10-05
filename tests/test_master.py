@@ -527,6 +527,7 @@ def test_master_does_not_import_yaml_or_project_state():
         "sys",
         "pathlib",
         "core.project_manager",
+        "core.run_lock",
         "core.work_manager",
     }
 

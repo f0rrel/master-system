@@ -304,8 +304,11 @@ class WorkSession:
     def can_resume(self) -> bool:
         """Whether resuming this session is a meaningful thing to do.
 
-        A completed session has nothing left to continue, and a running one is
-        already running somewhere else, so neither is a resume candidate.
+        A completed session has nothing left to continue. A RUNNING session is
+        still a candidate: whether its process is alive is decided by the
+        project lock, not by this field, and
+        :class:`core.session_runner.SessionRunner` refuses while the lock is
+        held and recovers the session when it is not.
         """
         return self.status is not SessionStatus.COMPLETED
 

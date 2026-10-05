@@ -656,6 +656,7 @@ def test_master_stays_free_of_provider_imports():
         "sys",
         "pathlib",
         "core.project_manager",
+        "core.run_lock",
         "core.work_manager",
     }
 

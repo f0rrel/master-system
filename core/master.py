@@ -54,6 +54,12 @@ status values: repeating WorkManager's vocabulary here would create a second
 place to update when the vocabulary changes.
 
 Read commands cannot mutate. They call ProjectManager methods only.
+
+Commands that mutate take the project's :class:`core.run_lock.ProjectLock`
+for the duration of the write and refuse, changing nothing, while an
+autonomous run holds it. The ``Master`` class itself takes no lock: the
+locking belongs to whichever process is the writer, and an autonomous run
+already holds the lock around everything its Master does.
 """
 
 import argparse
@@ -64,6 +70,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.project_manager import ProjectManager, UnknownProjectError
+from core.run_lock import ProjectBusyError, ProjectLock
 from core.work_manager import WorkManager
 
 # Failures a caller is expected to be able to handle. These are the domain's
@@ -496,7 +503,7 @@ def build_parser():
         default="planned",
         help="Milestone status (default: planned).",
     )
-    create_milestone.set_defaults(handler=_command_create_milestone)
+    create_milestone.set_defaults(handler=_command_create_milestone, mutates=True)
 
     update_milestone = commands.add_parser(
         "update-milestone",
@@ -507,7 +514,7 @@ def build_parser():
     update_milestone.add_argument("milestone_id", help="Milestone id to change.")
     update_milestone.add_argument("--name", help="New milestone name.")
     update_milestone.add_argument("--status", help="New milestone status.")
-    update_milestone.set_defaults(handler=_command_update_milestone)
+    update_milestone.set_defaults(handler=_command_update_milestone, mutates=True)
 
     create_task = commands.add_parser(
         "create-task",
@@ -528,7 +535,7 @@ def build_parser():
         help="Task status (default: planned).",
     )
     create_task.add_argument("--assignee", help="Who the task is assigned to.")
-    create_task.set_defaults(handler=_command_create_task)
+    create_task.set_defaults(handler=_command_create_task, mutates=True)
 
     update_task = commands.add_parser(
         "update-task",
@@ -541,7 +548,7 @@ def build_parser():
     update_task.add_argument("--title", help="New task title.")
     update_task.add_argument("--status", help="New task status.")
     update_task.add_argument("--assignee", help="Assign the task to someone.")
-    update_task.set_defaults(handler=_command_update_task)
+    update_task.set_defaults(handler=_command_update_task, mutates=True)
 
     return parser
 
@@ -551,8 +558,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     try:
-        return args.handler(Master(args.root), args)
-    except EXPECTED_ERRORS as error:
+        master = Master(args.root)
+        if not getattr(args, "mutates", False):
+            return args.handler(master, args)
+        project_path = master.project_state(args.project_id).project_path
+        with ProjectLock(project_path, holder="core.master cli"):
+            return args.handler(master, args)
+    except (*EXPECTED_ERRORS, ProjectBusyError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
 

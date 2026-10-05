@@ -196,6 +196,11 @@ class AutonomousLoop:
     def history(self) -> HistoryStore:
         return self._history
 
+    @property
+    def run_id(self) -> Optional[str]:
+        """The id of the current or most recent run, once one has started."""
+        return self._evidence.run_id
+
     # --- read-only project inspection ---------------------------------
 
     def _task_records(self, project_id: str):

@@ -11,6 +11,7 @@ import yaml
 
 from core.master import Master, build_parser, main
 from core.project_state import ProjectState
+from core.run_lock import LOCK_FILENAME
 
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -61,10 +62,11 @@ def write_project(
 
 
 def snapshot(root):
+    """Every project file's bytes. The mutation lock file is not project data."""
     return {
         str(path.relative_to(root)): path.read_bytes()
         for path in sorted(root.rglob("*"))
-        if path.is_file()
+        if path.is_file() and path.name != LOCK_FILENAME
     }
 
 

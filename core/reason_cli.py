@@ -52,10 +52,12 @@ from core.deepseek_provider import DeepSeekProvider
 from core.provider import ProviderError
 from core.reasoning import ApprovalState, ReasoningInterface, ResultStatus
 from core.reasoning_engine import ReasoningEngine, ReasoningError
+from core.run_lock import ProjectBusyError, ProjectLock
 
 EXIT_OK = 0
 EXIT_REASONING_FAILED = 1
 EXIT_USAGE = 2
+EXIT_BUSY = 3
 
 
 def build_parser():
@@ -296,7 +298,16 @@ def main(argv=None, read_line=None, stdout=None, stderr=None):
     proposal = proposal.approve()
     assert proposal.state is ApprovalState.APPROVED
 
-    batch = proposal.execute(interface)
+    # The lock covers the writes only, not the time spent waiting for a
+    # human's answer, and refuses rather than racing an autonomous run.
+    try:
+        with ProjectLock(
+            master.project_state(project_id).project_path, holder="reason_cli"
+        ):
+            batch = proposal.execute(interface)
+    except ProjectBusyError as error:
+        print(f"error: {error}", file=stderr)
+        return EXIT_BUSY
     emit(render_results(batch))
 
     if batch.failed:
