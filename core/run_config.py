@@ -50,7 +50,7 @@ ntfy_server = "https://ntfy.sh"   # the topic is in ~/.config/master-system/ntfy
 [planner]                         # ms chat: the planner model
 provider = "deepseek"
 model = "deepseek-v4-flash"
-chat_usd = 0.10                   # cap per chat
+chat_usd = 0.30                   # cap per chat
 
 [github]                          # the GitHub App (docs/github-setup.md)
 app_id = ""                       # its private key: ~/.config/master-system/github-app.pem
@@ -149,7 +149,7 @@ class PlannerSettings:
     base_url: Optional[str] = None
     timeout_s: float = 300
     #: Priced spend allowed per planner chat.
-    chat_usd: float = 0.10
+    chat_usd: float = 0.30
 
 
 @dataclass(frozen=True)

@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 from core.daemon import OBJECTIVE, RunRequest, load_env_file
 
-__all__ = ["git", "openssl_sign_rs256", "subprocess_runner", "systemctl"]
+__all__ = ["capture", "git", "openssl_sign_rs256", "subprocess_runner", "systemctl"]
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -78,3 +78,13 @@ def openssl_sign_rs256(key_path: Path, data: bytes) -> bytes:
         raise RuntimeError("openssl could not sign with the GitHub App key "
                            f"({done.stderr.decode(errors='replace').strip()[-200:]})")
     return done.stdout
+
+
+def capture(argv, timeout=30) -> str:
+    """Output of a diagnostic command (ms doctor); never raises."""
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, errors="replace",
+                              timeout=timeout)
+        return (done.stdout + done.stderr).strip()
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return f"({argv[0]} unavailable: {error})"

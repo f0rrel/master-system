@@ -558,6 +558,7 @@ The approval prompt defaults to **no**. A `run_task` in a proposal is never exec
 
 ```bash
 ms status [--details] # headline, needs you, done since you last looked, coming up, spend, links (local time)
+ms doctor             # a paste-ready diagnostic block for any AI helper (no secrets)
 ms publish <project>  # push develop and the preview site now (the service does it after each run)
 ms report [session]   # a session's report (default: the latest)
 ms install            # put `ms` on PATH (~/.local/bin/ms)
@@ -852,8 +853,26 @@ Add a row whenever an architectural decision is made or reversed.
 | **H-D6:** `ms chat` (core/planner.py): a planner model (`[planner]`, default DeepSeek V4 Flash, cap per chat) drafts an epic of tasks with tests, asks the owner about unclear points, and can read the development branch's files (read-only, git). A draft is approved only after deterministic checks in a fresh worktree (tests are valid JS; each task's test commands fail on the current code, not because the test is broken; base checks pass). `approve` re-checks under the project lock, commits the tests to develop, writes the epic (milestone) and tasks all-or-nothing (`Master.add_planned_work`, human-only), and records `human_action` (actor `owner via planner`, draft hash) per task. Tasks gain a human-only `size` (small/medium/hard) | Acceptance edits stay human-only: only the owner's `approve` writes them | **Approved (2026-10-06)**; checks and flow taken without the owner |
 | Release (core/release.py): notes from history (tasks integrated into develop and not in main: what changed, how to check by hand, verification; spend since the last release); a PR develop -> main through the app. The owner's merge on GitHub is the release approval; the service then fetches main, checks that the merge commit's tree equals the merged head's tree, tags `v0.N`, creates a GitHub Release and republishes the site; a mismatch is reported and not tagged | `main` changes only by the owner's merge | **Approved (2026-10-06)**; tree check taken without the owner |
 | Worker tiers (core/worker_tiers.py): `[worker.profiles.*]` + `[worker] ladder`, cheapest first; a task starts at its `size`'s tier, moves up one tier after 2 failed semantic attempts (finished/timed out, not pass; errors and interruptions don't count), never down; the orchestrator chooses and records `worker_profile/tier/model` (+ `escalated_from`) on `attempt_started`; Master's context never names them; the report and `ms status` show attempts, passes and cost per tier; the service's per-task failure budget becomes 2 x ladder length (min 3). The default ladder is empty (no Ollama) | Spend more only where cheap models fail | **Approved (2026-10-06)**; the paid tiers need a spend-limited key in their own worker home (owner) |
+| `ms status` finishes merged releases (checks GitHub at most once a minute) | A release must not wait for the service to be busy (found: PR #1 merged, nothing polled while idle) | Requested by the owner (2026-10-06) |
+| `ms doctor` prints a diagnostic block with secrets redacted (master.env values, the ntfy topic, token/key patterns, secret-named config values) | Paste-ready help without leaking credentials | Requested by the owner (2026-10-06) |
+| `ms release` commits a CHANGELOG.md entry to the project's develop (under the project lock) before opening the PR | Releases document themselves | Requested by the owner (2026-10-06) |
+| Planner chat cap: $0.30 | $0.10 was too tight for a real epic | Requested by the owner (2026-10-06) |
 | History schema v4 adds `integration_refused`, `published`, `planner_turn`, `release` (migration with backup, as before) | One migration for all of Milestone 3 | Taken without the owner |
 | Merged Milestone 1 to main (2026-10-05) | Milestone 1 complete and reviewed; `main` fast-forwarded to `m1-contain-verify`, tagged `m1-contain-verify` | **Approved (2026-10-05)** |
+
+---
+
+### Documentation rule
+
+Every milestone, release or fix batch updates, in the same change:
+
+1. **README §2, Status snapshot**: the current milestone, test count, branches, next actions.
+2. **CHANGELOG.md**: what changed, in plain words. For a managed project, `ms release`
+   writes the project's own `CHANGELOG.md` from the task history.
+3. **§13, Decision log**: every decision, who took it, and why.
+4. **Troubleshooting notes**: anything that broke and how it was fixed. These live in §11
+   (known gaps) and the decision log; `ms doctor` output is the first thing to paste when
+   asking for help.
 
 ---
 

@@ -401,3 +401,57 @@ def test_notify_send_needs_a_message_and_setup(home):
     assert run_ms("notify", "send")[0] == 1
     code, out = run_ms("notify", "send", "hello")
     assert code == 1 and "ms notify setup" in out
+
+
+def test_redact_removes_secrets():
+    from core.ms import redact
+
+    text = ("api_key = \"abc123456\"\nDEEPSEEK_API_KEY=sk-0123456789abcdef0123\n"
+            "token ghs_AbCdEf123 here\nntfy topic ms-supersecret\nmodel = \"x\"\n"
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----")
+    out = redact(text, secrets=["ms-supersecret"])
+    for leaked in ("abc123456", "sk-0123", "ghs_AbCdEf123", "ms-supersecret", "MIIE"):
+        assert leaked not in out
+    assert 'model = "x"' in out
+
+
+def test_doctor_prints_sections_without_secrets(home, monkeypatch):
+    config_dir = home / "config" / "master-system"
+    config_dir.mkdir(parents=True)
+    (config_dir / "master.env").write_text("DEEPSEEK_API_KEY=sk-verysecretvalue123\n")
+    (config_dir / "ntfy-topic").write_text("ms-topicsecretvalue\n")
+    (config_dir / "config.toml").write_text("[master]\nmodel = \"deepseek-v4-flash\"\n")
+    code, out = run_ms("doctor")
+    assert code == 0 and out.startswith("```\n## Master System diagnostics")
+    for title in ("Versions", "Master System checkout", "Service", "Last 30 service log lines",
+                  "Last run report", "Config", "ms github check", "Disk space"):
+        assert f"### {title}" in out
+    assert "sk-verysecretvalue123" not in out and "ms-topicsecretvalue" not in out
+    assert "DEEPSEEK_API_KEY=<redacted>" in out
+
+
+def test_status_finishes_merged_releases_at_most_once_a_minute(tmp_path):
+    from core.ms import check_releases
+
+    calls = []
+
+    class Releaser:
+        def watch(self, project_id):
+            calls.append(project_id)
+            return ["Released v0.1: https://x/releases/v0.1"]
+
+    class Master:
+        def list_projects(self):
+            return ["ml"]
+
+    paths = SimpleNamespace(state_dir=tmp_path)
+    notifier = Notifier(topic=None)
+    lines = check_releases(None, Master(), None, paths, now=1000.0, releaser=Releaser(),
+                           notifier=notifier)
+    assert lines == ["Released v0.1: https://x/releases/v0.1"]
+    assert notifier.sent[-1]["title"] == "ml: release"
+    assert check_releases(None, Master(), None, paths, now=1030.0, releaser=Releaser(),
+                          notifier=notifier) == []
+    check_releases(None, Master(), None, paths, now=1061.0, releaser=Releaser(),
+                   notifier=notifier)
+    assert calls == ["ml", "ml"]

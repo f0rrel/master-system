@@ -153,3 +153,16 @@ def test_a_local_main_ahead_of_github_does_not_count_as_released(env):
     git(repo, "merge", "-q", "--ff-only", "develop")  # integrated locally, never pushed
     result = env["releaser"].prepare("ml")
     assert result["opened"] and result["tasks"] == ["ml-9", "ml-10"]
+
+
+def test_prepare_commits_a_changelog_entry_to_develop(env):
+    repo = env["repo"]
+    before = git(repo, "rev-parse", "develop")
+    env["releaser"].prepare("ml")
+    changelog = git(repo, "show", "develop:CHANGELOG.md")
+    assert changelog.startswith("# Changelog")
+    assert "## v0.1 (" in changelog
+    assert "- ml-9: First thing" in changelog and "- ml-10: Second thing" in changelog
+    assert git(repo, "rev-parse", "develop^") == before
+    env["releaser"].prepare("ml")  # updating the PR does not duplicate the entry
+    assert git(repo, "show", "develop:CHANGELOG.md").count("## v0.1 (") == 1

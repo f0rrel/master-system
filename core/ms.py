@@ -2,6 +2,7 @@
 
     ms status [--details]      a headline, what needs you, news, what's next, spend, links
     ms publish <project>       push develop and the preview site now
+    ms doctor                  a paste-ready diagnostic block for any AI helper (no secrets)
     ms report [session]        a session's report (default: the latest)
     ms chat <project> [--new]  talk to the planner: it drafts tasks with tests; `approve` queues them
     ms release <project>       release notes + a pull request develop -> main for you to merge
@@ -539,6 +540,8 @@ def _command_status(args, out):
         memory = json.loads((paths.state_dir / "daemon-state.json").read_text())
     except (OSError, ValueError):
         memory = {}
+    for line in check_releases(config, master, history, paths):
+        print(line, file=out)
     releaser = Releaser(master, history, lambda repo: None, askpass_dir=paths.state_dir)
     pending = None
     for project_id in master.list_projects():
@@ -552,6 +555,152 @@ def _command_status(args, out):
     print(text, file=out, end="")
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(datetime.now(timezone.utc).isoformat())
+    return 0
+
+
+def check_releases(config, master, history, paths, *, max_age_s: float = 60, now=None,
+                   releaser=None, notifier=None) -> list:
+    """Finish any release whose PR the owner merged (cheap; at most once a minute).
+
+    The service does this every cycle; `ms status` does it too, so a merge is
+    followed through even while the service is idle or paused.
+    """
+    import time
+
+    now = now if now is not None else time.time()
+    stamp = paths.state_dir / "release-check"
+    try:
+        if now - float(stamp.read_text().strip()) < max_age_s:
+            return []
+    except (OSError, ValueError):
+        pass
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(str(now))
+    if releaser is None:
+        from core.publish import Publisher
+        from core.release import Releaser
+
+        factory = lambda repo: github_app(config, repo)  # noqa: E731
+        releaser = Releaser(master, history, factory, askpass_dir=paths.state_dir,
+                            prices=config.prices,
+                            publisher=Publisher(master, history, factory, paths.state_dir))
+    if notifier is None:
+        notifier = Notifier.from_file(config.daemon.ntfy_server)
+    lines = []
+    for project_id in master.list_projects():
+        try:
+            done = releaser.watch(project_id)
+        except Exception as error:  # GitHub unreachable: say so, keep the status
+            done = [f"(could not check the release on GitHub: {error})"]
+        if done and not done[0].startswith("(could not"):
+            notifier.send(f"{project_id}: release", "\n".join(done), tags="rocket")
+        lines += done
+    return lines
+
+
+SECRET_PATTERNS = [r"ghs_[A-Za-z0-9]+", r"gh[pousr]_[A-Za-z0-9]{20,}", r"sk-[A-Za-z0-9-]{16,}",
+                   r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"]
+SECRET_KEYS = ("key", "token", "secret", "password", "topic", "pass")
+
+
+def redact(text: str, secrets=()) -> str:
+    """Remove known secret values, secret-looking strings and secret-named config values."""
+    import re
+
+    for value in secrets:
+        if value and len(value) >= 6:
+            text = text.replace(value, "<redacted>")
+    for pattern in SECRET_PATTERNS:
+        text = re.sub(pattern, "<redacted>", text)
+    lines = []
+    for line in text.splitlines():
+        name = line.split("=", 1)[0].strip().lower() if "=" in line else ""
+        if name and any(word in name for word in SECRET_KEYS) and not name.startswith("#"):
+            line = line.split("=", 1)[0] + "= <redacted>"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def doctor_report(args) -> str:
+    """A paste-ready diagnostic block for any AI helper. Never contains secrets."""
+    import io
+    import platform
+    import shutil
+
+    from core.daemon import load_env_file
+    from core.host import capture
+
+    paths = _paths()
+    config_path = Path(args.config).expanduser() if args.config else default_config_path()
+    secrets = list(load_env_file(config_path.parent / "master.env").values())
+    try:
+        secrets.append(default_topic_path().read_text().strip())
+    except OSError:
+        pass
+    sections = []
+
+    def section(title, body):
+        sections.append(f"### {title}\n{str(body).rstrip() or '(empty)'}\n")
+
+    from core.worker_env import find_node_bin
+
+    node = find_node_bin(22)
+    section("Versions", "\n".join([
+        f"ms: {capture(['git', '-C', str(REPO), 'describe', '--always', '--dirty', '--tags'])}",
+        f"git: {capture(['git', '--version'])}",
+        f"python: {platform.python_version()} ({sys.executable})",
+        f"node (workers): {capture([str(Path(node) / 'node'), '--version']) if node else 'none >= 22'}",
+        f"system: {platform.platform()}"]))
+    section("Master System checkout", "\n".join([
+        f"path: {REPO}",
+        f"branch: {capture(['git', '-C', str(REPO), 'branch', '--show-current'])}",
+        f"commit: {capture(['git', '-C', str(REPO), 'log', '-1', '--format=%h %s (%cr)'])}",
+        "changes: " + (capture(['git', '-C', str(REPO), 'status', '--short']) or "none")]))
+    pid_file = paths.state_dir / "run.pid"
+    section("Service", "\n".join([
+        f"systemd: {capture(['systemctl', '--user', 'is-active', UNIT_NAME])}, "
+        f"{capture(['systemctl', '--user', 'is-enabled', UNIT_NAME])}",
+        f"paused: {'yes' if (paths.state_dir / 'paused').exists() else 'no'}",
+        f"run in progress: {'pid ' + pid_file.read_text().strip() if pid_file.exists() else 'no'}"]))
+    section("Last 30 service log lines",
+            capture(["journalctl", "--user", "-u", UNIT_NAME, "-n", "30", "--no-pager",
+                     "-o", "short-iso"]))
+    report = io.StringIO()
+    try:
+        _command_report(argparse.Namespace(config=args.config, session=None), report)
+    except Exception as error:
+        report.write(f"(no report: {error})")
+    section("Last run report", report.getvalue())
+    try:
+        config_text = config_path.read_text()
+    except OSError:
+        config_text = "(no config file; defaults)"
+    env_names = sorted(load_env_file(config_path.parent / "master.env"))
+    section(f"Config {config_path}", config_text + "\n# master.env: "
+            + (", ".join(f"{n}=<redacted>" for n in env_names) or "missing"))
+    check = io.StringIO()
+    try:
+        _command_github(argparse.Namespace(config=args.config, action="check", app_id=None),
+                        check)
+    except Exception as error:
+        check.write(f"(github check failed: {error})")
+    section("ms github check", check.getvalue())
+    disk = []
+    for label, where in (("home", Path.home()), ("state", paths.state_dir),
+                         ("worktrees", paths.worktrees_root)):
+        try:
+            usage = shutil.disk_usage(where if where.exists() else Path.home())
+            disk.append(f"{label} ({where}): {usage.free / 1e9:.1f} GB free of "
+                        f"{usage.total / 1e9:.1f} GB")
+        except OSError as error:
+            disk.append(f"{label}: {error}")
+    section("Disk space", "\n".join(disk))
+    text = "## Master System diagnostics (ms doctor)\n\n" + "\n".join(sections)
+    return redact(text, secrets)
+
+
+def _command_doctor(args, out):
+    print("```\n" + doctor_report(args).rstrip() + "\n```", file=out)
     return 0
 
 
@@ -861,6 +1010,8 @@ def build_parser():
     status = commands.add_parser("status", help="Everything, in plain words.")
     status.add_argument("--details", action="store_true", help="The technical view.")
     status.set_defaults(handler=_command_status)
+    commands.add_parser("doctor", help="A paste-ready diagnostic block (no secrets).") \
+        .set_defaults(handler=_command_doctor)
     publish = commands.add_parser("publish", help="Push develop and the preview site now.")
     publish.add_argument("project")
     publish.set_defaults(handler=_command_publish)

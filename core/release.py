@@ -190,6 +190,7 @@ class Releaser:
             return {"opened": False, "notes": notes["markdown"],
                     "message": "The GitHub App is not set up yet (docs/github-setup.md); "
                     "here are the notes."}
+        self.add_changelog(project_id, repo, develop, version, notes["tasks"])
         self._push(app, repo, [develop], self._askpass_dir)
         title = f"Release {version}: " + ", ".join(t["task_id"] for t in notes["tasks"])[:200]
         if pending:
@@ -206,6 +207,57 @@ class Releaser:
                 "tasks": [t["task_id"] for t in notes["tasks"]],
                 "message": f"Release {version} is ready for you: review and merge "
                            f"{pr.get('html_url')} on GitHub."}
+
+    def add_changelog(self, project_id, repo, develop, version, tasks, today=None) -> str:
+        """Commit a CHANGELOG.md entry for this release to develop; returns the commit.
+
+        Generated from the task history (the same tasks as the notes). Done
+        under the project lock, so it never races a run's integration; a
+        second ``prepare`` for the same version replaces its entry.
+        """
+        import tempfile
+        from datetime import date
+
+        from core.run_lock import ProjectLock
+        from core.workspace import branch_tip, fast_forward
+
+        git = self._git
+        entry = [f"## {version} ({(today or date.today()).isoformat()})", ""]
+        for t in tasks:
+            entry.append(f"- {t['task_id']}: {t['title']}")
+        entry.append("")
+        state = self._master.project_state(project_id)
+        with ProjectLock(state.project_path, holder=f"release changelog {version}"):
+            tip = branch_tip(repo, develop)
+            with tempfile.TemporaryDirectory(prefix="ms-changelog-") as tmp:
+                work = Path(tmp) / "wt"
+                git(["worktree", "add", "-q", "--detach", str(work), tip], repo)
+                try:
+                    path = work / "CHANGELOG.md"
+                    old = path.read_text() if path.exists() else (
+                        "# Changelog\n\nReleases of this project, newest first. Written by "
+                        "the Master System from its task history.\n\n")
+                    old = _drop_section(old, version)
+                    head, sep, rest = old.partition("\n## ")
+                    text = (head.rstrip("\n") + "\n\n" + "\n".join(entry)
+                            + ("\n## " + rest if sep else ""))
+                    path.write_text(text)
+                    git(["add", "CHANGELOG.md"], work)
+                    try:
+                        git(["diff", "--cached", "--quiet"], work)
+                        return tip  # unchanged
+                    except RuntimeError:
+                        pass
+                    git(["commit", "-q", "-m", f"Changelog for {version}"], work,
+                        extra_env={"GIT_AUTHOR_NAME": "Master System",
+                                   "GIT_AUTHOR_EMAIL": "master-system@localhost",
+                                   "GIT_COMMITTER_NAME": "Master System",
+                                   "GIT_COMMITTER_EMAIL": "master-system@localhost"})
+                    commit = git(["rev-parse", "HEAD"], work)
+                finally:
+                    git(["worktree", "remove", "--force", str(work)], repo)
+            fast_forward(repo, develop, tip, commit)
+            return commit
 
     def watch(self, project_id) -> list:
         """After the owner merges the release PR: tag, GitHub Release, republish."""
@@ -258,3 +310,14 @@ class Releaser:
         old = branch_tip(repo, release)
         if old != new and is_ancestor(repo, old, new):
             fast_forward(repo, release, old, new)
+
+
+def _drop_section(text: str, version: str) -> str:
+    """CHANGELOG text without the section for ``version`` (if any)."""
+    lines, out, skipping = text.splitlines(keepends=True), [], False
+    for line in lines:
+        if line.startswith("## "):
+            skipping = line.startswith(f"## {version} ")
+        if not skipping:
+            out.append(line)
+    return "".join(out)
