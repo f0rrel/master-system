@@ -1,312 +1,273 @@
-# Milestone 3 plan: Review through GitHub
+# Milestone 3 plan: Hands-off
 
 | | |
 | --- | --- |
-| Status | **Waiting for owner approval** (revised 2026-10-05 with G1–G3 decided and worker tiers added, §5b). No Milestone 3 code before approval. |
-| Branch | `m3-github-review` (from `m2-run-for-real` once Milestone 2 is closed and merged) |
-| Closes | H2 (policy by transition), H3 (approvals round-trip, via PR review), H4 (attempt budget), N2 (dependencies count only when integrated), P7 (reopen invalidates a pass), L2 (stuck detector) |
-| Target | Match Legends (`f0rrel/Match_Legends_mobile_game`) |
+| Status | **Waiting for owner approval.** No Milestone 3 code before approval. |
+| Replaces | `m3-github-review.md` (2026-10-05). Its decisions still hold where they apply: G1 GitHub App, G2 merge commits for `main`, G3 polling. GitHub Issues as task input and a Projects board are deferred. |
+| Branch | `m3-hands-off`, worked on in a separate worktree (`~/AI/ms-m3`) while runs use the main checkout |
+| Target | Match Legends (public repository, so GitHub Pages is free) |
 
-**Goal.** The owner works only in GitHub:
-- approve an Issue, and it becomes a task;
-- review a Pull Request, and that is the decision to integrate.
+**Goal for this week.** The owner's whole job becomes:
+1. **talk to a planner** about what they want;
+2. **play-test `develop` from a link**, on a PC or a phone;
+3. **approve releases**.
 
-The system does everything in between and records it in history.
+No terminal chores and no commits by the owner. The six parts below are in priority
+order, and each one is usable on its own.
 
----
-
-## 0. Owner decisions (2026-10-05)
-
-- **G1 = A:** a GitHub App, installed only on Match Legends. The setup is guided step by step when we get there (commit 11).
-- **G2 = A:** merge commits are accepted. The verified commit is a parent of the merge commit, and the file contents (the tree) are identical. This revises D1 to "integration lands exactly the verified tree, with the verified commit as a parent"; recorded in README §13 when implemented.
-- **G3:** polling, on `github sync` and at the start of every run.
-- **G4:** decided after tonight's run (ml-6, ml-7, ml-8).
-- **Added:** worker tiers with escalation (§5b).
-
-## 0b. Decisions as originally proposed
-
-| # | Question | Options | Recommendation |
-| --- | --- | --- | --- |
-| **G1** | **Which GitHub identity does the system act as?** If the system uses *your* token, the PRs are authored by you, and GitHub does not let an author approve their own PR. "Your approval is the integration approval" then cannot work with branch protection. | **A. A GitHub App**, installed on Match Legends only. Its installation tokens are limited to that one repo and expire after an hour; PRs are authored by the app; you approve them. It needs a private key, and JWTs signed with the `openssl` CLI (no new Python dependency). **B. A machine user**, `f0rrel-bot`, collaborator on Match Legends only, with a classic PAT (`repo` scope). Simpler, but the token reaches every repo that user can see, which is only Match Legends as long as nobody adds it elsewhere. | **A.** It is the only option where the token itself is limited to one repo and is short-lived. |
-| **G2** | **How integration lands.** D1 says the base moves *exactly* to the verified SHA, but GitHub's merge API creates a merge commit, and branch protection forbids pushing `main` directly. | **A. Merge commit.** Require "branch up to date before merging", so the merge commit's tree is byte-identical to the verified commit's tree and the verified commit is its second parent. The system checks the tree equality before and after. **B. Keep fast-forward.** Allow only the app to bypass protection and update the ref. | **A**, recording `merge_sha`, `verified_sha` and the tree hash. D1 becomes "lands exactly the verified *tree*, with the verified commit as a parent", which needs your approval because it changes an approved decision. |
-| **G3** | How the system notices GitHub changes | Polling (`run_cli github sync`, also run at the start of every run); webhooks (need a public endpoint) | **Polling.** No server, and it is enough for one person. |
-| **G4** | The harder task for the paid-worker test (§5) | The ml-7 debug panel if the free model fails it tonight; or a new Issue, for example "Battle Arena: three AI difficulty levels" | Decide after tonight's run. |
+**Safety rules that stay:**
+- one worktree per attempt;
+- independent verification;
+- acceptance and specs edited only by humans, or through the planner flow the owner approves;
+- policy by transition (H2) for everything Master does on its own;
+- budgets (H4 plus daily caps);
+- no secrets in worker environments;
+- `main` changes only through a release the owner approves.
 
 ---
 
-## 1. Issues become tasks
+## 0. Decisions needed from the owner
 
-- **Issue template** (`.github/ISSUE_TEMPLATE/task.md` in Match Legends) with headed sections:
-  - `Description`;
-  - `Acceptance commands` (a list);
-  - `Protected paths` (a list);
-  - `How to check by hand`.
-- **Approval** means a label **`master:approved` added by an allowed login** (config: `[github] approvers = ["f0rrel"]`). The system reads the issue's label events and accepts the label only from an approver.
-- **`run_cli github sync`:**
-  - Each approved issue becomes or updates a task, through `human_edits`, so every change is a `human_action` with `actor = "github:<login>"` and the issue number.
-  - Task id: `gh-<issue number>`.
-  - Fields: description, acceptance and `manual_check` from the template sections; the title from the issue title.
-  - The **issue body is human input, so it is untrusted text** for prompts. It is quoted as data, never used as instructions to the control plane, and size-capped (the 4,000-character field limit).
-- **Editing an approved issue changes the spec** (`spec_hash`). sync then **clears the approval:**
-  - the system removes the label and comments "edited after approval, please re-approve";
-  - the task is `blocked` until it is approved again.
-
-  Nobody can change a task after you approved it without you seeing it.
-- **Closing an issue** makes the task `cancelled`. This is human-initiated, so policy allows it.
-- **Tasks created by Master** (`create_task`) are not runnable until a human approves them: policy holds them for approval (§3). In practice, tasks come from Issues.
-
-## 2. Each verified attempt becomes a Pull Request
-
-After an attempt is verified `pass`, the system:
-1. Pushes the attempt branch `attempt/<attempt_id>` to GitHub.
-   - It uses the app token, through a `GIT_ASKPASS` helper that reads it from the environment.
-   - The token never appears on a command line, in history or in logs, and never reaches a worker (the `worker_env` allowlist already blocks it).
-   - The dedicated clone's push URL stays disabled, so the system pushes with an explicit URL.
-2. Opens a PR into `main`. The title is `<task id>: <task title>`.
-3. Writes the PR body from history only:
-   - `Closes #<issue>`;
-   - **What changed**: files and diff stats, plus the worker's summary *labelled as the worker's claim*;
-   - **How to check by hand**: `manual_check`;
-   - **Test results**: every acceptance command with its exit code, the verdict, and the protected-path findings;
-   - **Cost**: Master and worker tokens and USD for this task;
-   - attempt id, base and result SHAs, spec hash, and the log hashes.
-4. Records a `pull_request_opened` event (PR number, head SHA).
-
-**One open PR per task.** A later passing attempt replaces it: the old PR is closed with a comment, and a new one opened.
-
-## 3. Your PR approval is the integration approval (H3)
-
-- `github sync` reads PR reviews. Integration happens only if **all** of these hold:
-  - an `APPROVED` review by an approver;
-  - the PR's head equals the verified SHA;
-  - the task's `spec_hash` still matches;
-  - no newer attempt exists;
-  - the base is an ancestor of the head.
-- **If the base moved:** the system does `--rebase`, re-verifies, and force-pushes the attempt branch. The new head then needs a **new approval** (PR review "dismiss stale approvals").
-- **Merge:** per G2. The system records an `integration` event with `actor = "github:<approver>"`, the PR number and review id, plus `verified_sha`, `merge_sha` and `tree`.
-- **A merge you do yourself in the GitHub UI** is detected and recorded the same way. It is still checked against the verified tree; a mismatch is flagged in the report.
-- **"Changes requested"** sets the task to `blocked` and records the review comment. The comment is human text, and Master sees it **quoted as data**, as a reason for a new attempt. Your review comment can therefore steer the next attempt without going through the spec.
-- **Approvals for gated operations** (policy, §4) use the same channel:
-  - the system opens an Issue "Approval needed: <operation>" whose body includes the operation's hash;
-  - your `master:approved` label grants it, closing it denies it;
-  - the system records `approval_requested`, `approval_granted` and `approval_denied`, bound to the operation hash and the task's state revision;
-  - `resume` applies a granted operation **without a model call**;
-  - a stale approval (the state changed since) is refused.
-
-## 4. Policy by transition (H2), attempt budget (H4), and the rest
-
-**Policy by transition.** `requires_approval(operation, current_state)` decides from the transition and the fields, not only the operation name.
-
-| Change | Autonomous? |
-| --- | --- |
-| task `planned → in_progress`, `in_progress → blocked` | yes |
-| task `in_progress → completed` | yes, if the completion gate passes (unchanged) |
-| reopen (`completed → *`), cancel (`* → cancelled`), `blocked → planned/in_progress` | human |
-| title edits; `create_task` | human |
-| milestone `→ completed` | human |
-| `run_task` | yes |
-| `integrate_attempt` | human (unchanged) |
-
-**Reopen invalidates a pass (P7).** A reopen is a human approval event, and the completion gate requires the latest attempt to start *after* the last reopen.
-
-**Attempt budget (H4).**
-- The budget is counted **per task since the last human action on it**: an approval, a spec edit, a review, or a reopen. A new session no longer resets it.
-- **Failures are classified.** Infrastructure failures do not count against the budget but are capped separately (3 in a row means the run stops). Infrastructure failures are:
-  - `git worktree add` failed;
-  - the worker binary is missing;
-  - the worker process exited before writing anything, with transport errors in its log.
-- **Per-task limits** on worker wall-clock time and cost (claimed tokens priced from the config). Hitting either holds the task for a human.
-
-**Dependencies (N2).** A dependency counts as satisfied only when it is **integrated**, not merely completed.
-
-**Stuck detector (L2).** The run stops with `stuck` if any of these happen:
-- the same decision (operation and arguments) three times in a row with no state change;
-- a ping-pong between two states;
-- three verdicts in a row with the same findings.
-
-Master is told why.
-
-## 5. Paid worker test (one harder task)
-
-1. Create a **spend-limited DeepSeek key** for the worker only (a separate key with a small balance cap), and log it in only in the worker home:
-   `HOME=~/.local/share/master-system-worker opencode auth login`
-2. Set `[worker] model = "deepseek/deepseek-v4-flash"` for one run, with the task chosen in G4.
-3. Run the same task with the free default model and the paid model, in separate sessions.
-4. Compare from the reports alone: attempts until a pass, wall-clock time, worker tokens and cost (reported vs priced), and review outcome.
-5. Record the result and the choice of default worker in the decision log.
-
-Exit: one run whose report shows the paid worker's cost, measured against the `[prices]` table.
+| # | Question | Recommendation |
+| --- | --- | --- |
+| **H-D1** | **Auto-integration into `develop`.** This changes approved decisions: integration was human-only (P4/D1, M1), and becomes a ROUTINE system action for `develop` only. | Approve. `main` stays human-only; integration into `develop` still lands exactly the verified commit (fast-forward to the re-verified SHA), so D1 holds for `develop`. |
+| **H-D2** | **When a task counts as done.** With auto-integration, a task can wait until it is *integrated*, not just verified. | `completed` = **integrated into `develop`**. This also closes N2: a dependency is satisfied only when its code is in `develop`. |
+| **H-D3** | **Rebase conflict.** | The system retries the task once from the new `develop`. That retry counts toward the attempt budget but not toward tier escalation; a second conflict waits for the owner. |
+| **H-D4** | **Preview hosting.** One Pages site, two paths: `/` = the released game (`main`), `/develop/` = the preview. Published by pushing a `gh-pages` branch. | Approve. Stable URLs: `https://f0rrel.github.io/Match_Legends_mobile_game/` and `.../develop/`. |
+| **H-D5** | **Start "with my PC".** A systemd user service starts when you log in. Starting *before* login needs `loginctl enable-linger`, which may ask for your password once. | Start at login (no admin step). Lingering is optional, a one-line command if you want it. |
+| **H-D6** | **Planner tests.** The planner (a model) writes the acceptance tests, which define "done". | The tests are shown to you in the chat and must pass the automatic "fails on base for the right reason" check. Nothing is queued without your "approve", which is recorded as `human_action` with `actor = owner via planner`. The tests are then committed to `develop` and protected as usual. |
 
 ---
 
-## 5b. Worker tiers with escalation (owner addition)
+## 1. `ms`: one command on your PATH — about 0.5 day
 
-**Profiles in config.** Each profile is an OpenCode model plus the worker home that holds
-its credential:
+- **Installed by the system:** `~/.local/bin/ms`, a two-line wrapper that runs `uv run python -m core.ms` in the Master System repo. There is no shell configuration to edit (`~/.local/bin` is already on PATH).
+- **`ms status`** prints plain, readable text for every project:
+  - running, idle or paused, and what is running right now;
+  - tasks by state (waiting / running / blocked / done in `develop` / released);
+  - **"Waiting for you"**: blocked tasks with their reason, planner drafts to approve, and "release ready (N tasks in develop since v0.3)";
+  - **today's spend**: Master + planner + worker (priced from `[prices]`), against the daily cap;
+  - the `develop` preview URL and the live URL.
+- **`ms report [session]`**: the existing report. With no argument, it shows the latest session.
+- **`ms stop`**: stop the current run cleanly (it is recorded as stopped by the owner).
+- **Later parts add:** `ms pause` / `ms resume` (part 3), `ms chat` (part 4), `ms release` (part 5).
 
-```toml
-[worker.profiles.tier0]      # the OpenCode free default model, no key
-model = ""                   # empty: the worker home's default
-home = "~/.local/share/master-system-worker"
+**Built on:** the existing `run_cli` and report code. `run_cli` stays as the lower-level tool.
 
-[worker.profiles.tier1]      # DeepSeek V4 Flash through OpenCode
-model = "deepseek/deepseek-v4-flash"
-home = "~/.local/share/master-system-worker-paid"   # spend-limited key only here
+**Tests:** `ms status` from a fake history and a fake project tree (golden text); `ms stop`
+against a running fake session.
 
-[worker.profiles.tier2]      # DeepSeek V4 Pro through OpenCode
-model = "deepseek/deepseek-v4-pro"
-home = "~/.local/share/master-system-worker-paid"
+## 2. Branch model, auto-integration and the preview link — about 2 days
 
-[worker]
-ladder = ["tier0", "tier1", "tier2"]
-```
+**Branches in Match Legends:**
+- **`main`**: the released game. Protected: only a merged release PR changes it.
+- **`develop`**: created once from the current `main` plus `tasks-batch-2`. The system owns
+  it. The dedicated clone's `base_branch` becomes `develop`.
+- **`attempt/<id>`**: one per attempt. These are pushed only when needed for debugging;
+  local by default.
+- **`gh-pages`**: the published site.
 
-- **The default ladder is only these three.** The Ollama tool loop (M6) stays out of it:
-  it can be configured as a profile by hand, but it is never on the default ladder.
-- **Each paid tier has a price row** in `[prices]`, and a per-task cost limit (H4) applies
-  across tiers.
+**Auto-integration (H-D1, H-D2, H-D3).** When an attempt is verified `pass` and its `spec_hash`
+matches the current spec, the system integrates it into `develop`:
+- **Fast-forward** if `develop` hasn't moved.
+- **Otherwise rebase**: cherry-pick onto `develop`, re-run the acceptance on the new commit
+  (a new `verification` event bound to that SHA), and fast-forward `develop` to exactly that SHA.
+- **On conflict or failed re-verification:** the task is retried from the new `develop`
+  (once; then it waits for you).
+- **Then** push `develop`, mark the task `completed`, and record an `integration` event with
+  `actor = "system"`, `target = "develop"`.
+- **Policy:** `integrate_to_develop` is a ROUTINE system step, not a Master operation. Master
+  still cannot request anything that touches `main`; `integrate_attempt` into `main` stays
+  CRITICAL.
 
-**Task size sets the starting tier.** Tasks get an optional, human-only `size`: `small`,
-`medium` or `hard`.
-- It works like `description`: not in `SPECS`, set through `run_cli task size` or an issue
-  label (`size:small`, `size:medium`, `size:hard`), and recorded as `human_action`.
-- It is not part of `spec_hash`.
-- `small` → tier0, `medium` → tier1, `hard` → tier2. No size means tier0.
+**Preview publishing.** After each integration, the system builds the site:
+- `www/` of `main` goes at `/`, and `www/` of `develop` at `/develop/`. It is plain HTML/JS,
+  so there is no build step.
+- It is pushed to `gh-pages` with the app token.
+- A `pages_published` event records the URL and the SHAs.
+- Pages updates within about a minute. The URL never changes.
 
-**Escalation is deterministic and never goes down.**
-- The orchestrator picks the profile for each attempt from history.
-- It starts at the task's starting tier. After **2 failed semantic attempts on a tier** it
-  moves the task up one tier.
-  - A failed semantic attempt is a finished or timed-out attempt whose verdict is not `pass`.
-  - Infrastructure failures (H4 classification) and interrupted attempts don't count toward
-    escalation.
-- It never moves down within a task, even across sessions or after a human action. A human
-  can change the task's `size`, which raises the floor; the current tier is never lowered.
-- At the top tier the H4 budget decides: the task waits for a human.
-- The ladder interacts with the attempt budget (H4): the budget counts all semantic attempts
-  across tiers since the last human action. With 2 attempts per tier and 3 tiers, its
-  default becomes 6.
+**GitHub App (G1).** Installed only on Match Legends, with the minimum permissions:
+- Contents read/write: push `develop`, `gh-pages`, and tags at release;
+- Pull requests read/write: the release PR;
+- Metadata read.
 
-**Master never names a model.**
-- `run_task` stays `(project_id, task_id)`. The tier is chosen by the orchestrator, not by
-  Master, and it is not in the operation vocabulary.
-- Master's context shows only neutral facts: the attempt count and the outcome per attempt.
-  It does not see tier names or models.
+It is **never able to change `main`**, enforced by a branch ruleset:
+- `main`: require a pull request; no bypass for the app; block force pushes and deletion;
+- `develop`: block force pushes; only the app may push.
 
-**Every attempt records its profile.** `attempt_started` gets `worker_profile`, `worker_tier`
-and `worker_model` (opaque provenance), plus `escalated_from` when the tier changed.
+Tokens:
+- The app's private key lives in `~/.config/master-system/github-app.pem` (mode 600).
+- Tokens are created per use, through a JWT signed with the `openssl` CLI (no new dependency),
+  and last 1 hour.
+- They never reach history, logs, config files or workers. A test scans for leaks.
 
-**The report adds a table per tier:** attempts, passes, success rate, wall-clock time, worker
-tokens and cost, and the cost per passed task.
+**Step-by-step guide for you (written for someone new to GitHub),** delivered as
+`docs/github-setup.md` and walked through together:
+1. Create the app: Settings → Developer settings → GitHub Apps → New. The plan lists every
+   field to fill in, and the permissions above.
+2. Generate the private key; save it to the path above with one command.
+3. Install the app on **only** Match Legends.
+4. Create the two rulesets (Settings → Rules), with screenshots described field by field.
+5. Turn on Pages: Settings → Pages → source `gh-pages`, root.
+6. Run `ms github check`, which verifies all of the above and reports what is missing in
+   plain words.
 
-**Files:**
-- `core/run_config.py`: profiles and ladder;
-- `core/worker_tiers.py` (new): tier selection from history, a pure function;
-- `core/task_orchestrator.py`: one backend per profile, chosen per attempt;
-- `core/run_cli.py`: build the profile backends and the `task size` command;
-- `core/project_state.py`, `core/work_manager.py`, `core/master.py`: the `size` field
-  (human-only, validated);
-- `core/report.py`: the per-tier table;
-- `core/history.py`: the payload fields only, no new event type.
+**Tests:** fake-git scenarios for fast-forward, rebase with re-verification, conflict → retry,
+and failed re-verification → retry; Pages layout from two branches; a fake GitHub API for
+token minting, push and rulesets; a leak scan.
 
-**Tests:**
-- the starting tier follows `size`;
-- 2 semantic failures move the task up one tier; infrastructure failures and interruptions
-  don't;
-- the tier never decreases, including across sessions and after a size change;
-- at the top tier the budget hands the task to a human;
-- Master's prompt contains no profile or model name;
-- every attempt records its profile and model;
-- the report's per-tier figures come from history only;
-- Ollama is not on the default ladder.
+## 3. Background service and notifications — about 1 day
 
-**The paid-worker test (§5) becomes the first real escalation:**
-- the task chosen in G4 runs with `size: medium` (tier1 from the start);
-- one `small` task is allowed to escalate naturally.
+**`ms daemon`**, run by a systemd **user** service, `~/.config/systemd/user/master-system.service`,
+installed by `ms service install` (H-D5). Every few minutes, unless paused, it:
+1. syncs from GitHub (G3);
+2. finds projects with approved, ready tasks;
+3. starts or resumes a session (one project at a time, one run at a time; the existing lock
+   still applies);
+4. integrates and publishes (part 2);
+5. sleeps.
 
-## 6. File-by-file changes
+It needs no session commands.
 
-| File | Change |
-| --- | --- |
-| `core/github.py` (new) | GitHub REST over `urllib` (issues, labels, label events, PRs, reviews, merges, refs); app JWTs via the `openssl` CLI (G1 = A); `GIT_ASKPASS` helper. No new dependency. |
-| `core/github_sync.py` (new) | issue → task sync; PR open/replace; review → integrate / block; approval issues |
-| `core/attempts.py` | integration by merge commit with tree equality (G2 = A); records the PR, review and actors |
-| `core/reasoning.py` | `requires_approval(operation, state)`; the transition table |
-| `core/evidence.py` | budget since the last human action; failure classification; reopen-aware gate; dependencies satisfied only when integrated |
-| `core/work_manager.py` | `calculate_readiness` takes an "integrated" predicate (justified: N2 is a readiness rule) |
-| `core/autonomous_loop.py` | stuck detector; applying granted approvals without a model call; infrastructure-failure cap |
-| `core/history.py`, `core/sqlite_history.py` | events `pull_request_opened`, `review_observed`, `approval_requested/granted/denied`, `issue_synced`; schema v4 with backup |
-| `core/run_cli.py`, `core/run_config.py` | `github sync`, `github status`; `[github]` config (repo, app id, key path, approvers); the token is never in config |
-| `core/report.py` | PR, review and approver per completion; budget and infrastructure failures |
-| Match Legends | issue template; branch protection (below), set up by the owner |
+**Caps:**
+- **daily cost cap** (`[budget] daily_usd`): Master + planner + priced worker usage today,
+  from history; when reached, the daemon pauses until tomorrow and tells you;
+- **per-run cap** (the existing `--max-cost-usd`);
+- **per-task caps** (H4, part 6);
+- **a run-time cap.**
 
-**Branch protection on Match Legends `main`** (set up by you, documented step by step):
-- require a pull request with 1 approval;
-- dismiss stale approvals;
-- require the branch to be up to date;
-- block force pushes and deletions;
-- do not allow bypassing;
-- optionally, a GitHub Actions job that re-runs `npm test`, as an independent check.
+**`ms pause` / `ms resume`** write a pause flag the daemon checks before starting anything. A
+running attempt finishes; nothing new starts.
 
-## 7. Acceptance (README §12 Milestone 3, revised)
+**Phone notifications via ntfy:**
+- An HTTP POST to `https://ntfy.sh/<topic>` with `urllib`. The topic is a long random string
+  generated at install; you subscribe once in the ntfy phone app (from a QR code shown by
+  `ms notify setup`).
+- **Events:** batch done, task blocked, needs you, release ready, daily cap reached, the
+  service stopped unexpectedly.
+- Each message has a 2–4 line summary and the preview link.
+- Messages carry no secrets and no code. A topic URL is effectively a password; self-hosting
+  ntfy is an option later.
 
-- [ ] An Issue approved by the owner becomes a task. Editing it after approval clears the approval.
-- [ ] A verified attempt opens a PR whose body shows what changed, how to check by hand, test results and cost.
-- [ ] Integration happens only after the owner's PR approval. The integrated tree equals the verified tree, and history records who approved it.
-- [ ] An operation approved in GitHub resumes and applies exactly that operation, with no model call. A stale approval is refused.
-- [ ] Reopen, cancel, title edits and milestone completion wait for a human. A reopen invalidates an earlier pass.
-- [ ] A new session doesn't reset the attempt budget; infrastructure failures don't spend it.
-- [ ] A dependency that is completed but not integrated doesn't make a task ready.
-- [ ] One paid-worker run on a harder task, with its cost in the report.
-- [ ] A task escalates tier0 → tier1 after 2 failed semantic attempts. Its attempts record profile and model, Master never sees a model name, and the report shows cost and success rate per tier.
-- [ ] No token appears in history, logs, config, or a worker's environment (tested).
+**Tests:** the daemon loop with fake time and a fake run (pause, caps, one-run-at-a-time);
+notification payloads; generating the service file.
 
-## 8. Tests
+## 4. Planner chat: `ms chat <project>` — about 2 days
 
-**Offline, the default suite:**
-- A fake GitHub API (a local `http.server` in a thread) drives the scenarios:
-  - issue approved → task;
-  - edit after approval → approval cleared;
-  - pass → PR body contents;
-  - approval → merge with tree equality;
-  - "changes requested" → task blocked, with the comment shown quoted to Master;
-  - a stale head → refused;
-  - a manual UI merge → observed and recorded;
-  - an approval issue → operation applied with no model call;
-  - a stale approval → refused.
-- Transition-table tests for every status pair.
-- Budget across sessions; failure classification.
-- Stuck-detector patterns.
-- Token leakage: scan history, logs and worker environments.
+**A conversation in the terminal** (a web chat is later work; this is the one place you type):
+- **You describe what you want.** The planner drafts an **epic** split into **tasks**, each
+  with:
+  - a description;
+  - a size (small / medium / hard);
+  - acceptance commands, including tests it writes;
+  - protected paths;
+  - a `manual_check`.
+- **It asks questions** whenever something is unclear or is your decision (for example,
+  where avatar art comes from). It does not guess.
+- **Commands in the chat:** `show`, `change <task>: ...`, `drop <task>`, `approve`,
+  `discard`, `release`.
 
-**Integration (opt-in, marker `integration`):**
-- one real round trip on a throwaway GitHub repo;
-- then one real task on Match Legends with you approving the PR.
+**Automatic checks before you can approve:**
+- Each drafted test runs in a fresh worktree of `develop`.
+- It **must fail**, and fail for the right reason: an assertion or a missing feature, not a
+  syntax error or a broken import in the test itself.
+- `npm test` must stay green with the new tests present.
+- Results are shown inline. A draft that fails these checks cannot be approved.
 
-## 9. Commit sequence (each one green and pushed)
+**Approve** (`human_action`, `actor = "owner via planner"`, with a hash of the approved draft):
+1. the tests are committed to `develop`;
+2. the tasks are written through Master (acceptance and `manual_check` are human-only fields,
+   written here because you approved them);
+3. the daemon picks them up.
 
-1. Policy by transition (H2) + reopen-aware gate (P7)
-2. Attempt budget since the last human action + failure classification (H4)
-3. Dependencies satisfied only when integrated (N2)
-4. Stuck detector (L2)
-5. `core/github.py` + the fake-API test harness
-6. Issue → task sync
-7. Attempt → PR
-8. Review → integration (G2) and "changes requested"
-9. Approval issues for gated operations (H3)
-10. Report additions
-11. README; branch-protection guide for you; issue template PR to Match Legends
-12. Worker profiles, task `size`, tier selection and escalation, per-tier report (§5b)
-13. Integration test on a throwaway repo, then a supervised real round trip
-14. The paid-worker test (§5, §5b) and the GitHub App setup guided with the owner
+**Nothing is queued without "approve".**
 
-## 10. Out of scope
+**Model:** configurable, `[planner] provider/model`, default DeepSeek V4 Flash.
+- Every turn's usage is recorded (`planner_turn` events).
+- The chat shows a running cost ("this chat: $0.004").
+- The chat has its own cap.
 
-Webhooks or any server; several repositories; GitHub Actions as the verifier of record (it can be an extra check); auto-merge without your review; containers (N1); DBOS (Milestone 4).
+**Context:** the project's README, task list and recent reports, plus the code layout. The
+planner reads files through a read-only file tool limited to the dedicated clone, so it can
+reference real functions. It never writes code.
 
-## 11. Cost and time
+**Tests:** a scripted planner model; question/answer turns; approve → tests committed and
+tasks queued; the must-fail check with good, already-passing and syntax-error tests; nothing
+queued without approval; cost display.
 
-- **GitHub API calls** are free (rate limits are far above the need).
-- **Master cost:** M2 measured about $0.0012 per decision, so a five-task night costs about $0.03–0.05.
-- **The paid worker test:** a few cents to about $1, depending on the task.
-- **Claude Code time:** about 12 commits, similar in size to Milestone 2. Commits 5–9 carry the most risk (GitHub semantics), and the fake-API harness keeps them cheap to test.
+## 5. Release: `ms release <project>` (and "release" in the chat) — about 1 day
+
+1. **Release notes from history:** every task integrated into `develop` since the last
+   release tag, with its title, what changed (files and stats), how to check by hand, and its
+   verification. Plus the cost of the cycle.
+2. **Opens a PR `develop` → `main`** with the notes as its body. You get a notification with
+   the link.
+3. **You review and merge on GitHub.** That is the release approval (G2: a merge commit).
+4. **On the next sync after the merge**, the system:
+   - verifies that `main`'s tree equals the released `develop` commit's tree;
+   - tags `v0.<n>`;
+   - creates a GitHub Release with the notes;
+   - republishes Pages, so `/` is now the new `main`;
+   - records `release_published`;
+   - notifies you "released v0.<n>".
+
+**Tests:** notes from a fake history; the PR body; post-merge steps against a fake GitHub API;
+the tree-equality check refuses a mismatched merge.
+
+## 6. Worker tiers with escalation — about 1 day
+
+Unchanged from the approved §5b of the previous plan:
+- profiles tier0 (OpenCode free), tier1 (DeepSeek Flash via OpenCode), tier2 (DeepSeek Pro via
+  OpenCode), with the paid tiers in their own worker home holding only a spend-limited key;
+- a human-only `size` sets the starting tier, and the planner proposes it in part 4;
+- after 2 failed semantic attempts on a tier, the task goes up one tier, and never down;
+- the orchestrator chooses the tier, Master never names a model, and every attempt records
+  profile and model;
+- the report and `ms status` show cost and success rate per tier;
+- the Ollama/Qwen backend is off the default ladder.
+
+This includes the paid-worker test (G4, decided after tonight's run) and H4's attempt budget
+since the last human action.
+
+---
+
+## 7. What fits in this week
+
+| Part | Effort | This week? |
+| --- | --- | --- |
+| 1. `ms` command | 0.5 day | yes |
+| 2. Branch model, auto-integration, Pages, App guide | 2 days | yes, including the guided App setup with you |
+| 3. Service, caps, ntfy, pause | 1 day | yes |
+| 4. Planner chat | 2 days | likely. It's the riskiest part (prompting and test-checking); a first version without file reading is a fallback. |
+| 5. Release | 1 day | probably not this week. It's only needed when you want the first release; the notes can be generated sooner. |
+| 6. Worker tiers | 1 day | partly. Profiles and escalation if time allows; otherwise early next week. |
+
+That's about 7.5 days of work against roughly 5–6 working days. Parts 1–3 make the system
+run itself; part 4 removes the last terminal chore (writing tasks). The order of the parts
+is the order of value, so whatever is unfinished at the end of the week is the
+least-needed part.
+
+Also folded in where the parts touch them: H2 (policy by transition) for everything Master
+does on its own, part of H4 (per-task budgets), and N2 (closed by H-D2).
+
+## 8. Commit sequence (each one green and pushed)
+
+1. `core/ms.py` + `ms status/report/stop` + install of the wrapper
+2. Branch model: `develop` base, auto-integration with re-verification and conflict retry; README §13 (H-D1, H-D2)
+3. Pages publishing (`gh-pages`, two paths)
+4. GitHub App token minting via `openssl`, push via `GIT_ASKPASS`, leak scan; `docs/github-setup.md`; `ms github check`
+5. Guided setup with you; first real auto-integration and preview link
+6. `ms daemon`, the systemd user service, daily and run caps, `ms pause/resume`
+7. ntfy notifications + `ms notify setup`
+8. Planner: chat loop, drafts, questions, the scripted-model tests
+9. Planner: the must-fail check, approve → tests committed and tasks queued
+10. Release notes + `ms release` PR
+11. Post-merge release steps (tag, GitHub Release, Pages)
+12. Worker profiles, `size`, escalation, per-tier report
+13. Policy by transition (H2) and per-task budgets (H4)
+
+## 9. Out of scope (deferred)
+
+GitHub Issues as task input and a Projects board (maybe later, as a one-way mirror); APK
+builds; a web UI for the chat; multiple machines; containers (N1); DBOS (Milestone 4).
