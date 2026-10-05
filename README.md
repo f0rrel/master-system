@@ -568,6 +568,7 @@ ms pause | ms resume  # start nothing new / allow new work (a running task finis
 ms stop               # stop the current run now (recorded as interrupted), and pause
 ms notify setup       # phone notifications via ntfy: prints the private topic to subscribe to
 ms notify test
+ms notify send "text" [--link URL]   # a one-line message to the phone
 ms daemon [--once]    # the service loop itself (systemd runs this)
 ```
 

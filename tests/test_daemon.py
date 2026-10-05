@@ -395,3 +395,9 @@ def test_friendly_status_shows_work_in_progress(env):
                            is_busy=lambda p: True, spend={"total_usd": 0}, now=NOW)
     assert text.startswith("alpha: Working on t1 (T1), started 5 min ago.")
     assert "(nothing new)" in text
+
+
+def test_notify_send_needs_a_message_and_setup(home):
+    assert run_ms("notify", "send")[0] == 1
+    code, out = run_ms("notify", "send", "hello")
+    assert code == 1 and "ms notify setup" in out

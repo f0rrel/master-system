@@ -13,6 +13,7 @@
     ms service uninstall
     ms notify setup            create the phone-notification topic, show how to subscribe
     ms notify test             send a test notification
+    ms notify send "text"      send your own short message (optional --link URL)
     ms github setup --app-id N save the GitHub App's id (docs/github-setup.md)
     ms github check            check the GitHub App, rulesets and Pages, in plain words
 
@@ -283,8 +284,14 @@ def _command_notify(args, out):
     if not notifier.enabled:
         print("Notifications are not set up yet: run `ms notify setup`.", file=out)
         return 1
-    ok = notifier.send("Master System", "Test notification: notifications work.",
-                       tags="bell")
+    if args.action == "send":
+        if not args.message:
+            print('Usage: ms notify send "one short sentence" [--link URL]', file=out)
+            return 1
+        ok = notifier.send("Master System", args.message, tags="bell", click=args.link)
+    else:
+        ok = notifier.send("Master System", "Test notification: notifications work.",
+                           tags="bell")
     print("Sent." if ok else "Sending failed (no network, or the server refused).", file=out)
     return 0 if ok else 1
 
@@ -873,7 +880,9 @@ def build_parser():
     service.add_argument("action", choices=["install", "uninstall", "stopped"])
     service.set_defaults(handler=_command_service)
     notify = commands.add_parser("notify", help="Phone notifications.")
-    notify.add_argument("action", choices=["setup", "test"])
+    notify.add_argument("action", choices=["setup", "test", "send"])
+    notify.add_argument("message", nargs="?", help="For send: the text.")
+    notify.add_argument("--link", default=None, help="For send: a link to open on tap.")
     notify.set_defaults(handler=_command_notify)
     release = commands.add_parser("release", help="Open the release pull request.")
     release.add_argument("project")
