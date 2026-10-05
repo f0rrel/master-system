@@ -560,7 +560,8 @@ a script against the code.
 - Not yet: containers, parallel attempts, auto-merge, DBOS.
 - Acceptance:
   - [ ] `kill -9` during a worker: recovery is refused until the worker exits, the worktree is kept, and its diff stats are recorded.
-  - [ ] A worker that edits a protected test gets `fail`.
+  - [x] A worker that edits a protected test gets `fail`.
+    (`tests/test_acceptance_verifier.py`)
   - [x] Re-titling a task or changing its acceptance invalidates an earlier pass.
     (`tests/test_evidence.py`: `spec_changed`)
     ("Reopening invalidates a pass" moved to Milestone 3, decision P7.)
