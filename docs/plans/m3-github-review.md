@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **Waiting for owner approval.** No Milestone 3 code before approval. |
+| Status | **Waiting for owner approval** (revised 2026-10-05 with G1–G3 decided and worker tiers added, §5b). No Milestone 3 code before approval. |
 | Branch | `m3-github-review` (from `m2-run-for-real` once Milestone 2 is closed and merged) |
 | Closes | H2 (policy by transition), H3 (approvals round-trip, via PR review), H4 (attempt budget), N2 (dependencies count only when integrated), P7 (reopen invalidates a pass), L2 (stuck detector) |
 | Target | Match Legends (`f0rrel/Match_Legends_mobile_game`) |
@@ -15,7 +15,15 @@ The system does everything in between and records it in history.
 
 ---
 
-## 0. Decisions needed from the owner
+## 0. Owner decisions (2026-10-05)
+
+- **G1 = A:** a GitHub App, installed only on Match Legends. The setup is guided step by step when we get there (commit 11).
+- **G2 = A:** merge commits are accepted. The verified commit is a parent of the merge commit, and the file contents (the tree) are identical. This revises D1 to "integration lands exactly the verified tree, with the verified commit as a parent"; recorded in README §13 when implemented.
+- **G3:** polling, on `github sync` and at the start of every run.
+- **G4:** decided after tonight's run (ml-6, ml-7, ml-8).
+- **Added:** worker tiers with escalation (§5b).
+
+## 0b. Decisions as originally proposed
 
 | # | Question | Options | Recommendation |
 | --- | --- | --- | --- |
@@ -131,6 +139,91 @@ Exit: one run whose report shows the paid worker's cost, measured against the `[
 
 ---
 
+## 5b. Worker tiers with escalation (owner addition)
+
+**Profiles in config.** Each profile is an OpenCode model plus the worker home that holds
+its credential:
+
+```toml
+[worker.profiles.tier0]      # the OpenCode free default model, no key
+model = ""                   # empty: the worker home's default
+home = "~/.local/share/master-system-worker"
+
+[worker.profiles.tier1]      # DeepSeek V4 Flash through OpenCode
+model = "deepseek/deepseek-v4-flash"
+home = "~/.local/share/master-system-worker-paid"   # spend-limited key only here
+
+[worker.profiles.tier2]      # DeepSeek V4 Pro through OpenCode
+model = "deepseek/deepseek-v4-pro"
+home = "~/.local/share/master-system-worker-paid"
+
+[worker]
+ladder = ["tier0", "tier1", "tier2"]
+```
+
+- **The default ladder is only these three.** The Ollama tool loop (M6) stays out of it:
+  it can be configured as a profile by hand, but it is never on the default ladder.
+- **Each paid tier has a price row** in `[prices]`, and a per-task cost limit (H4) applies
+  across tiers.
+
+**Task size sets the starting tier.** Tasks get an optional, human-only `size`: `small`,
+`medium` or `hard`.
+- It works like `description`: not in `SPECS`, set through `run_cli task size` or an issue
+  label (`size:small`, `size:medium`, `size:hard`), and recorded as `human_action`.
+- It is not part of `spec_hash`.
+- `small` → tier0, `medium` → tier1, `hard` → tier2. No size means tier0.
+
+**Escalation is deterministic and never goes down.**
+- The orchestrator picks the profile for each attempt from history.
+- It starts at the task's starting tier. After **2 failed semantic attempts on a tier** it
+  moves the task up one tier.
+  - A failed semantic attempt is a finished or timed-out attempt whose verdict is not `pass`.
+  - Infrastructure failures (H4 classification) and interrupted attempts don't count toward
+    escalation.
+- It never moves down within a task, even across sessions or after a human action. A human
+  can change the task's `size`, which raises the floor; the current tier is never lowered.
+- At the top tier the H4 budget decides: the task waits for a human.
+- The ladder interacts with the attempt budget (H4): the budget counts all semantic attempts
+  across tiers since the last human action. With 2 attempts per tier and 3 tiers, its
+  default becomes 6.
+
+**Master never names a model.**
+- `run_task` stays `(project_id, task_id)`. The tier is chosen by the orchestrator, not by
+  Master, and it is not in the operation vocabulary.
+- Master's context shows only neutral facts: the attempt count and the outcome per attempt.
+  It does not see tier names or models.
+
+**Every attempt records its profile.** `attempt_started` gets `worker_profile`, `worker_tier`
+and `worker_model` (opaque provenance), plus `escalated_from` when the tier changed.
+
+**The report adds a table per tier:** attempts, passes, success rate, wall-clock time, worker
+tokens and cost, and the cost per passed task.
+
+**Files:**
+- `core/run_config.py`: profiles and ladder;
+- `core/worker_tiers.py` (new): tier selection from history, a pure function;
+- `core/task_orchestrator.py`: one backend per profile, chosen per attempt;
+- `core/run_cli.py`: build the profile backends and the `task size` command;
+- `core/project_state.py`, `core/work_manager.py`, `core/master.py`: the `size` field
+  (human-only, validated);
+- `core/report.py`: the per-tier table;
+- `core/history.py`: the payload fields only, no new event type.
+
+**Tests:**
+- the starting tier follows `size`;
+- 2 semantic failures move the task up one tier; infrastructure failures and interruptions
+  don't;
+- the tier never decreases, including across sessions and after a size change;
+- at the top tier the budget hands the task to a human;
+- Master's prompt contains no profile or model name;
+- every attempt records its profile and model;
+- the report's per-tier figures come from history only;
+- Ollama is not on the default ladder.
+
+**The paid-worker test (§5) becomes the first real escalation:**
+- the task chosen in G4 runs with `size: medium` (tier1 from the start);
+- one `small` task is allowed to escalate naturally.
+
 ## 6. File-by-file changes
 
 | File | Change |
@@ -165,6 +258,7 @@ Exit: one run whose report shows the paid worker's cost, measured against the `[
 - [ ] A new session doesn't reset the attempt budget; infrastructure failures don't spend it.
 - [ ] A dependency that is completed but not integrated doesn't make a task ready.
 - [ ] One paid-worker run on a harder task, with its cost in the report.
+- [ ] A task escalates tier0 → tier1 after 2 failed semantic attempts. Its attempts record profile and model, Master never sees a model name, and the report shows cost and success rate per tier.
 - [ ] No token appears in history, logs, config, or a worker's environment (tested).
 
 ## 8. Tests
@@ -202,8 +296,9 @@ Exit: one run whose report shows the paid worker's cost, measured against the `[
 9. Approval issues for gated operations (H3)
 10. Report additions
 11. README; branch-protection guide for you; issue template PR to Match Legends
-12. Integration test on a throwaway repo, then a supervised real round trip
-13. The paid-worker test (§5)
+12. Worker profiles, task `size`, tier selection and escalation, per-tier report (§5b)
+13. Integration test on a throwaway repo, then a supervised real round trip
+14. The paid-worker test (§5, §5b) and the GitHub App setup guided with the owner
 
 ## 10. Out of scope
 
