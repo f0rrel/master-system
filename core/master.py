@@ -175,6 +175,11 @@ class Master:
         """
         return self._work(project_id).set_task_acceptance(task_id, acceptance)
 
+    def set_task_description(self, project_id, task_id, description):
+        """Set or (with None) clear a task's description. For humans only:
+        deliberately not in the operation allowlist."""
+        return self._work(project_id).set_task_description(task_id, description)
+
     def _resolve(self, project_id):
         """Return the ProjectState for project_id.
 

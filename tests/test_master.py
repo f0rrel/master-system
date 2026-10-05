@@ -614,6 +614,7 @@ def test_master_does_not_invent_public_methods_beyond_the_documented_api():
         "create_task",
         "update_task",
         "set_task_acceptance",
+        "set_task_description",
         "project_state",
     }
 

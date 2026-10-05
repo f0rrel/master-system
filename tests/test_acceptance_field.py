@@ -188,3 +188,44 @@ def test_acceptance_is_not_in_the_operation_vocabulary():
 
     assert "acceptance" not in schema
     assert "set_task_acceptance" not in schema
+
+
+# --- description: also human-only, also part of the spec ---------------------------
+
+
+def test_master_sets_and_clears_a_description(project):
+    master = Master(project.parent)
+
+    master.set_task_description("alpha", "t1", "Add greet() to app.py.")
+    assert ProjectState(project).get_task("t1")["description"] == "Add greet() to app.py."
+
+    master.set_task_description("alpha", "t1", None)
+    assert "description" not in ProjectState(project).get_task("t1")
+
+
+@pytest.mark.parametrize("bad", ["", "   ", 7, "x" * 4001])
+def test_a_malformed_description_is_refused(project, bad):
+    with pytest.raises(InvalidFieldError):
+        Master(project.parent).set_task_description("alpha", "t1", bad)
+    set_task_field(project, description=bad)
+    with pytest.raises(ValueError, match="description"):
+        ProjectState(project).validate()
+
+
+def test_models_cannot_set_a_description(project):
+    outcome = ReasoningInterface(Master(project.parent)).execute(Operation.propose(
+        {"operation": "update_task", "project_id": "alpha", "task_id": "t1",
+         "description": "do something else"}))
+
+    assert outcome.status is ResultStatus.DOMAIN_ERROR
+    operation = build_operation_schema()["properties"]["operation"]["oneOf"][0]
+    assert "description" not in operation["properties"]
+
+
+def test_the_spec_hash_covers_the_description_only_when_present():
+    from core.evidence import spec_hash
+
+    task = {"id": "t1", "title": "T", "acceptance": None}
+    assert spec_hash(task) == spec_hash(dict(task, description=None))
+    assert spec_hash(task) != spec_hash(dict(task, description="details"))
+    assert spec_hash(dict(task, description="a")) != spec_hash(dict(task, description="b"))

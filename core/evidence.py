@@ -54,9 +54,15 @@ _ATTEMPT_TYPES = (
 
 
 def spec_hash(task: Optional[Mapping]) -> str:
-    """sha256 of the canonical JSON of the task's spec: its title and acceptance."""
+    """sha256 of the canonical JSON of the task's spec: title, description, acceptance.
+
+    ``description`` is included only when the task has one, so adding the field
+    did not change the hash of tasks without it.
+    """
     task = task or {}
     spec = {"title": task.get("title"), "acceptance": task.get("acceptance")}
+    if task.get("description") is not None:
+        spec["description"] = task.get("description")
     canonical = json.dumps(spec, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

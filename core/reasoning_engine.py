@@ -451,6 +451,7 @@ class ReasoningEngine:
                     # Whether a human has defined "done" for this task. The
                     # acceptance commands themselves are not shown.
                     "has_acceptance": bool(task.get("acceptance")),
+                    "has_description": bool(task.get("description")),
                 }
             )
 

@@ -748,6 +748,7 @@ def test_the_context_invents_no_fields(master):
         "blocked_by",
         "readiness_reason",
         "has_acceptance",
+        "has_description",
     }
     assert set(context["tasks"][0]) == expected
     assert set(context["milestones"][0]) == {"id", "name", "status"}

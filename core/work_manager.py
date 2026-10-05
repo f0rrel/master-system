@@ -29,6 +29,7 @@ if __package__ in (None, ""):
 from core.project_state import (
     VALID_MILESTONE_STATUSES,
     acceptance_problems,
+    description_problems,
     VALID_TASK_STATUSES,
     ProjectState,
     write_yaml_atomically,
@@ -38,9 +39,10 @@ from core.project_state import (
 TASK_FIELDS = ("id", "milestone", "title", "status", "assigned_to")
 MILESTONE_FIELDS = ("id", "name", "status")
 
-# Ids are identity: they are never rewritten in place. ``acceptance`` is
-# deliberately absent: it is the human's definition of done and is changed only
-# through set_task_acceptance, which no model operation reaches.
+# Ids are identity: they are never rewritten in place. ``acceptance`` and
+# ``description`` are deliberately absent: they are the human's spec and are
+# changed only through set_task_acceptance / set_task_description, which no
+# model operation reaches.
 MUTABLE_TASK_FIELDS = ("milestone", "title", "status", "assigned_to")
 MUTABLE_MILESTONE_FIELDS = ("name", "status")
 
@@ -295,6 +297,25 @@ class WorkManager:
             record.pop("acceptance", None)
         else:
             record["acceptance"] = deepcopy(acceptance)
+
+        write_yaml_atomically(self._tasks_path, tasks)
+
+        return record
+
+    def set_task_description(self, task_id, description):
+        """Set or, with ``None``, remove a task's description. Human-only."""
+        if description is not None:
+            problems = description_problems(description)
+            if problems:
+                raise InvalidFieldError("; ".join(problems))
+
+        tasks = deepcopy(self._state.snapshot().tasks_doc)
+        record = _find(tasks.get("tasks", []), task_id, "Task")
+
+        if description is None:
+            record.pop("description", None)
+        else:
+            record["description"] = description
 
         write_yaml_atomically(self._tasks_path, tasks)
 
