@@ -11,6 +11,9 @@ One cycle (``Daemon.cycle``), every ``[daemon] interval_s`` seconds:
 4. Notify the owner about what changed: tasks done, tasks blocked, tasks that
    need a human, the daily cap.
 
+Only projects that opted in (``auto_integrate: true`` in project.yaml) are
+run; others (such as the system's own roadmap project) are never touched.
+
 "Work" is a task the owner approved (every task in the project's files was
 written or approved by a human; tasks Master creates wait for approval under
 the policy) that is ``in_progress``, or ``planned`` with its dependencies
@@ -201,6 +204,8 @@ class Daemon:
                     self.notifier.send(f"{project_id}: release", "\n".join(lines),
                                        tags="rocket", click=self.preview_url(project_id))
                     log += [f"{project_id}: {line}" for line in lines]
+            if not self._hands_off(project_id):
+                continue
             if self.is_busy(project_id):
                 log.append(f"{project_id}: busy")
                 continue
@@ -240,6 +245,13 @@ class Daemon:
                 break
         self._remember(memory)
         return log
+
+    def _hands_off(self, project_id) -> bool:
+        """Only projects that opted in (project.yaml ``auto_integrate: true``) are run."""
+        try:
+            return self.master.project_state(project_id).project().get("auto_integrate") is True
+        except Exception:
+            return False
 
     def _last_human(self, project_id, task_id) -> int:
         events = self.history.events(project_id=project_id, task_id=task_id,

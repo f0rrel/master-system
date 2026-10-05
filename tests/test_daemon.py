@@ -40,7 +40,8 @@ def write_project(root, tasks):
     project = root / "alpha-project"
     project.mkdir(parents=True, exist_ok=True)
     (project / "project.yaml").write_text(
-        yaml.safe_dump({"id": "alpha", "name": "alpha", "status": "active"}))
+        yaml.safe_dump({"id": "alpha", "name": "alpha", "status": "active",
+                        "auto_integrate": True}))
     (project / "milestones.yaml").write_text(yaml.safe_dump(
         {"milestones": [{"id": "m1", "name": "M1", "status": "in_progress"}]}))
     (project / "tasks.yaml").write_text(yaml.safe_dump({"tasks": tasks}))
@@ -341,3 +342,11 @@ def test_report_without_sessions(home):
 def test_the_wrapper_runs_ms_from_the_repository(tmp_path):
     script = ms.wrapper_script(tmp_path)
     assert f'PYTHONPATH="{tmp_path}"' in script and "-m core.ms" in script
+
+
+def test_a_project_that_did_not_opt_in_is_never_run(env):
+    project_yaml = env.project / "project.yaml"
+    data = yaml.safe_load(project_yaml.read_text())
+    del data["auto_integrate"]
+    project_yaml.write_text(yaml.safe_dump(data))
+    assert env.daemon.cycle() == [] and env.runs == []
