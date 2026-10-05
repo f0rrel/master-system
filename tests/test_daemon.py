@@ -344,7 +344,7 @@ def test_report_without_sessions(home):
 
 def test_the_wrapper_runs_ms_from_the_repository(tmp_path):
     script = ms.wrapper_script(tmp_path)
-    assert f'PYTHONPATH="{tmp_path}"' in script and "-m core.ms" in script
+    assert f'PYTHONPATH="{tmp_path}"' in script and "-P -m core.ms" in script
 
 
 def test_a_project_that_did_not_opt_in_is_never_run(env):

@@ -90,7 +90,7 @@ def _command_stop(args, out):
 
 def wrapper_script(repo: Path) -> str:
     return (f"#!/bin/sh\n# The Master System's owner command (installed by `ms install`).\n"
-            f'PYTHONPATH="{repo}" exec "{repo}/.venv/bin/python" -m core.ms "$@"\n')
+            f'PYTHONPATH="{repo}" exec "{repo}/.venv/bin/python" -P -m core.ms "$@"\n')
 
 
 def _command_install(args, out):
