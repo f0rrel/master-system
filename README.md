@@ -8,7 +8,7 @@
 | | |
 | --- | --- |
 | Last updated | 2026-10-05 |
-| Written against | branch `claude-week`, commit `18f8239` |
+| Written against | branch `m1-contain-verify` (from `claude-week` `dab0928`) |
 | Owner | f0rrel (GitHub) |
 | Local path (owner) | `~/AI/master-system-big-pickle` |
 | Remote | `https://github.com/f0rrel/master-system` (private) |
@@ -97,22 +97,20 @@ leave room for it without implementing it early.
 
 | Item | State (2026-10-05) |
 | --- | --- |
-| Current milestone | **"Trustworthy loop: explicit execution, evidence history, safe resume"**. Implemented on `claude-week`. The architecture review found gaps, so the milestone is **not closed** (see [§11](#11-known-gaps)). |
+| Current milestone | **Milestone 1, "Contain and verify"** (approved 2026-10-05), on branch `m1-contain-verify`. It closes the earlier "Trustworthy loop" milestone, which is implemented on `claude-week` but not closed (see [§11](#11-known-gaps)). Status: **plan written, waiting for owner approval** (`docs/plans/m1-contain-verify.md`). |
 | Tests | 983 passed, 1 skipped, 5 integration tests deselected (`python -m pytest -q -m "not integration"`) |
 | Can the autonomous loop be run from a CLI? | **No.** It runs only inside tests. No composition root exists yet (gap H5). |
 | Production verifier in `core/`? | **No.** The only real verifier is a test helper (`SubprocessPytestVerifier` in `tests/test_ollama_backend.py`). |
 | Workers (execution backends) | `OpenCodeCliBackend` (runs `opencode run`) and `OllamaExecutionBackend` (a homemade tool loop, to be frozen) |
 | Reasoning providers (for Master) | Ollama, OpenCode server, DeepSeek API |
-| Branches | `main` = `49c0a4e` (baseline). `claude-week` = 6 commits ahead, holding all of the milestone work. Not merged. |
-| Managed project | `projects/ai-system` is the system's own project. Its tasks are stale: `foundation-001` and `-002` are `in_progress`, although that work was done by hand. |
+| Branches | `main` = `49c0a4e` (baseline). `claude-week` holds the "Trustworthy loop" work and this README. `m1-contain-verify` branches from `claude-week`. Nothing is merged into `main`. |
+| Managed project | `projects/ai-system` is the system's own project. Its tasks are stale: `foundation-001` and `-002` are `in_progress`, although that work was done by hand. **Self-hosting is stopped until Milestone 3** (approved 2026-10-05): no worker runs against this repository. |
 
 ### Next actions
 
-These are the review's recommendations, **pending owner approval**:
-
-1. Owner reviews this README and the architecture review, then accepts or rejects the
-   proposed roadmap in [§12](#12-roadmap).
-2. Start **Milestone 1, "Contain and verify"**, on a new branch from `claude-week`.
+1. Owner reviews and approves the Milestone 1 plan (`docs/plans/m1-contain-verify.md`).
+2. Implement Milestone 1 in small, green, pushed commits; tick the [§12](#12-roadmap)
+   acceptance boxes as each criterion passes.
 
 ---
 
@@ -527,11 +525,13 @@ a script against the code.
 
 ### Owner-approved
 
-- **Current milestone:** "Trustworthy loop: explicit execution, evidence history, safe resume".
-  It must be finished before any memory architecture or self-improvement work.
+- The five-milestone roadmap below was **approved by the owner on 2026-10-05**.
+- **Current milestone: 1, "Contain and verify".** Finishing it also closes the earlier
+  "Trustworthy loop: explicit execution, evidence history, safe resume" milestone.
+- The loop must be trustworthy before any memory architecture or self-improvement work.
 - Memory comes after the loop is trustworthy. Self-improvement comes last.
 
-### Proposed by the 2026-10-05 review (PENDING owner approval)
+### Approved roadmap (2026-10-05)
 
 | # | Milestone | Exit gate |
 | --- | --- | --- |
@@ -541,7 +541,7 @@ a script against the code.
 | 4 | Durable runtime: DBOS spike, then adopt or walk away | Homemade code shrinks, or walk away and build only timeouts |
 | 5 | Plans and focused context | A plan from a one-paragraph objective |
 
-**1. Contain and verify**
+**1. Contain and verify** (current)
 
 - Objective:
   - a worktree per attempt;
@@ -656,16 +656,18 @@ Add a row whenever an architectural decision is made or reversed.
 | No automatic replay of uncertain attempts | The first worker may have changed the world | Approved, implemented (the review: isolation is the real fix, C2) |
 | One autonomous run per project via a non-blocking `flock`; human mutations use the same lock; PIDs are informational only | Simple, kernel-managed, no leases needed on one machine | Approved, implemented (needs worker fd inheritance, C2) |
 | Completion gate: latest attempt finished + `pass` + no newer attempt; otherwise a human decides | QA pass ≠ completion | Approved, implemented (needs spec binding, H1) |
-| Attempt limit of 3 per (session, task) | Prevents hammering a broken task | Approved, implemented. **Under review (H4)** |
+| Attempt limit of 3 per (session, task) | Prevents hammering a broken task | Approved, implemented. **Approved to change in Milestone 3 (H4)** |
 | WorkSession is operational continuity, not memory | Keep concerns separate | Approved, implemented (the review proposes shrinking it, M5) |
 | Claude Code is a temporary implementation engineer, never a dependency | Model and agent independence | Approved |
 | Prefer mature coding agents as workers over building one | Focus on the control plane | Approved (the Ollama tool loop contradicts this, M6) |
 | Don't adopt Temporal (cluster) or LangGraph (graph DSL, LangChain coupling) for now | Infrastructure weight; unwanted coupling | Approved |
 | DBOS is the escape hatch if homemade durability grows too complex | In-process library on SQLite | Approved as an option. The review recommends a spike in milestone 4. |
-| Proposed: worktree per attempt + gated INTEGRATE | Makes retries safe and evidence attributable | **Proposed (2026-10-05)** |
-| Proposed: frozen acceptance criteria per task, verified by the orchestrator | An independent definition of done | **Proposed (2026-10-05)** |
-| Proposed: approval policy by transition and field | Risk lives in the arguments | **Proposed (2026-10-05)** |
-| Proposed: stop self-hosting (`projects/ai-system`) until approvals work; dogfood on a toy repo | Avoid self-modification by the back door | **Proposed (2026-10-05)** |
+| Worktree per attempt + gated INTEGRATE | Makes retries safe and evidence attributable | **Approved (2026-10-05)**; Milestone 1 |
+| Frozen acceptance criteria per task (shell commands + protected paths), verified by the orchestrator | An independent definition of done | **Approved (2026-10-05)**; Milestone 1 |
+| Approval policy by transition and field | Risk lives in the arguments | **Approved (2026-10-05)**; Milestone 3 |
+| Stop self-hosting (`projects/ai-system`) until approvals work (Milestone 3); dogfood on a toy repo | Avoid self-modification by the back door | **Approved (2026-10-05)** |
+| Five-milestone roadmap (§12) | The review's sequencing: contain, run, approve, durable runtime, plans | **Approved (2026-10-05)** |
+| DBOS spike in Milestone 4 | Test the escape hatch before building more homemade durability | **Approved (2026-10-05)** |
 
 ---
 
@@ -744,13 +746,15 @@ These apply to AI agents (Claude Code, OpenCode, Codex, …) and humans alike.
 
 ## 17. Open questions for the owner
 
-- [ ] Accept, change or reject the proposed roadmap in [§12](#12-roadmap)?
-- [ ] Is the `ai-system` project's worker meant to run inside this same repo, or in a separate checkout?
-- [ ] What format should acceptance criteria take: shell commands plus protected paths (proposed), or something richer?
-- [ ] Attempt budget: per task since the last human action (proposed), or keep per session?
+- [x] Accept, change or reject the proposed roadmap in [§12](#12-roadmap)? **Accepted (2026-10-05).**
+- [x] Is the `ai-system` project's worker meant to run inside this same repo, or in a separate checkout?
+  **Resolved: stop self-hosting until Milestone 3.** No worker runs against this repository until then.
+- [x] What format should acceptance criteria take? **Shell commands plus protected paths (2026-10-05).**
+- [x] Attempt budget: per task since the last human action, or keep per session?
+  **Per task since the last human action (2026-10-05)**, implemented in Milestone 3.
 - [ ] Which worker comes next: the OpenCode CLI as it is, an ACP client, or the OpenHands SDK?
 - [ ] Should `claude-week` be merged into `main` now, or after milestone 1?
-- [ ] Is a DBOS spike in milestone 4 acceptable, or should the runtime stay fully homemade?
+- [x] Is a DBOS spike in milestone 4 acceptable? **Yes (2026-10-05).**
 
 ---
 
