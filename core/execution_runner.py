@@ -38,6 +38,22 @@ class TaskExecutionRunner:
         Raises:
             ExecutionError: If the task cannot be executed as a valid candidate.
         """
+        task, context = self.prepare(project_id, task_id)
+        return self.invoke(task, context)
+
+    def prepare(self, project_id: str, task_id: str):
+        """Check the task is executable and build its context. No side effects.
+
+        Split from :meth:`invoke` so a caller can durably record that an
+        attempt is starting after every check has passed and before the
+        backend can touch anything.
+
+        Returns:
+            ``(task, context)`` ready for :meth:`invoke`.
+
+        Raises:
+            ExecutionError: If the task cannot be executed as a valid candidate.
+        """
         if not isinstance(project_id, str) or not project_id.strip():
             raise ExecutionError("project_id must be a non-empty string")
         if not isinstance(task_id, str) or not task_id.strip():
@@ -65,9 +81,9 @@ class TaskExecutionRunner:
             raise ExecutionError(
                 f"task {task_id!r} is not executable (readiness=blocked, blocked_by={blocked_by}, reason={readiness_reason})"
             )
-        if status == "planned":
+        if status != "in_progress":
             raise ExecutionError(
-                f"task {task_id!r} is not executable (status=planned; must be in_progress)"
+                f"task {task_id!r} is not executable (status={status}; must be in_progress)"
             )
 
         context: Mapping[str, object] = {
@@ -78,7 +94,10 @@ class TaskExecutionRunner:
             "blocked_by": blocked_by,
             "readiness_reason": readiness_reason,
         }
+        return task, context
 
+    def invoke(self, task, context) -> ExecutionResult:
+        """Run the backend once on a prepared task. This is the side effect."""
         result = self._backend.execute(task, context)
         if not isinstance(result, ExecutionResult):
             raise ExecutionError(

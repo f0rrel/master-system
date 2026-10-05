@@ -96,6 +96,7 @@ def test_the_allowlist_is_unchanged_by_the_impact_field():
         "update_milestone",
         "create_task",
         "update_task",
+        "run_task",
     }
 
 
@@ -119,6 +120,7 @@ def test_routine_operations_need_no_approval():
         "create_task": {"project_id": "alpha", "task_id": "t1", "milestone": "alpha",
                         "title": "T"},
         "update_task": {"project_id": "alpha", "task_id": "t1", "status": "in_progress"},
+        "run_task": {"project_id": "alpha", "task_id": "t1"},
     }
 
     assert set(valid) == set(SPECS)

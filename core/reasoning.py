@@ -106,6 +106,7 @@ __all__ = [
     "BatchResult",
     "ImpactLevel",
     "InvalidOperationError",
+    "OperationKind",
     "Operation",
     "OperationResult",
     "OperationSpec",
@@ -141,6 +142,7 @@ class RequestError(Enum):
     NO_CHANGES = "no_changes"
     NOT_APPROVED = "not_approved"
     EXPLICITLY_REJECTED = "explicitly_rejected"
+    DISPATCH_ONLY = "dispatch_only"
 
 
 class ResultStatus(Enum):
@@ -198,6 +200,20 @@ class ImpactLevel(Enum):
     CRITICAL = "critical"
 
 
+class OperationKind(Enum):
+    """What executing an operation means.
+
+    ``STATE`` operations are calls on a Master method and change authoritative
+    project state. ``DISPATCH`` operations request a side effect outside that
+    state, such as running a worker, and are carried out by the orchestration
+    layer. Master never executes a dispatch operation: project state describes
+    facts, and operations explicitly request side effects.
+    """
+
+    STATE = "state"
+    DISPATCH = "dispatch"
+
+
 @dataclass(frozen=True)
 class OperationSpec:
     """How one named operation maps onto an existing Master method.
@@ -212,25 +228,29 @@ class OperationSpec:
     deliberate decision about its impact is gated rather than autonomous.
     """
 
-    method: str
+    method: "str | None"
     required: tuple
     optional: tuple = ()
     variadic: bool = False
     impact: ImpactLevel = ImpactLevel.CRITICAL
+    kind: OperationKind = OperationKind.STATE
 
     @property
     def accepted(self):
         return frozenset(self.required) | frozenset(self.optional)
 
 
-# The allowlist. Every method named here already exists on Master, and exposes
-# nothing Master does not already support.
+# The allowlist. Every STATE entry names a method that already exists on
+# Master, and exposes nothing Master does not already support.
 #
-# Every entry is ROUTINE: each one only books work that a Master decision has
-# already authorized. None of them can reach outside ProjectState, which is why
-# none of them are ELEVATED or CRITICAL today. There is deliberately no
-# operation here that edits a file, promotes a workspace, or merges, so those
-# impact levels are currently unreachable rather than merely restricted.
+# ``run_task`` is the one DISPATCH entry: it asks the orchestration layer to run
+# the worker on a task that is already in_progress. It takes no execution
+# details -- worker, model, workspace and prompt are orchestration concerns --
+# and it changes no project state.
+#
+# Every entry is ROUTINE. There is deliberately no operation here that promotes
+# a workspace or merges, so ELEVATED and CRITICAL are currently unreachable
+# rather than merely restricted.
 SPECS = MappingProxyType(
     {
         "inspect_project": OperationSpec(
@@ -259,6 +279,12 @@ SPECS = MappingProxyType(
             ("project_id", "task_id"),
             variadic=True,
             impact=ImpactLevel.ROUTINE,
+        ),
+        "run_task": OperationSpec(
+            None,
+            ("project_id", "task_id"),
+            impact=ImpactLevel.ROUTINE,
+            kind=OperationKind.DISPATCH,
         ),
     }
 )
@@ -486,6 +512,18 @@ class OperationResult:
             message=f"operation is {state.value}",
         )
 
+    @classmethod
+    def dispatch_only(cls, operation):
+        return cls(
+            operation=operation,
+            status=ResultStatus.REJECTED,
+            reason=RequestError.DISPATCH_ONLY,
+            message=(
+                f"{operation} requests a side effect and is carried out by the "
+                "orchestration layer, never by Master"
+            ),
+        )
+
 
 @dataclass(frozen=True)
 class BatchResult:
@@ -552,6 +590,10 @@ class ReasoningInterface:
         Anything outside Master's expected error set propagates, so a real bug
         is not disguised as a rejected request.
 
+        A DISPATCH operation such as ``run_task`` is always refused here with
+        ``DISPATCH_ONLY``: it requests a side effect, so it is carried out by
+        the orchestration layer and never reaches Master.
+
         A ROUTINE operation is approved by policy and runs without a human
         clicking anything. Policy approval is not a second path: it yields the
         same approved :class:`Operation` a human approval would produce, so
@@ -564,6 +606,10 @@ class ReasoningInterface:
             raise TypeError(
                 f"expected an Operation, got {type(operation).__name__}"
             )
+
+        spec = SPECS.get(operation.operation)
+        if spec is not None and spec.kind is OperationKind.DISPATCH:
+            return OperationResult.dispatch_only(operation.operation)
 
         if (
             not operation.is_approved

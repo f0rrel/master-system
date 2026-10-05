@@ -8,20 +8,27 @@ other::
     TaskOrchestrator     doing + assessing    (execution + verification)
     Master                what is true         (authoritative state)
 
-It adds no framework. There is no state machine, no event log, no scheduler and
-no new abstraction: a ``while`` loop, one decision per turn, and a stop
-condition. Everything that could decide something has already been built; this
-only sequences them.
+It adds no framework. There is no state machine and no scheduler: a ``while``
+loop, one decision per turn, and a stop condition. Everything that could decide
+something has already been built; this only sequences them, and records what
+happened in an append-only :class:`core.history.HistoryStore`.
 
 The division of authority is the point of the file
 ---------------------------------------------------
 Master is the single writer of project state. A decision reaches it only
 through :class:`ReasoningInterface`, which applies the approval policy and
 delegates to Master. Execution and verification produce
-:class:`ExecutionResult` and :class:`VerificationResult`, which are attached to
-the *next* reasoning request and are never written anywhere. So the model can
-be wrong, the worker can fail, and the verifier can lie, and none of them can
-change a task's status without Master deciding to.
+:class:`ExecutionResult` and :class:`VerificationResult`, which are recorded in
+history as evidence and shown to the *next* reasoning request, and are never
+applied to project state. So the model can be wrong, the worker can fail, and
+the verifier can lie, and none of them can change a task's status without
+Master deciding to.
+
+Project state describes facts; operations explicitly request side effects. A
+task being in_progress never causes the worker to run. Only an explicit
+``run_task`` decision does, so a worker side effect is always traceable to the
+decision that asked for it and is never replayed because state still looks
+unfinished.
 
 Model independence
 ------------------
@@ -33,14 +40,23 @@ and Big Pickle are all just arguments; swapping them cannot change this code.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Optional
 
 from core.execution import ExecutionBackend
+from core.execution_runner import ExecutionError
+from core.history import EventType, HistoryStore, InMemoryHistoryStore, jsonable
 from core.master import Master
 from core.provider import ReasoningProvider
-from core.reasoning import Decision, MasterDecision, ReasoningInterface
+from core.reasoning import (
+    SPECS,
+    Decision,
+    MasterDecision,
+    OperationKind,
+    ReasoningInterface,
+)
 from core.reasoning_engine import ReasoningEngine, ReasoningError
 from core.task_orchestrator import TaskOrchestrator
 from core.verification import VerificationBackend
@@ -94,6 +110,8 @@ class LoopResult:
     #: the failing OperationResult when Master proposed something Master then
     #: refused. None when the loop stopped for an ordinary reason.
     detail: Optional[str] = None
+    #: Identifies this run's events in history.
+    run_id: Optional[str] = None
 
     def __str__(self) -> str:
         where = self.stop_reason
@@ -107,9 +125,15 @@ class LoopResult:
 class AutonomousLoop:
     """Drive one project until there is nothing safe left to do.
 
-    One turn is: inspect state, ask Master, act on the answer, and if a task
-    is now in flight run it through the worker and the verifier so the results
-    come back as evidence for the next decision.
+    One turn is: inspect state, ask Master, act on the answer. Execution is
+    never implied by state: the worker runs only when Master explicitly
+    decides ``run_task`` for a task that is already in_progress, and the
+    execution and verification results come back as evidence for the next
+    decision.
+
+    Every run is recorded in history: ``run_started``, then per turn a
+    ``decision`` (the intent) followed by an ``operation_result`` or the
+    attempt events, and finally exactly one ``run_stopped`` or ``run_error``.
     """
 
     def __init__(
@@ -121,6 +145,8 @@ class AutonomousLoop:
         request: str = DEFAULT_REQUEST,
         max_steps: int = 20,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        history: Optional[HistoryStore] = None,
+        session_id: Optional[str] = None,
     ):
         if not isinstance(master, Master):
             raise TypeError(f"expected a Master, got {type(master).__name__}")
@@ -135,10 +161,11 @@ class AutonomousLoop:
         self._request = request
         self._max_steps = max_steps
         self._max_retries = max_retries
+        self._history = history if history is not None else InMemoryHistoryStore()
+        self._session_id = session_id
 
-        # One interface shared by the engine and the loop, so a decision and a
-        # direct execution both land on the same approval gate and the same
-        # Master instance.
+        # One interface shared by the engine and the loop, so every decision
+        # lands on the same approval gate and the same Master instance.
         self._interface = ReasoningInterface(master)
         self._engine = ReasoningEngine(provider, master, self._interface)
         self._orchestrator = TaskOrchestrator(
@@ -146,11 +173,16 @@ class AutonomousLoop:
             execution_backend,
             verification_backend,
             reasoning_engine=self._engine,
+            history=self._history,
         )
 
     @property
     def engine(self) -> ReasoningEngine:
         return self._engine
+
+    @property
+    def history(self) -> HistoryStore:
+        return self._history
 
     # --- read-only project inspection ---------------------------------
 
@@ -171,12 +203,6 @@ class AutonomousLoop:
                 self._master.project_state(project_id), task
             )
             if readiness == "ready":
-                return task
-        return None
-
-    def _in_progress_task(self, project_id: str):
-        for task in self._task_records(project_id):
-            if task.get("status") == "in_progress":
                 return task
         return None
 
@@ -224,6 +250,71 @@ class AutonomousLoop:
             )
         return "; ".join(parts)
 
+    # --- history ----------------------------------------------------------
+
+    def _record(self, event_type, run_id, project_id, task_id=None, **payload):
+        return self._history.append(
+            type=event_type,
+            run_id=run_id,
+            session_id=self._session_id,
+            project_id=project_id,
+            task_id=task_id,
+            payload=payload,
+        )
+
+    @staticmethod
+    def _task_of(operation) -> Optional[str]:
+        if operation is None:
+            return None
+        task_id = operation.arguments.get("task_id")
+        return task_id if isinstance(task_id, str) and task_id.strip() else None
+
+    def _record_decision(self, run_id, project_id, step, decision):
+        operation = decision.operation if decision is not None else None
+        self._record(
+            EventType.DECISION,
+            run_id,
+            project_id,
+            task_id=self._task_of(operation),
+            step=step,
+            decision=decision.decision.value if decision is not None else None,
+            reason=decision.reason if decision is not None else None,
+            operation=(
+                {"name": operation.operation, "arguments": dict(operation.arguments)}
+                if operation is not None
+                else None
+            ),
+            pending_approval=bool(decision is not None and decision.pending_approval),
+        )
+
+    def _record_result(self, run_id, project_id, step, task_id, outcome):
+        self._record(
+            EventType.OPERATION_RESULT,
+            run_id,
+            project_id,
+            task_id=task_id,
+            step=step,
+            operation=outcome.operation,
+            status=outcome.status.value,
+            reason=outcome.reason.value if outcome.reason is not None else None,
+            message=outcome.message,
+            value=jsonable(outcome.value),
+        )
+
+    def _record_refusal(self, run_id, project_id, step, operation, reason, message):
+        self._record(
+            EventType.OPERATION_RESULT,
+            run_id,
+            project_id,
+            task_id=self._task_of(operation),
+            step=step,
+            operation=operation.operation,
+            status="refused",
+            reason=reason,
+            message=message,
+            value=None,
+        )
+
     # --- the loop -------------------------------------------------------
 
     def run(self, project_id: str) -> LoopResult:
@@ -234,83 +325,138 @@ class AutonomousLoop:
         unusable model reply and a refused operation all come back as a
         :class:`LoopResult` with authoritative state exactly as it was.
 
-        An unusable reply is retried a bounded number of times before giving
-        up, because a malformed reply is usually one formatting slip rather
-        than a decision. It is never repaired or guessed at: if the model
-        cannot produce a well-formed answer within the bound, the loop stops.
+        An exception -- a worker or verifier that raised, a broken project
+        file -- is recorded as ``run_error`` and propagates. The loop never
+        swallows it, and never retries the step that raised.
         """
         if not isinstance(project_id, str) or not project_id.strip():
             raise ValueError("project_id must be a non-empty string")
 
+        run_id = uuid.uuid4().hex
+        self._record(
+            EventType.RUN_STARTED,
+            run_id,
+            project_id,
+            request=self._request,
+            max_steps=self._max_steps,
+        )
+        self._steps = 0
+        try:
+            result = self._run(project_id, run_id)
+        except BaseException as error:
+            self._record(
+                EventType.RUN_ERROR,
+                run_id,
+                project_id,
+                error_type=type(error).__name__,
+                message=str(error),
+                step=self._steps,
+            )
+            raise
+
+        self._record(
+            EventType.RUN_STOPPED,
+            run_id,
+            project_id,
+            stop_reason=result.stop_reason,
+            steps=result.steps,
+            detail=result.detail,
+        )
+        return result
+
+    def _run(self, project_id: str, run_id: str) -> LoopResult:
         steps = 0
         last_output = None
 
+        def stop(reason, decision=None, detail=None):
+            return LoopResult(
+                stop_reason=reason,
+                steps=steps,
+                decision=decision,
+                last_output=last_output,
+                detail=detail,
+                run_id=run_id,
+            )
+
         while steps < self._max_steps:
             if self._actionable_task(project_id) is None:
-                return LoopResult(
-                    stop_reason=STOP_NO_WORK, steps=steps, last_output=last_output
-                )
+                return stop(STOP_NO_WORK)
 
             steps += 1
+            self._steps = steps
 
             proposal, decision, unusable = self._decide(project_id)
             if proposal is None:
-                return LoopResult(
-                    stop_reason=STOP_UNUSABLE_REPLY,
-                    steps=steps,
-                    last_output=last_output,
-                    detail=unusable,
-                )
+                return stop(STOP_UNUSABLE_REPLY, detail=unusable)
+
+            # The decision is the recorded intent: it is written before any
+            # state changes or any worker runs.
+            self._record_decision(run_id, project_id, steps, decision)
 
             # Anything but an explicit ACT stops the loop. This covers WAIT,
             # BLOCKED, NEEDS_INFORMATION, REQUEST_APPROVAL, and a reply that
             # carried no decision at all: the safe reading of an answer we
             # cannot act on is that we should not act on it.
             if decision is None or decision.decision is not Decision.ACT:
-                return LoopResult(
-                    stop_reason=STOP_MASTER,
-                    steps=steps,
-                    decision=decision,
-                    last_output=last_output,
-                )
+                return stop(STOP_MASTER, decision)
 
             # An ACT on something policy gates does not become an instruction
             # just because the model said ACT. Policy decides, not the model.
             if decision.pending_approval:
-                return LoopResult(
-                    stop_reason=STOP_APPROVAL,
-                    steps=steps,
-                    decision=decision,
-                    last_output=last_output,
-                )
+                return stop(STOP_APPROVAL, decision)
 
-            # Master said do this. If Master then refuses it, the loop must not
-            # carry on as though the world had moved: the task did not start,
-            # so there is nothing to execute and nothing to verify. Anything
-            # that did apply before the failure stays applied; nothing is
-            # rolled back, because BatchResult is not a transaction.
-            batch = proposal.execute(self._interface)
-            if not batch.all_successful:
-                return LoopResult(
-                    stop_reason=STOP_OPERATION_FAILED,
-                    steps=steps,
-                    decision=decision,
-                    last_output=last_output,
-                    detail=self._describe_failures(batch),
-                )
+            operation = decision.operation
+            spec = SPECS.get(operation.operation)
 
-            # Execution and verification happen only when Master has actually
-            # put a task in flight. Their results are attached to the next
-            # reasoning request by the orchestrator, never applied to state.
-            inflight = self._in_progress_task(project_id)
-            if inflight is not None:
+            # run_task: the only way the worker runs. It changes no project
+            # state and is refused unless the task is already in_progress in
+            # the project this loop is running.
+            if spec is not None and spec.kind is OperationKind.DISPATCH:
+                task_id = operation.arguments.get("task_id")
+                refusal = None
+                if operation.arguments.get("project_id") != project_id:
+                    refusal = (
+                        "wrong_project",
+                        f"run_task may only target project {project_id!r}",
+                    )
+                else:
+                    try:
+                        self._orchestrator.prepare(project_id, task_id)
+                    except ExecutionError as error:
+                        refusal = ("not_executable", str(error))
+                if refusal is not None:
+                    self._record_refusal(run_id, project_id, steps, operation, *refusal)
+                    return stop(
+                        STOP_OPERATION_FAILED,
+                        decision,
+                        f"{operation.operation} -> refused ({refusal[0]}): {refusal[1]}",
+                    )
+
                 last_output = self._orchestrator.orchestrate(
-                    project_id, inflight["id"]
+                    project_id,
+                    task_id,
+                    run_id=run_id,
+                    session_id=self._session_id,
+                    step=steps,
+                )
+                continue
+
+            # A state operation. Master is the only writer. History and the
+            # YAML project files are separate stores: the decision above is
+            # the intent, the mutation happens here, and operation_result
+            # follows. A crash between the two leaves ProjectState
+            # authoritative and an audit gap in history, nothing more.
+            batch = proposal.execute(self._interface)
+            for outcome in batch.results:
+                self._record_result(
+                    run_id, project_id, steps, self._task_of(operation), outcome
+                )
+            if not batch.all_successful:
+                return stop(
+                    STOP_OPERATION_FAILED, decision, self._describe_failures(batch)
                 )
 
-        return LoopResult(
-            stop_reason=STOP_STEP_LIMIT, steps=steps, last_output=last_output
-        )
+        return stop(STOP_STEP_LIMIT)
 
 
 def run_autonomous(
@@ -322,6 +468,7 @@ def run_autonomous(
     verification_backend: VerificationBackend,
     request: str = DEFAULT_REQUEST,
     max_steps: int = 20,
+    history: Optional[HistoryStore] = None,
 ) -> LoopResult:
     """Entry point. Every collaborator is injected, nothing is hard-coded.
 
@@ -336,4 +483,5 @@ def run_autonomous(
         verification_backend,
         request=request,
         max_steps=max_steps,
+        history=history,
     ).run(project_id)

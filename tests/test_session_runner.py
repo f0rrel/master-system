@@ -125,6 +125,10 @@ def start_task(task_id="t1", status="in_progress"):
     )
 
 
+def run_task(task_id="t1"):
+    return act({"operation": "run_task", "project_id": "alpha", "task_id": task_id})
+
+
 def no_op(decision="wait"):
     return json.dumps({"decision": decision, "reason": "nothing to do"})
 
@@ -166,7 +170,7 @@ def test_start_records_the_stop_reason(projects, tmp_path):
 
 def test_start_records_the_latest_progress(projects, tmp_path):
     runner = make_runner(
-        projects, [start_task(), start_task(status="completed")], tmp_path
+        projects, [start_task(), run_task(), start_task(status="completed")], tmp_path
     )
 
     session = runner.start("alpha", "finish t1", "run-1")
@@ -539,6 +543,14 @@ def act(task_id, status):
     }})
 
 
+def dispatch(task_id):
+    return json.dumps({{
+        "decision": "act",
+        "reason": "run it",
+        "operation": {{"operation": "run_task", "project_id": "alpha", "task_id": task_id}},
+    }})
+
+
 def runner(replies, backend):
     return SessionRunner(
         Master(PROJECTS), Once(replies), Backend() if backend is None else backend,
@@ -553,7 +565,7 @@ if phase == "start":
     # Finish t1, then decline to continue: the session ends with real work
     # still outstanding, which is what makes the next process meaningful.
     session = runner(
-        [act("t1", "in_progress"), act("t1", "completed"),
+        [act("t1", "in_progress"), dispatch("t1"), act("t1", "completed"),
          json.dumps({{"decision": "wait", "reason": "stopping here"}})],
         None,
     ).start("alpha", "finish t1", "durable-1")
@@ -587,7 +599,7 @@ elif phase == "inspect":
 elif phase == "resume":
     backend = Backend()
     session = runner(
-        [act("t2", "in_progress"), act("t2", "completed")], backend
+        [act("t2", "in_progress"), dispatch("t2"), act("t2", "completed")], backend
     ).resume("durable-1")
     print(json.dumps({{
         "status": session.status.value,
@@ -616,7 +628,7 @@ def _run_phase(root, phase):
 
 def test_a_session_survives_the_process_that_made_it(tmp_path):
     started = _run_phase(tmp_path, "start")
-    assert started["steps"] == 3
+    assert started["steps"] == 4
     assert started["stop_reason"] == STOP_MASTER
 
     # A different interpreter, with no shared memory of the first one.
@@ -624,7 +636,7 @@ def test_a_session_survives_the_process_that_made_it(tmp_path):
 
     assert inspected["session_id"] == "durable-1"
     assert inspected["objective"] == "finish t1"
-    assert inspected["steps"] == 3
+    assert inspected["steps"] == 4
     assert inspected["stop_reason"] == STOP_MASTER
     assert inspected["task_id"] == "t1"
     assert inspected["progress"]["verification_verdict"] == "pass"
@@ -638,7 +650,7 @@ def test_work_continues_in_a_fresh_process_from_persisted_state(tmp_path):
 
     resumed = _run_phase(tmp_path, "resume")
 
-    assert resumed["steps"] == 5, "the resumed run added its own two steps"
+    assert resumed["steps"] == 7, "the resumed run added its own three steps"
     assert resumed["worker_calls"] == 1, "a worker really ran in the new process"
     assert resumed["task_id"] == "t2", "the resumed run picked up the outstanding task"
     assert resumed["status"] == "stopped"
@@ -650,5 +662,5 @@ def test_the_success_criterion_end_to_end(tmp_path):
     _run_phase(tmp_path, "inspect")
     final = _run_phase(tmp_path, "resume")
 
-    assert final["steps"] == 5
+    assert final["steps"] == 7
     assert final["worker_calls"] == 1

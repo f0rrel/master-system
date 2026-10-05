@@ -127,6 +127,12 @@ def start():
     )
 
 
+def dispatch(task_id="t1", project_id="alpha"):
+    return act(
+        {"operation": "run_task", "project_id": project_id, "task_id": task_id}
+    )
+
+
 def finish():
     return act(
         {
@@ -162,7 +168,9 @@ def status_of(master, task_id="t1"):
 
 
 def test_a_ready_task_runs_the_whole_path_to_completed(master):
-    loop, provider, backend, verifier = build(master, [start(), finish()])
+    loop, provider, backend, verifier = build(
+        master, [start(), dispatch(), finish()]
+    )
 
     result = loop.run("alpha")
 
@@ -170,20 +178,22 @@ def test_a_ready_task_runs_the_whole_path_to_completed(master):
     assert status_of(master) == "completed"
     assert len(backend.calls) == 1
     assert len(verifier.calls) == 1
-    assert len(provider.prompts) == 2
-    assert result.steps == 2
+    assert len(provider.prompts) == 3
+    assert result.steps == 3
 
 
 def test_execution_and_verification_results_are_fed_back_to_master(master):
-    loop, provider, backend, verifier = build(master, [start(), finish()])
+    loop, provider, backend, verifier = build(
+        master, [start(), dispatch(), finish()]
+    )
 
     loop.run("alpha")
 
-    # The second decision was made with the first turn's outcome in view.
-    assert len(provider.prompts) == 2
-    assert "last_result" in provider.prompts[1]
-    assert '"status": "success"' in provider.prompts[1]
-    assert '"verdict": "pass"' in provider.prompts[1]
+    # The decision after run_task was made with its outcome in view.
+    assert len(provider.prompts) == 3
+    assert "last_result" in provider.prompts[2]
+    assert '"status": "success"' in provider.prompts[2]
+    assert '"verdict": "pass"' in provider.prompts[2]
 
 
 # --- 2. worker failure ----------------------------------------------------
@@ -192,7 +202,7 @@ def test_execution_and_verification_results_are_fed_back_to_master(master):
 def test_a_worker_failure_reaches_master_and_does_not_complete(master):
     loop, provider, backend, verifier = build(
         master,
-        [start(), no_op("wait")],
+        [start(), dispatch(), no_op("wait")],
         exec_result=ExecutionResult(status="failed", reason="boom"),
         verify_result=VerificationResult(verdict="fail", summary="no output"),
     )
@@ -202,8 +212,8 @@ def test_a_worker_failure_reaches_master_and_does_not_complete(master):
     assert result.stop_reason == STOP_MASTER
     assert result.decision.decision is Decision.WAIT
     assert status_of(master) == "in_progress"
-    assert '"status": "failed"' in provider.prompts[1]
-    assert '"verdict": "fail"' in provider.prompts[1]
+    assert '"status": "failed"' in provider.prompts[2]
+    assert '"verdict": "fail"' in provider.prompts[2]
 
 
 # --- 3. QA failure --------------------------------------------------------
@@ -212,7 +222,7 @@ def test_a_worker_failure_reaches_master_and_does_not_complete(master):
 def test_a_failed_qa_reaches_master_and_does_not_complete(master):
     loop, provider, backend, verifier = build(
         master,
-        [start(), no_op("wait")],
+        [start(), dispatch(), no_op("wait")],
         exec_result=ExecutionResult(status="success", reason="ok"),
         verify_result=VerificationResult(verdict="fail", summary="wrong output"),
     )
@@ -221,7 +231,7 @@ def test_a_failed_qa_reaches_master_and_does_not_complete(master):
 
     assert result.stop_reason == STOP_MASTER
     assert status_of(master) == "in_progress"
-    assert '"verdict": "fail"' in provider.prompts[1]
+    assert '"verdict": "fail"' in provider.prompts[2]
 
 
 # --- 4. Master stops ------------------------------------------------------

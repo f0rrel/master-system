@@ -491,6 +491,13 @@ def act(task_id, status):
     )
 
 
+def dispatch(task_id):
+    return (
+        '{"decision": "act", "reason": "run it", "operation": '
+        '{"operation": "run_task", "project_id": "p", "task_id": "%s"}}' % task_id
+    )
+
+
 class SubprocessPytestVerifier:
     """Deterministic verification: run the worker's real tests for real."""
 
@@ -535,7 +542,9 @@ def test_the_full_loop_runs_through_ollama_without_touching_the_loop(tmp_path):
 
     baseline = SubprocessPytestVerifier()
     master = Master(root)
-    provider = ScriptedProvider(act("t1", "in_progress"), act("t1", "completed"))
+    provider = ScriptedProvider(
+        act("t1", "in_progress"), dispatch("t1"), act("t1", "completed")
+    )
 
     # The "model" writes the implementation the task asked for, then stops.
     transport = FakeTransport(
@@ -571,7 +580,9 @@ def test_the_loop_is_unchanged_by_which_backend_it_was_given(tmp_path):
         work = scratch / "ws"
         work.mkdir()
         master = Master(root)
-        provider = ScriptedProvider(act("t1", "in_progress"), act("t1", "completed"))
+        provider = ScriptedProvider(
+            act("t1", "in_progress"), dispatch("t1"), act("t1", "completed")
+        )
         loop = AutonomousLoop(
             master, provider, backend_factory(work),
             SubprocessPytestVerifier(), request="r", max_steps=5,

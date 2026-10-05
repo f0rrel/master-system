@@ -14,6 +14,7 @@ from core.reasoning import (
     ImpactLevel,
     InvalidOperationError,
     Operation,
+    OperationKind,
     OperationResult,
     OperationSpec,
     ReasoningInterface,
@@ -1238,16 +1239,28 @@ def test_an_empty_batch_is_vacuously_successful(interface):
 # --- the allowlist cannot drift from Master -----------------------------
 
 
-def test_every_operation_maps_to_a_method_master_already_has():
-    for name, spec in SPECS.items():
+STATE_SPECS = {
+    name: spec for name, spec in SPECS.items() if spec.kind is OperationKind.STATE
+}
+
+
+def test_every_state_operation_maps_to_a_method_master_already_has():
+    for name, spec in STATE_SPECS.items():
         assert hasattr(Master, spec.method), f"{name} -> Master.{spec.method}"
+
+
+def test_dispatch_operations_name_no_master_method():
+    dispatch = {n: s for n, s in SPECS.items() if s.kind is OperationKind.DISPATCH}
+
+    assert set(dispatch) == {"run_task"}
+    assert all(spec.method is None for spec in dispatch.values())
 
 
 def test_the_argument_table_matches_masters_real_signatures():
     """If Master gains or renames a parameter, this must be updated too."""
     import inspect
 
-    for name, spec in SPECS.items():
+    for name, spec in STATE_SPECS.items():
         parameters = [
             parameter
             for parameter in inspect.signature(
@@ -1308,6 +1321,7 @@ def test_the_allowlist_is_exactly_the_documented_operations():
         "update_milestone",
         "create_task",
         "update_task",
+        "run_task",
     }
 
 
@@ -1318,7 +1332,7 @@ def test_the_allowlist_does_not_grow_by_reflecting_over_master():
         for name in vars(Master)
         if not name.startswith("_") and callable(getattr(Master, name))
     }
-    exposed = {spec.method for spec in SPECS.values()}
+    exposed = {spec.method for spec in STATE_SPECS.values()}
 
     assert exposed < public
     assert "list_projects" not in exposed
