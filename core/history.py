@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -37,6 +38,7 @@ from typing import Iterable, Mapping, Optional, Protocol, runtime_checkable
 
 __all__ = [
     "ATTEMPT_EVENT_TYPES",
+    "EVENT_ID_PATTERN",
     "MAX_PAYLOAD_BYTES",
     "EventType",
     "HistoryEvent",
@@ -44,6 +46,7 @@ __all__ = [
     "InMemoryHistoryStore",
     "InvalidEventError",
     "jsonable",
+    "new_event_id",
     "prepare_event",
 ]
 
@@ -63,6 +66,10 @@ class EventType(Enum):
     RUN_STOPPED = "run_stopped"
     RUN_ERROR = "run_error"
     RUN_INTERRUPTED = "run_interrupted"
+    #: A process started for an attempt (worker or verification): pid, pgid.
+    ATTEMPT_PROCESS = "attempt_process"
+    #: A human integrated a verified attempt's result into the base branch.
+    INTEGRATION = "integration"
 
 
 #: Events that belong to one execution attempt and must name it.
@@ -71,8 +78,17 @@ ATTEMPT_EVENT_TYPES = frozenset(
         EventType.ATTEMPT_FINISHED,
         EventType.VERIFICATION,
         EventType.ATTEMPT_INTERRUPTED,
+        EventType.ATTEMPT_PROCESS,
+        EventType.INTEGRATION,
     }
 )
+
+#: The shape of a generated event id; a caller-provided attempt id must match it.
+EVENT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+
+
+def new_event_id() -> str:
+    return uuid.uuid4().hex
 
 #: Upper bound on one serialised payload. Worker artifacts can carry whole
 #: files; history keeps a fingerprint of anything larger rather than the bytes.
@@ -181,12 +197,18 @@ def prepare_event(
     task_id: object = None,
     attempt_id: object = None,
     payload: object = None,
+    event_id: object = None,
 ) -> dict:
     """Validate one append request and return the row a store should write.
 
     Shared by every store so that the rules cannot differ between them. An
     ``attempt_started`` event names itself as its attempt; the events that
     follow it must name that attempt and its task.
+
+    ``event_id`` may be supplied only for ``attempt_started``: the
+    orchestrator chooses the attempt id first so the event can record the
+    worktree path derived from it before the worktree exists. Stores still
+    refuse a duplicate id.
     """
     try:
         event_type = EventType(type)
@@ -198,7 +220,13 @@ def prepare_event(
     if not isinstance(payload, Mapping):
         raise InvalidEventError("payload must be a mapping")
 
-    event_id = uuid.uuid4().hex
+    if event_id is not None:
+        if event_type is not EventType.ATTEMPT_STARTED:
+            raise InvalidEventError("only attempt_started may supply its event_id")
+        if not isinstance(event_id, str) or not EVENT_ID_PATTERN.match(event_id):
+            raise InvalidEventError("event_id must be 32 lowercase hex characters")
+    else:
+        event_id = new_event_id()
     task_id = _optional_id(task_id, "task_id")
     attempt_id = _optional_id(attempt_id, "attempt_id")
 
@@ -247,6 +275,7 @@ class HistoryStore(Protocol):
         task_id: Optional[str] = None,
         attempt_id: Optional[str] = None,
         payload: Optional[Mapping] = None,
+        event_id: Optional[str] = None,
     ) -> HistoryEvent:
         """Durably record one event and return it."""
         ...
@@ -274,6 +303,8 @@ class InMemoryHistoryStore:
 
     def append(self, **request) -> HistoryEvent:
         row = prepare_event(**request)
+        if any(e.event_id == row["event_id"] for e in self._events):
+            raise InvalidEventError(f"duplicate event_id {row['event_id']}")
         event = HistoryEvent(seq=len(self._events) + 1, **row)
         self._events.append(event)
         return event

@@ -13,7 +13,8 @@ from core.history import (
     InMemoryHistoryStore,
     InvalidEventError,
 )
-from core.sqlite_history import SQLiteHistoryStore
+from core import sqlite_history
+from core.sqlite_history import SCHEMA_VERSION, HistoryMigrationError, SQLiteHistoryStore
 
 CORE = Path(__file__).resolve().parent.parent / "core"
 
@@ -94,7 +95,8 @@ def test_attempt_started_requires_a_task(store):
 
 @pytest.mark.parametrize(
     "event_type",
-    [EventType.ATTEMPT_FINISHED, EventType.VERIFICATION, EventType.ATTEMPT_INTERRUPTED],
+    [EventType.ATTEMPT_FINISHED, EventType.VERIFICATION, EventType.ATTEMPT_INTERRUPTED,
+     EventType.ATTEMPT_PROCESS, EventType.INTEGRATION],
 )
 def test_attempt_outcomes_must_name_their_attempt_and_task(store, event_type):
     with pytest.raises(InvalidEventError):
@@ -199,3 +201,152 @@ def test_only_the_sqlite_store_imports_sqlite3():
                 importers.append(path.name)
 
     assert sorted(set(importers)) == ["sqlite_history.py"]
+
+
+# --- caller-chosen attempt ids --------------------------------------------
+
+
+def test_attempt_started_may_carry_the_orchestrators_attempt_id(store):
+    chosen = "0123456789abcdef0123456789abcdef"
+
+    started = append(store, EventType.ATTEMPT_STARTED, task_id="t1", event_id=chosen)
+
+    assert started.event_id == started.attempt_id == chosen
+
+
+def test_only_attempt_started_may_choose_its_id(store):
+    with pytest.raises(InvalidEventError):
+        append(store, EventType.DECISION, event_id="0123456789abcdef0123456789abcdef")
+
+
+@pytest.mark.parametrize("bad", ["short", "0123456789ABCDEF0123456789ABCDEF", 7, "../x"])
+def test_a_malformed_attempt_id_is_refused(store, bad):
+    with pytest.raises(InvalidEventError):
+        append(store, EventType.ATTEMPT_STARTED, task_id="t1", event_id=bad)
+
+
+def test_a_duplicate_attempt_id_is_refused(store):
+    chosen = "0123456789abcdef0123456789abcdef"
+    append(store, EventType.ATTEMPT_STARTED, task_id="t1", event_id=chosen)
+
+    with pytest.raises(InvalidEventError):
+        append(store, EventType.ATTEMPT_STARTED, task_id="t1", event_id=chosen)
+    assert len(store.events()) == 1
+
+
+# --- schema v2 migration ---------------------------------------------------
+
+V1_SCHEMA = """
+CREATE TABLE events (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE,
+    run_id TEXT NOT NULL, session_id TEXT, project_id TEXT NOT NULL, task_id TEXT,
+    attempt_id TEXT,
+    type TEXT NOT NULL CHECK (type IN ('run_started', 'decision', 'operation_result',
+        'attempt_started', 'attempt_finished', 'verification', 'attempt_interrupted',
+        'run_stopped', 'run_error', 'run_interrupted')),
+    payload TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX ix_events_task ON events(project_id, task_id, seq);
+CREATE INDEX ix_events_session ON events(session_id, seq);
+CREATE INDEX ix_events_attempt ON events(attempt_id);
+CREATE TRIGGER events_no_update BEFORE UPDATE ON events
+BEGIN SELECT RAISE(ABORT, 'history is append-only'); END;
+CREATE TRIGGER events_no_delete BEFORE DELETE ON events
+BEGIN SELECT RAISE(ABORT, 'history is append-only'); END;
+CREATE TABLE schema_meta (version INTEGER NOT NULL);
+INSERT INTO schema_meta (version) VALUES (1);
+"""
+
+
+def make_v1(path, rows=3):
+    raw = sqlite3.connect(str(path))
+    raw.executescript(V1_SCHEMA)
+    for n in range(rows):
+        raw.execute(
+            "INSERT INTO events (event_id, run_id, project_id, type, payload, created_at)"
+            " VALUES (?, 'r1', 'alpha', 'decision', ?, '2026-10-01T00:00:00+00:00')",
+            (f"{n:032x}", f'{{"n": {n}}}'),
+        )
+    raw.commit()
+    raw.close()
+
+
+def version_of(path):
+    raw = sqlite3.connect(str(path))
+    try:
+        return raw.execute("SELECT version FROM schema_meta").fetchone()[0]
+    finally:
+        raw.close()
+
+
+def test_a_v1_database_is_backed_up_then_migrated(tmp_path):
+    path = tmp_path / "history.sqlite"
+    make_v1(path)
+
+    store = SQLiteHistoryStore(path)
+
+    assert version_of(path) == SCHEMA_VERSION == 2
+    assert [e.payload["n"] for e in store.events()] == [0, 1, 2]
+    assert [e.seq for e in store.events()] == [1, 2, 3]
+    # The new types fit, and numbering continues after the old rows.
+    new = store.append(type=EventType.ATTEMPT_PROCESS, run_id="r2", project_id="alpha",
+                       task_id="t1", attempt_id="a" * 32, payload={"pid": 1})
+    assert new.seq == 4
+    # The copy is the untouched v1 database.
+    backup = store.migration_backup
+    assert backup.name.startswith("history.sqlite.bak-v1-")
+    assert backup.parent == path.parent
+    assert version_of(backup) == 1
+    store.close()
+
+
+def test_the_migrated_table_is_still_append_only(tmp_path):
+    path = tmp_path / "history.sqlite"
+    make_v1(path)
+    SQLiteHistoryStore(path).close()
+
+    raw = sqlite3.connect(str(path))
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+        raw.execute("UPDATE events SET type = 'decision'")
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+        raw.execute("DELETE FROM events")
+    with pytest.raises(sqlite3.IntegrityError):
+        raw.execute("INSERT INTO events (event_id, run_id, project_id, type, payload,"
+                    " created_at) VALUES ('x', 'r', 'p', 'made_up', '{}', 't')")
+    raw.close()
+
+
+def test_migration_is_refused_when_the_backup_cannot_be_made(tmp_path, monkeypatch):
+    path = tmp_path / "history.sqlite"
+    make_v1(path)
+    monkeypatch.setattr(sqlite_history, "_backup_stamp", lambda: "FIXED")
+    # Something already occupies the backup's name, so the copy cannot be made.
+    (tmp_path / "history.sqlite.bak-v1-FIXED").mkdir()
+
+    with pytest.raises(HistoryMigrationError, match="backup"):
+        SQLiteHistoryStore(path)
+
+    assert version_of(path) == 1
+    raw = sqlite3.connect(str(path))
+    assert raw.execute("SELECT count(*) FROM events").fetchone()[0] == 3
+    raw.close()
+
+
+def test_a_newer_schema_is_refused(tmp_path):
+    path = tmp_path / "history.sqlite"
+    SQLiteHistoryStore(path).close()
+    raw = sqlite3.connect(str(path))
+    raw.execute("UPDATE schema_meta SET version = 99")
+    raw.commit()
+    raw.close()
+
+    with pytest.raises(RuntimeError, match="99"):
+        SQLiteHistoryStore(path)
+
+
+def test_a_new_database_is_created_at_the_current_version_without_a_backup(tmp_path):
+    store = SQLiteHistoryStore(tmp_path / "h.sqlite")
+
+    assert version_of(tmp_path / "h.sqlite") == SCHEMA_VERSION
+    assert store.migration_backup is None
+    assert list(tmp_path.glob("*.bak-*")) == []
