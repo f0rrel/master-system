@@ -23,6 +23,74 @@ VALID_MILESTONE_STATUSES = {
 }
 
 
+ACCEPTANCE_KEYS = frozenset({"commands", "protected_paths"})
+
+
+def acceptance_problems(acceptance):
+    """Why a task's ``acceptance`` is malformed, as a list of messages.
+
+    ``acceptance`` is the human-written definition of done:
+    ``{commands: [str, ...], protected_paths: [glob, ...]}``. ``commands`` is
+    required and non-empty; ``protected_paths`` is optional. Globs are
+    repository-relative: no absolute paths and no ``..``.
+    """
+    if not isinstance(acceptance, dict):
+        return ["acceptance must be a mapping"]
+    problems = []
+    unknown = sorted(set(acceptance) - ACCEPTANCE_KEYS)
+    if unknown:
+        problems.append(f"acceptance has unknown keys {unknown}")
+    commands = acceptance.get("commands")
+    if (
+        not isinstance(commands, list)
+        or not commands
+        or not all(isinstance(c, str) and c.strip() for c in commands)
+    ):
+        problems.append("acceptance.commands must be a non-empty list of non-empty strings")
+    protected = acceptance.get("protected_paths", [])
+    if not isinstance(protected, list) or not all(
+        isinstance(g, str) and g.strip() for g in protected
+    ):
+        problems.append("acceptance.protected_paths must be a list of non-empty strings")
+    else:
+        for glob in protected:
+            if glob.startswith("/") or ".." in Path(glob).parts:
+                problems.append(
+                    f"acceptance.protected_paths entry {glob!r} must be relative "
+                    "and must not contain '..'"
+                )
+    return problems
+
+
+def repository_problems(project):
+    """Why project.yaml's ``repository`` / ``base_branch`` are malformed.
+
+    Shape only: whether the path exists and is a git repository is checked by
+    the orchestrator when an attempt is about to run.
+    """
+    repository = project.get("repository")
+    base_branch = project.get("base_branch")
+    if repository is None:
+        if base_branch is not None:
+            return ["project.yaml has 'base_branch' but no 'repository'"]
+        return []
+    problems = []
+    if not isinstance(repository, str) or not repository.strip():
+        problems.append("project.yaml 'repository' must be a non-empty string")
+    elif not Path(repository).expanduser().is_absolute():
+        problems.append("project.yaml 'repository' must be an absolute path")
+    if (
+        not isinstance(base_branch, str)
+        or not base_branch.strip()
+        or base_branch.startswith("-")
+        or any(c.isspace() for c in base_branch)
+    ):
+        problems.append(
+            "project.yaml 'base_branch' must be a branch name when 'repository' is set"
+        )
+    return problems
+
+
 def _count_by_status(items, statuses):
     counts = {status: 0 for status in sorted(statuses)}
 
@@ -221,6 +289,8 @@ class ProjectState:
             if not project.get(field):
                 problems.append(f"project.yaml is missing '{field}'")
 
+        problems.extend(repository_problems(project))
+
         milestone_ids = set()
 
         for milestone in milestones:
@@ -279,6 +349,12 @@ class ProjectState:
                 problems.append(
                     f"task {task_id} references unknown milestone "
                     f"'{milestone_id}'"
+                )
+
+            if "acceptance" in task:
+                problems.extend(
+                    f"task {task_id}: {problem}"
+                    for problem in acceptance_problems(task["acceptance"])
                 )
 
             depends_on = task.get("depends_on")

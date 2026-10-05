@@ -775,6 +775,7 @@ def test_parser_exposes_exactly_the_documented_commands():
         "update-milestone",
         "create-task",
         "update-task",
+        "set-acceptance",
     }
 
 

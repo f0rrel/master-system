@@ -613,6 +613,7 @@ def test_master_does_not_invent_public_methods_beyond_the_documented_api():
         "update_milestone",
         "create_task",
         "update_task",
+        "set_task_acceptance",
         "project_state",
     }
 

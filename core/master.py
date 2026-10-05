@@ -167,6 +167,14 @@ class Master:
         """Change a task in project_id and return the stored record."""
         return self._work(project_id).update_task(task_id, **changes)
 
+    def set_task_acceptance(self, project_id, task_id, acceptance):
+        """Set or (with None) clear a task's acceptance criteria.
+
+        For humans only. It is deliberately not in the operation allowlist,
+        so no model decision can reach it.
+        """
+        return self._work(project_id).set_task_acceptance(task_id, acceptance)
+
     def _resolve(self, project_id):
         """Return the ProjectState for project_id.
 
@@ -443,6 +451,27 @@ def _command_update_task(master, args):
     return 0
 
 
+def _command_set_acceptance(master, args):
+    if args.clear:
+        if args.command or args.protect:
+            print("error: --clear cannot be combined with --command or --protect",
+                  file=sys.stderr)
+            return 1
+        acceptance = None
+    else:
+        if not args.command:
+            print("error: pass at least one --command, or --clear", file=sys.stderr)
+            return 1
+        acceptance = {"commands": list(args.command)}
+        if args.protect:
+            acceptance["protected_paths"] = list(args.protect)
+
+    record = master.set_task_acceptance(args.project_id, args.task_id, acceptance)
+    _print_record("ACCEPTANCE UPDATED", record, ("id", "title", "acceptance"))
+
+    return 0
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="python -m core.master",
@@ -549,6 +578,27 @@ def build_parser():
     update_task.add_argument("--status", help="New task status.")
     update_task.add_argument("--assignee", help="Assign the task to someone.")
     update_task.set_defaults(handler=_command_update_task, mutates=True)
+
+    set_acceptance = commands.add_parser(
+        "set-acceptance",
+        help="Set or clear a task's acceptance criteria (humans only).",
+        description="Set a task's acceptance criteria: the shell commands that "
+                    "must pass and the paths an attempt must not touch.",
+    )
+    set_acceptance.add_argument("project_id", help="Project id.")
+    set_acceptance.add_argument("task_id", help="Task id.")
+    set_acceptance.add_argument(
+        "--command", action="append", default=[],
+        help="A shell command that must exit 0. Repeat for several.",
+    )
+    set_acceptance.add_argument(
+        "--protect", action="append", default=[], metavar="GLOB",
+        help="A repository-relative glob an attempt must not change. Repeatable.",
+    )
+    set_acceptance.add_argument(
+        "--clear", action="store_true", help="Remove the acceptance criteria."
+    )
+    set_acceptance.set_defaults(handler=_command_set_acceptance, mutates=True)
 
     return parser
 

@@ -28,6 +28,7 @@ if __package__ in (None, ""):
 
 from core.project_state import (
     VALID_MILESTONE_STATUSES,
+    acceptance_problems,
     VALID_TASK_STATUSES,
     ProjectState,
     write_yaml_atomically,
@@ -37,7 +38,9 @@ from core.project_state import (
 TASK_FIELDS = ("id", "milestone", "title", "status", "assigned_to")
 MILESTONE_FIELDS = ("id", "name", "status")
 
-# Ids are identity: they are never rewritten in place.
+# Ids are identity: they are never rewritten in place. ``acceptance`` is
+# deliberately absent: it is the human's definition of done and is changed only
+# through set_task_acceptance, which no model operation reaches.
 MUTABLE_TASK_FIELDS = ("milestone", "title", "status", "assigned_to")
 MUTABLE_MILESTONE_FIELDS = ("name", "status")
 
@@ -271,6 +274,28 @@ class WorkManager:
             _require_text(changes["assigned_to"], "Assigned to")
 
         record.update(changes)
+        write_yaml_atomically(self._tasks_path, tasks)
+
+        return record
+
+    def set_task_acceptance(self, task_id, acceptance):
+        """Set or, with ``None``, remove a task's acceptance criteria.
+
+        Human-only: no operation in ``core.reasoning.SPECS`` maps here.
+        """
+        if acceptance is not None:
+            problems = acceptance_problems(acceptance)
+            if problems:
+                raise InvalidFieldError("; ".join(problems))
+
+        tasks = deepcopy(self._state.snapshot().tasks_doc)
+        record = _find(tasks.get("tasks", []), task_id, "Task")
+
+        if acceptance is None:
+            record.pop("acceptance", None)
+        else:
+            record["acceptance"] = deepcopy(acceptance)
+
         write_yaml_atomically(self._tasks_path, tasks)
 
         return record
