@@ -8,7 +8,7 @@
 | | |
 | --- | --- |
 | Last updated | 2026-10-05 |
-| Written against | branch `m1-contain-verify` (from `claude-week` `dab0928`) |
+| Written against | branch `m1-contain-verify`, end of Milestone 1 |
 | Owner | f0rrel (GitHub) |
 | Local path (owner) | `~/AI/master-system-big-pickle` |
 | Remote | `https://github.com/f0rrel/master-system` (private) |
@@ -97,20 +97,20 @@ leave room for it without implementing it early.
 
 | Item | State (2026-10-05) |
 | --- | --- |
-| Current milestone | **Milestone 1, "Contain and verify"** (approved 2026-10-05), on branch `m1-contain-verify`. It closes the earlier "Trustworthy loop" milestone, which is implemented on `claude-week` but not closed (see [§11](#11-known-gaps)). Status: **plan written, waiting for owner approval** (`docs/plans/m1-contain-verify.md`). |
-| Tests | 983 passed, 1 skipped, 5 integration tests deselected (`python -m pytest -q -m "not integration"`) |
-| Can the autonomous loop be run from a CLI? | **No.** It runs only inside tests. No composition root exists yet (gap H5). |
-| Production verifier in `core/`? | **No.** The only real verifier is a test helper (`SubprocessPytestVerifier` in `tests/test_ollama_backend.py`). |
-| Workers (execution backends) | `OpenCodeCliBackend` (runs `opencode run`) and `OllamaExecutionBackend` (a homemade tool loop, to be frozen) |
+| Current milestone | **Milestone 1, "Contain and verify": implemented** on branch `m1-contain-verify`; all five acceptance criteria pass (see [§12](#12-roadmap)). Not merged. It also closes the earlier "Trustworthy loop" milestone. **Next: Milestone 2, "Run it for real"**: not started, waiting for the owner. |
+| Tests | 1133 passed, 1 skipped, 5 integration tests deselected (`uv run python -m pytest -q -m "not integration"`, about 45 s; scenario tests start real processes and git worktrees) |
+| Can the autonomous loop be run from a CLI? | **No.** It runs only inside tests. No composition root exists yet (gap H5, Milestone 2). |
+| Production verifier in `core/`? | **Yes:** `AcceptanceVerifier` (`core/acceptance_verifier.py`) checks a task's human-written `acceptance` in the attempt's worktree. |
+| Workers (execution backends) | `OpenCodeCliBackend` (runs `opencode run` through the attempt workspace) and `OllamaExecutionBackend` (a homemade tool loop, to be frozen). Both work only in the worktree the orchestrator gives them. |
 | Reasoning providers (for Master) | Ollama, OpenCode server, DeepSeek API |
-| Branches | `main` = `49c0a4e` (baseline). `claude-week` holds the "Trustworthy loop" work and this README. `m1-contain-verify` branches from `claude-week`. Nothing is merged into `main`. |
+| Branches | `main` = `49c0a4e` (baseline). `claude-week` holds the "Trustworthy loop" work. `m1-contain-verify` (from `claude-week`) holds Milestone 1. Nothing is merged into `main`. |
 | Managed project | `projects/ai-system` is the system's own project. Its tasks are stale: `foundation-001` and `-002` are `in_progress`, although that work was done by hand. **Self-hosting is stopped until Milestone 3** (approved 2026-10-05): no worker runs against this repository. |
 
 ### Next actions
 
-1. Owner reviews and approves the Milestone 1 plan (`docs/plans/m1-contain-verify.md`).
-2. Implement Milestone 1 in small, green, pushed commits; tick the [§12](#12-roadmap)
-   acceptance boxes as each criterion passes.
+1. Owner reviews Milestone 1 (`m1-contain-verify`; plan in `docs/plans/m1-contain-verify.md`)
+   and decides when to merge `claude-week` / `m1-contain-verify` into `main` (§17).
+2. Owner decides the next worker (§17), then starts Milestone 2, "Run it for real".
 
 ---
 
@@ -222,12 +222,21 @@ core/
   deepseek_provider.py   Reasoning provider: DeepSeek API.
   reason_cli.py          CLI: one human-approved proposal (reason -> show -> y/N -> execute).
 
-  execution.py           ExecutionBackend protocol + ExecutionResult (status/reason/artifacts/state_updates).
+  execution.py           ExecutionBackend protocol (execute(task, context, *, workspace)) + ExecutionResult.
   execution_runner.py    TaskExecutionRunner: prepare() (checks, no side effects) + invoke() (the side effect).
-  opencode_backend.py    Worker: the OpenCode CLI.
-  ollama_backend.py      Worker: Ollama tool loop (list/read/write files).
+  opencode_backend.py    Worker: the OpenCode CLI, launched through workspace.run.
+  ollama_backend.py      Worker: Ollama tool loop (list/read/write files), deadline-checked per turn.
   verification.py        VerificationBackend protocol + VerificationResult (pass/fail/needs_human/unable_to_verify).
-  task_orchestrator.py   One attempt: attempt_started -> worker -> attempt_finished -> verification.
+  acceptance_verifier.py AcceptanceVerifier: protected paths + acceptance commands, in the attempt worktree.
+  task_orchestrator.py   One attempt: attempt_started -> worktree -> worker -> commit -> attempt_finished
+                         -> verification. Owns the workspace, deadline and recorded facts.
+  workspace.py           GitWorktrees (one worktree per attempt, snapshot commits, observation,
+                         fast-forward integration), AttemptWorkspace, the isolation rule.
+  worker_process.py      run_process: the one way to start an attempt process (timeout wrapper,
+                         new process group, inherited lock fd).
+  paths.py               RuntimePaths: state dir and worktrees root, outside the repo (XDG).
+  recovery.py            recover_project: close out a project's dead runs/attempts/sessions. No replay.
+  attempts.py            Human CLI: `integrate` a verified attempt (fast-forward only).
 
   autonomous_loop.py     The loop: inspect -> ask Master -> act (one operation) -> repeat until a stop reason.
   evidence.py            Reads history into neutral evidence: latest attempt, attempt counts,
@@ -235,15 +244,17 @@ core/
   history.py             Event types, HistoryEvent, the HistoryStore protocol, InMemoryHistoryStore,
                          payload bounding.
   sqlite_history.py      SQLiteHistoryStore. The ONLY module that imports sqlite3 (enforced by tests).
-  run_lock.py            ProjectLock: non-blocking flock on <project>/.run.lock.
+  run_lock.py            ProjectLock: non-blocking flock on <project>/.run.lock; fileno() for workers.
 
   work_session.py        WorkSession (a durable record of one objective across runs), status lifecycle.
-  session_store.py       FileSessionStore: one YAML file per session under sessions/.
-  session_runner.py      SessionRunner: lock -> recover dead runs -> run the loop -> save the session.
+  session_store.py       FileSessionStore: one YAML file per session in the state dir.
+  session_runner.py      SessionRunner: lock -> recover the project -> run the loop -> save the session.
 
 projects/ai-system/      The managed project (the system's own roadmap): project.yaml,
                          milestones.yaml, tasks.yaml.
-tests/                   ~12k lines of pytest. Integration tests are opt-in (marker `integration`).
+tests/                   pytest. conftest.py isolates every test from the owner's XDG dir and git
+                         config. Integration tests are opt-in (marker `integration`).
+docs/plans/              Milestone plans (m1-contain-verify.md).
 
 agents/                  EXPERIMENTS, not part of the control plane:
   bob/                   An early QA-agent persona + identity.md (used by bob.py).
@@ -266,8 +277,9 @@ docker/bob/Dockerfile    An experiment image with openhands-sdk 1.49.6 (a candid
           AutonomousLoop         one decision per turn; records history; stop reasons
              |              \
    ReasoningInterface        TaskOrchestrator  (DISPATCH: run_task)
-   (approval policy;            |-- TaskExecutionRunner -> ExecutionBackend (worker)
-    refuses DISPATCH)           |-- VerificationBackend (verifier)
+   (approval policy;            |-- GitWorktrees: worktree per attempt, snapshot commit
+    refuses DISPATCH            |-- TaskExecutionRunner -> ExecutionBackend (worker, in AttemptWorkspace)
+    and INTEGRATE)              |-- VerificationBackend (e.g. AcceptanceVerifier, same worktree)
              |                  `-- HistoryStore (attempt events)
           Master                (the only writer of project state)
              |
@@ -275,7 +287,9 @@ docker/bob/Dockerfile    An experiment image with openhands-sdk 1.49.6 (a candid
              |
           ProjectState  ->  projects/<id>/*.yaml
 
-   SessionRunner wraps AutonomousLoop with ProjectLock + recovery + WorkSession persistence.
+   SessionRunner wraps AutonomousLoop with ProjectLock + project-wide recovery + WorkSession persistence.
+   Worker processes start only through AttemptWorkspace.run -> worker_process.run_process.
+   Humans integrate verified attempts with core.attempts (never the loop).
    HistoryEvidence (evidence.py) reads HistoryStore for the completion gate, attempt limits and Master's context.
 ```
 
@@ -289,8 +303,11 @@ docker/bob/Dockerfile    An experiment image with openhands-sdk 1.49.6 (a candid
 5. decision != act                      -> stop: master_stop
    operation gated by policy            -> stop: approval_required (reason: policy)
    completion gate not satisfied        -> stop: approval_required (reason: e.g. verification_fail)
-6a. DISPATCH (run_task): check project, executable (in_progress), attempt limit
-    -> TaskOrchestrator: attempt_started -> worker -> attempt_finished -> verification
+6a. DISPATCH (run_task): check project, executable (in_progress), repository (no_repository,
+    workspace_refused, repository_unusable), attempt limit
+    -> TaskOrchestrator: attempt_started -> git worktree add -> worker (deadline, lock fd)
+       -> snapshot commit -> attempt_finished -> verification (finished attempts only)
+6c. INTEGRATE (integrate_attempt): always stops for approval; only a human integrates
 6b. STATE: ReasoningInterface -> Master writes YAML -> operation_result event(s)
     any failure -> stop: operation_failed
 7. Repeat until max_steps (default 20) -> stop: step_limit
@@ -326,11 +343,13 @@ Starting work takes **two decisions**: `update_task(status=in_progress)`, then `
 | `update_milestone` | STATE | project_id, milestone_id, any of name/status | ROUTINE |
 | `create_task` | STATE | project_id, task_id, milestone, title, [status, assigned_to] | ROUTINE |
 | `update_task` | STATE | project_id, task_id, any of milestone/title/status/assigned_to | ROUTINE |
-| `run_task` | DISPATCH | project_id, task_id | ROUTINE, but refused unless the task is `in_progress` and under the attempt limit |
+| `run_task` | DISPATCH | project_id, task_id | ROUTINE, but refused unless the task is `in_progress`, under the attempt limit, and its project has a usable, isolated repository |
+| `integrate_attempt` | INTEGRATE | project_id, task_id, attempt_id | CRITICAL: always gated; `ReasoningInterface` refuses it (`human_only`) even when approved |
 
 - An operation that is not in SPECS is gated.
 - A new SPECS entry defaults to `CRITICAL`, which means gated.
 - `ReasoningInterface.execute` always refuses DISPATCH operations (`dispatch_only`); only the loop dispatches.
+- Task `acceptance` is not in the vocabulary: only humans set it (`core.master set-acceptance` or YAML).
 - **Known gap (H2):** policy is keyed on the operation *name*. Spec edits, cancels,
   reopening and milestone completion are all autonomous today.
 
@@ -341,8 +360,10 @@ Starting work takes **two decisions**: `update_task(status=in_progress)`, then `
 | Task status | `planned`, `in_progress`, `blocked`, `completed`, `cancelled` (no transition rules yet) |
 | Milestone status | `planned`, `in_progress`, `completed` |
 | Readiness (`calculate_readiness`) | `ready` (planned, deps completed), `blocked`, `waiting` (already started or finished) |
-| ExecutionResult.status (worker claim) | `success`, `failed`, `partial`, `blocked`, `cancelled`, `needs_human` |
-| Attempt outcome in evidence | the above, or `error` (worker raised), `interrupted` (found by recovery), `unfinished` |
+| ExecutionResult.status (worker claim) | `success`, `failed`, `partial`, `blocked`, `cancelled`, `needs_human`; shown to Master only as `worker_reported_status` |
+| Attempt outcome (orchestrator) | `finished`, `timed_out`, `error` (worker or workspace raised), `interrupted` (found by recovery), `unfinished` |
+| `run_task` refusals | `not_executable`, `wrong_project`, `no_repository`, `workspace_refused`, `repository_unusable`, `attempt_limit` |
+| Completion gate reasons | `no_attempt`, `latest_attempt_interrupted` / `_unfinished` / `_errored` / `_timed_out`, `spec_changed`, `not_verified`, `verification_errored`, `verification_<verdict>` |
 | Verification verdict | `pass`, `fail`, `needs_human`, `unable_to_verify` |
 | Loop stop reasons | `no_actionable_work`, `master_stop`, `approval_required`, `step_limit`, `unusable_reasoning_reply`, `operation_failed`, `attempt_limit` |
 | Runner stop reasons | `error`, `interrupted` |
@@ -352,13 +373,17 @@ Starting work takes **two decisions**: `update_task(status=in_progress)`, then `
 
 - **Completion gate** (`HistoryEvidence.completion_gate`): an autonomous
   `status=completed` applies only if the task's latest attempt, anywhere in history,
-  finished and was verified `pass`. Otherwise the loop stops with `approval_required`
-  and a reason such as `no_attempt`, `latest_attempt_interrupted` or `verification_fail`.
+  - finished (not timed out, errored or interrupted),
+  - was run against the task's spec as it will be **after** the operation
+    (`spec_hash` = sha256 of `{title, acceptance}`), and
+  - was verified `pass`.
+
+  Otherwise the loop stops with `approval_required` and the gate reason (§7.5).
 - **Attempt limit:** 3 attempts per (session, task) by default (`DEFAULT_MAX_ATTEMPTS`).
-  - Errored and interrupted attempts count.
+  - Errored, timed-out and interrupted attempts count.
   - A 4th attempt is refused with `attempt_limit`, which means a human is needed.
-- **Known gaps:** the gate is not bound to the task spec or code revision (H1, verified),
-  and a new session resets the budget (H4).
+- **Known gaps:** a new session resets the budget (H4, Milestone 3); reopening a task
+  does not invalidate an earlier pass (moved to Milestone 3, P7).
 
 ### 7.7 History events (`core/history.py`)
 
@@ -367,32 +392,47 @@ Starting work takes **two decisions**: `update_task(status=in_progress)`, then `
 | `run_started` | start of `AutonomousLoop.run` | request, max_steps |
 | `decision` | every turn, before acting | decision, reason, operation, pending_approval, gate_reason |
 | `operation_result` | after a STATE operation, or a refused `run_task` | status, reason, message, value |
-| `attempt_started` | before the worker runs (committed first) | its event_id becomes the attempt_id |
-| `attempt_finished` | after the worker returns or raises | status (or `error`), reason, artifacts, worker identity (opaque) |
-| `verification` | after the verifier | verdict, summary, findings, evidence |
-| `attempt_interrupted` | recovery found no outcome | no replay |
+| `attempt_started` | before the worktree exists (committed first) | the orchestrator's attempt_id; repository, base_branch, base_sha, worktree, branch, spec_hash, timeout_s, deadline_at |
+| `attempt_process` | right after a worker or verification process starts | phase, pid, pgid, deadline_at |
+| `attempt_finished` | after the worker returns, raises or times out, and the worktree is committed | outcome, worker_reported_status, processes, result_sha, files_changed, diffstat; reason/artifacts/worker as opaque provenance |
+| `verification` | after the verifier (finished attempts only) | verdict, summary, findings, evidence (orchestrator facts), deadline_at |
+| `attempt_interrupted` | recovery found no outcome | worktree_present, git_status, diffstat, untracked; no replay |
+| `integration` | a human integrated an attempt | base_branch, previous_sha, result_sha, method, actor |
 | `run_stopped` / `run_error` / `run_interrupted` | end of run / exception / recovery | exactly one per run |
 
 Payloads are JSON and capped at 256 KiB. Long strings are cut down to a sha256
-fingerprint plus their head. The schema is `SCHEMA_VERSION = 1`, and updates and
-deletes are aborted by triggers.
+fingerprint plus their head. The schema is `SCHEMA_VERSION = 2`; a v1 database is
+copied to `history.sqlite.bak-v1-<timestamp>` and then migrated in one transaction.
+Updates and deletes are aborted by triggers. SQLite waits up to 5 s on a busy database.
 
-### 7.8 Sessions, lock and recovery
+### 7.8 Sessions, lock, workspaces and recovery
 
 - `SessionRunner.start(project_id, objective, session_id)` creates the session and runs once.
   `resume(session_id)` runs one more bounded pass in any process.
-- Every run holds `ProjectLock` (`<project>/.run.lock`). The `core.master` CLI and
-  `reason_cli` take the same lock for writes and refuse while it is held.
-- If a session says `running` but the lock can be acquired, its process is dead.
-  Recovery then:
-  1. appends `attempt_interrupted` for each open attempt;
+- Every autonomous run holds `ProjectLock` (`<project>/.run.lock`); a loop without a
+  lock takes it itself. Every worker and verification process inherits the lock's fd,
+  so **a worker that outlives its loop keeps the project locked** until it exits.
+  The `core.master` CLI, `reason_cli` and `core.attempts integrate` take the same lock
+  for writes and refuse while it is held.
+- **Workspaces.** Each attempt runs in `git worktree add <worktrees_root>/<project>/<attempt_id>
+  -b attempt/<attempt_id> <base_sha>` in the project's `repository`. The orchestrator
+  commits the result itself (fixed identity, no hooks, unsigned). Worktrees and branches
+  are kept. A repository, worktree or worktrees root may not be, contain or sit inside
+  the projects root, the state dir or the control plane's own source directory.
+- **Deadlines.** Worker processes run under `timeout --signal=TERM --kill-after=30s`
+  in their own process group, so the deadline holds even if the loop dies. The
+  in-process Ollama worker checks the deadline between turns. Past the deadline the
+  attempt is `timed_out` and is not verified.
+- **Recovery** (`core/recovery.py`) runs whenever a history user acquires the lock
+  (SessionRunner, a self-locking loop, integrate). For the whole project it:
+  1. appends `attempt_interrupted` for each open attempt, with its worktree's git status
+     and diff stats;
   2. appends `run_interrupted` for each open run;
-  3. marks the session `stopped (interrupted)`.
+  3. marks every `running` session of the project `stopped (interrupted)`.
 
   Nothing is replayed.
-- **Known gaps:** the lock does not cover the worker's child process; an orphaned worker
-  keeps writing (C2, verified). Recovery only runs when *the same* session is resumed
-  (M2). Approvals cannot be granted programmatically (H3).
+- **Known gaps:** approvals cannot be granted programmatically (H3); there is no cancel
+  command (deferred to Milestone 4).
 
 ---
 
@@ -400,12 +440,13 @@ deletes are aborted by triggers.
 
 | Path | Contents | In git? | Written by |
 | --- | --- | --- | --- |
-| `projects/<id>/project.yaml` | id, name, description, status | yes | humans |
+| `projects/<id>/project.yaml` | id, name, description, status, `repository` (absolute path of the git repo the project manages), `base_branch` | yes | humans |
 | `projects/<id>/milestones.yaml` | `milestones: [{id, name, status}]` | yes | Master |
-| `projects/<id>/tasks.yaml` | `tasks: [{id, milestone, title, status, assigned_to?, depends_on?}]` | yes | Master |
+| `projects/<id>/tasks.yaml` | `tasks: [{id, milestone, title, status, assigned_to?, depends_on?, acceptance?}]`; `acceptance: {commands: [...], protected_paths: [globs]}` is set only by humans | yes | Master (acceptance: humans via `set-acceptance`) |
 | `projects/<id>/.run.lock` | the holder description (informational only) | no (gitignored) | ProjectLock |
 | `$XDG_DATA_HOME/master-system/sessions/<session_id>.yaml` | WorkSession records | no (outside the repo) | SessionRunner |
 | `$XDG_DATA_HOME/master-system/history.sqlite` | the event history | no (outside the repo) | HistoryStore |
+| `$XDG_DATA_HOME/master-system-worktrees/<project>/<attempt_id>/` | one git worktree per attempt (branch `attempt/<attempt_id>`), kept | no (outside the repo) | TaskOrchestrator |
 
 `$XDG_DATA_HOME` defaults to `~/.local/share`. Both paths are configurable
 (`core/paths.py: RuntimePaths`). Before Milestone 1 they defaulted to `sessions/` and
@@ -418,8 +459,9 @@ mv sessions ~/.local/share/master-system/sessions
 mv var/history.sqlite* ~/.local/share/master-system/
 ```
 
-There is no `acceptance` / definition-of-done field on tasks yet; the title is the only
-spec (gap C1).
+A project without `repository` cannot run attempts (`run_task` is refused with
+`no_repository`). `projects/ai-system` has none on purpose: self-hosting is stopped
+until Milestone 3.
 
 ---
 
@@ -432,9 +474,9 @@ by a worker never reaches a prompt unless it is quoted as data.
 | Information | Class | Reaches Master? | Can authorise? |
 | --- | --- | --- | --- |
 | Task status, dependencies, milestones | Authoritative | yes | yes |
-| Task spec / acceptance criteria, once frozen *(planned)* | Human-approved fact | yes | yes: it defines "done" |
+| Task spec / acceptance criteria (`acceptance`, human-set; evidence bound by `spec_hash`) | Human-approved fact | `has_acceptance` only | yes: it defines "done" |
 | Approval records *(planned)* | Human-approved fact | yes | yes, bound to the operation hash and state revision |
-| Attempt facts observed by the orchestrator: times, exit code, base/result SHA, files changed *(partly planned)* | Trusted evidence | yes | yes |
+| Attempt facts observed by the orchestrator: outcome, deadline, pids, exit codes, base/result SHA, files changed, diff stats | Trusted evidence | outcome and changes (exit codes: history only) | yes |
 | Deterministic verdict from protected checks in an orchestrator-owned workspace | Trusted evidence | yes | yes (the completion gate) |
 | Verifier text: test names, failure excerpts | Trusted source, tainted content | bounded and quoted | no |
 | Verdict from a model reviewer *(future)* | Untrusted evidence | labelled | can block, never pass |
@@ -443,8 +485,9 @@ by a worker never reaches a prompt unless it is quoted as data.
 | Master decisions, reasons, proposed tasks and plans | Model suggestion | its own recent decisions | only through policy or approval |
 | Lessons / memory *(future)* | Suggestion until a human confirms it | after confirmation | no |
 
-Today the code deviates from this table in two places. The verifier's input comes
-from the worker (C1), and the worker's claimed status is shown as a neutral outcome (M3).
+Since Milestone 1 the code follows this table: the verifier works only from the
+orchestrator's workspace and facts, and the worker's status reaches Master only as
+`worker_reported_status`.
 
 ---
 
@@ -475,9 +518,21 @@ python -m core.master overview
 python -m core.master status ai-system
 python -m core.master create-task ai-system foundation-005 --milestone foundation --title "..."
 python -m core.master update-task ai-system foundation-003 --status in_progress
+python -m core.master set-acceptance <project> <task> --command "python -m pytest -q" --protect "tests/*"
+python -m core.master set-acceptance <project> <task> --clear
 ```
 
 Mutating commands take the project lock and refuse while an autonomous run holds it.
+
+### Integrate a verified attempt (human only)
+
+```bash
+python -m core.attempts integrate <project> <attempt_id>     # fast-forward only; idempotent
+```
+
+It requires a finished attempt verified `pass` against the task's current spec, refuses
+if the base branch moved on or its checkout is dirty, and records an `integration`
+event. Attempt ids are in history (`attempt_started` events).
 
 ### Ask Master for one proposal (human approves)
 
@@ -494,37 +549,38 @@ There is **no CLI yet** (gap H5). For reference wiring, see:
 
 - `tests/test_ollama_backend.py::test_the_full_loop_runs_through_ollama_without_touching_the_loop`
   (loop, Ollama worker and a real pytest verifier);
-- `tests/test_session_runner.py` and `tests/test_recovery.py` (sessions, lock, recovery).
+- `tests/test_session_runner.py` and `tests/test_recovery.py` (sessions, lock, recovery);
+- `tests/test_acceptance_verifier.py` and `tests/test_attempt_workspace.py` (worktrees,
+  acceptance, deadlines).
 
 ---
 
 ## 11. Known gaps
 
-These come from the architecture review of 2026-10-05, which covered commit `18f8239`.
-IDs match the review document. **Verified** means the behaviour was reproduced with
-a script against the code.
+These come from the architecture review of 2026-10-05, which covered commit `18f8239`,
+updated at the end of Milestone 1. IDs match the review document. **Verified** means
+the behaviour was reproduced with a script against the code. Closed in Milestone 1:
+C1, C2, H1, M2, L5.
 
 | ID | Severity | Gap | Planned fix |
 | --- | --- | --- | --- |
-| C1 | CRITICAL | The verifier is not independent of the worker. It finds the workspace via worker `artifacts["workdir"]` and runs tests the worker can edit. Tasks have no acceptance criteria. | The orchestrator owns the workspace path. Add a frozen `acceptance` field (commands and protected paths). Fail any diff that touches protected paths. |
-| C2 | CRITICAL | Worker side effects are not contained. **Verified:** after `SIGKILL` of the loop, the lock frees at once while a `subprocess.run` worker keeps writing. State, sessions and history live inside the managed repo. | A git worktree per attempt (base/result SHA); a gated INTEGRATE operation; subprocess workers inherit the lock fd (`pass_fds`, **verified** to keep the lock held); move runtime state outside workspaces. |
-| H1 | HIGH | Completion evidence is not bound to what it verified. **Verified:** reopen and re-title a task, and an old `pass` still authorises completion. | Record `spec_hash` and `base_sha` in `attempt_started` and `result_sha` in `attempt_finished`; the gate requires a matching spec_hash. |
-| H2 | HIGH | Policy is keyed on operation names. The model can autonomously rewrite titles, cancel, reopen, or complete milestones, and any status can go to any status. | A task transition table; `requires_approval(operation, state)` by transition and field. |
-| H3 | HIGH | Approvals can be requested but never granted (`pending_approval` lacks the arguments; there is no approve command or event). | `approval_requested`/`granted`/`denied` events bound to the operation hash and state revision; CLI approve/reject; resume applies a granted operation without a model call. |
-| H4 | HIGH | The attempt budget resets every session, and infrastructure failures spend it. | Count per task since the last human action; classify failures; add time and cost budgets. |
-| H5 | HIGH | Nothing runs the loop outside tests. | `core/run_cli.py` (start/resume/status/approve), a `CommandVerifier`, and an end-to-end run on a toy repo. |
-| H6 | HIGH | The project is at the reinvention line for durable execution. | Keep the existing code; spike DBOS for timeouts, cancellation, waits and scheduling after C2. |
-| M1 | MEDIUM | No attempt deadline or cancellation (the OpenCode timeout defaults to `None`). | A required deadline; kill the process group; record a `timed_out` outcome; a `cancel` command. |
-| M2 | MEDIUM | Recovery is session-scoped and observes nothing about the interrupted attempt. | Project-wide recovery on every lock acquisition; record the attempt's diff. |
-| M3 | MEDIUM | Master sees too little of what changed, and the worker's claim is presented as a neutral fact. | Add files changed, diff stats, exit code and failing test names; label the worker's status as a claim. |
-| M4 | MEDIUM | YAML state has no revision, and human CLI edits leave no history. | A `revision` counter; record every Master write, with `actor`. |
+| N1 | HIGH | **Isolation, not sandboxing.** Workers run as the owner's user. A worktree isolates files, not authority: a worker can write outside its worktree, change refs in the managed repository (including `base_branch`) through git, or start a process with `setsid` that escapes its process group, the deadline and the lock. | Containers or an OS sandbox for workers (a later milestone). Integration already refuses a moved base. |
+| H2 | HIGH | Policy is keyed on operation names. The model can autonomously rewrite titles, cancel, reopen, or complete milestones, and any status can go to any status. A retitle does invalidate earlier evidence (`spec_changed`), but a reopen does not (P7). | A task transition table; `requires_approval(operation, state)` by transition and field. Milestone 3. |
+| H3 | HIGH | Approvals can be requested but never granted (`pending_approval` lacks the arguments; there is no approve command or event). | `approval_requested`/`granted`/`denied` events bound to the operation hash and state revision; CLI approve/reject; resume applies a granted operation without a model call. Milestone 3. |
+| H4 | HIGH | The attempt budget resets every session, and infrastructure failures (including a failed `git worktree add`) spend it. | Count per task since the last human action; classify failures; add time and cost budgets. Milestone 3. |
+| H5 | HIGH | Nothing runs the loop outside tests. | `core/run_cli.py` (start/resume/status/approve) and an end-to-end run on a toy repo. Milestone 2. (`AcceptanceVerifier` now exists.) |
+| H6 | HIGH | The project is at the reinvention line for durable execution. | Keep the existing code; spike DBOS for timeouts, cancellation, waits and scheduling. Milestone 4. |
+| M1 | MEDIUM | **Partly closed.** Deadlines, group kill and `timed_out` are done. There is no `cancel` command (deferred: killing a recorded PID risks PID reuse). | Cancel with DBOS (Milestone 4) or a PID-reuse-safe design. |
+| M3 | MEDIUM | **Mostly closed.** Master sees the orchestrator's outcome, files changed, diff stats, `spec_current` and the verifier's findings; the worker's status is labelled a claim. Process exit codes are recorded in history but not shown to Master. | Add exit codes / failing test names to the context if Milestone 2 shows they are needed. |
+| M4 | MEDIUM | YAML state has no revision, and human CLI edits (including `set-acceptance`) leave no history. | A `revision` counter; record every Master write, with `actor`. Milestone 3. |
 | M5 | MEDIUM | WorkSession duplicates history (counters stored twice). | Keep a session identity row in the history DB; derive the rest from events. |
 | M6 | MEDIUM | The Ollama backend is a homemade coding agent. | Freeze it as a fixture; build the next worker via ACP or the OpenHands SDK. |
-| L1 | LOW | Events lack `actor` and `caused_by`. | Add both columns now. |
-| L2 | LOW | No stuck or oscillation detection. | Repetition and ping-pong rules (OpenHands-style). |
+| L1 | LOW | Events lack `actor` and `caused_by` (only `integration` records an actor). | Add both columns. |
+| L2 | LOW | No stuck or oscillation detection. | Repetition and ping-pong rules (OpenHands-style). Milestone 3. |
 | L3 | LOW | A model call is spent on every forced move. | Deterministic rules for single-legal-move steps, recorded as actor=system. |
-| L4 | LOW | Legacy parser path, `proposal._decision`, experiments in the repo root, a stale docstring in `work_session.py`. | Delete or move; keep docstrings short; write ADRs. |
-| L5 | LOW | SQLite has no `busy_timeout`, and the DB path is inside the repo. | Set busy_timeout; move the path (with C2). |
+| L4 | LOW | Legacy parser path, `proposal._decision`, experiments in the repo root. | Delete or move; keep docstrings short; write ADRs. |
+| L6 | LOW | Attempt worktrees and `attempt/*` branches are never cleaned up. Acceptance commands leave their by-products (for example `__pycache__`) in the worktree. | A cleanup command for integrated or abandoned attempts. |
+| L7 | LOW | Integration is fast-forward only; a base that moved on means re-running the task. | Decide in Milestone 2 whether rebasing or merging is worth the judgement it needs. |
 
 ---
 
@@ -533,8 +589,10 @@ a script against the code.
 ### Owner-approved
 
 - The five-milestone roadmap below was **approved by the owner on 2026-10-05**.
-- **Current milestone: 1, "Contain and verify".** Finishing it also closes the earlier
-  "Trustworthy loop: explicit execution, evidence history, safe resume" milestone.
+- **Milestone 1, "Contain and verify", is implemented** (branch `m1-contain-verify`,
+  all acceptance criteria pass). It also closes the earlier "Trustworthy loop: explicit
+  execution, evidence history, safe resume" milestone.
+- **Next: Milestone 2, "Run it for real"**, once the owner starts it.
 - The loop must be trustworthy before any memory architecture or self-improvement work.
 - Memory comes after the loop is trustworthy. Self-improvement comes last.
 
@@ -548,7 +606,7 @@ a script against the code.
 | 4 | Durable runtime: DBOS spike, then adopt or walk away | Homemade code shrinks, or walk away and build only timeouts |
 | 5 | Plans and focused context | A plan from a one-paragraph objective |
 
-**1. Contain and verify** (current)
+**1. Contain and verify** (implemented on `m1-contain-verify`; plan: `docs/plans/m1-contain-verify.md`)
 
 - Objective:
   - a worktree per attempt;
@@ -692,7 +750,18 @@ Add a row whenever an architectural decision is made or reversed.
 | M1 plan P7: "reopen invalidates a pass" moved to Milestone 3 | spec_hash cannot detect a reopen; needs transition policy | **Approved (2026-10-05)** |
 | M1 plan P8: verification has its own deadline (30 min total, 10 min per command) | Acceptance commands need a bound too | **Approved (2026-10-05)** |
 | Cancel deferred | Killing a recorded PID risks killing an unrelated process after PID reuse | **Approved (2026-10-05)** |
-| History DB is copied to `history.sqlite.bak-v1-<timestamp>` before the v1→v2 migration; a failed copy refuses the migration | A schema rebuild must be reversible | **Approved (2026-10-05)** |
+| History DB is copied to `history.sqlite.bak-v1-<timestamp>` before the v1→v2 migration; a failed copy refuses the migration | A schema rebuild must be reversible | **Approved (2026-10-05)**, implemented |
+| M1 plan (worktree per attempt, orchestrator-owned workspace, lock fd inherited by workers, deadlines, acceptance + AcceptanceVerifier, spec binding, project-wide recovery, gated INTEGRATE, runtime state outside the repo) | Contain and verify | **Approved (2026-10-05)**, implemented on `m1-contain-verify` |
+| *Implementation:* every autonomous run holds the project lock; a loop without one takes it itself (and recovers first) | So every worker inherits a lock, whoever started the loop | Taken without the owner (in the plan, §2.11); conservative |
+| *Implementation:* snapshot commits set their identity through `GIT_AUTHOR_*` / `GIT_COMMITTER_*` env, not `-c user.*` | Inherited `GIT_AUTHOR_*` env would otherwise override the orchestrator's identity (found by a test) | Taken without the owner; conservative |
+| *Implementation:* a process killed by signal or exiting 124/137 counts as `timed_out` only once the deadline has passed | `timeout` signals its own group, so it can die by signal; a worker may legitimately exit 124 | Taken without the owner |
+| *Implementation:* when a worker process exits, anything left in its process group is killed | Leftover children would keep writing and keep the lock | Taken without the owner; conservative |
+| *Implementation:* an attempt whose snapshot commit fails is not verified | There is no committed result to verify | Taken without the owner; conservative |
+| *Implementation:* backends no longer put a `workdir` in their artifacts | Nothing may take a location from worker output | Taken without the owner |
+| *Implementation:* integrate also refuses if `project.yaml`'s repository/base branch changed since the attempt, or if the base's checkout has uncommitted tracked changes | Never integrate into something other than what was verified; never clobber the owner's edits | Taken without the owner; conservative |
+| *Implementation:* recovery records an observation error instead of failing | A broken worktree must not block recovery of the rest | Taken without the owner |
+| *Implementation:* `create_task(status=completed)` is gated like `update_task` | Otherwise creating a task as completed bypasses the gate | Taken without the owner (claude-week); conservative |
+| *Process:* plan commit 7 was split into 7a (loop holds the lock) and 7b (orchestrator owns the workspace) | It was bigger than planned | Per the owner's instruction to split large commits |
 
 ---
 
@@ -730,7 +799,10 @@ These apply to AI agents (Claude Code, OpenCode, Codex, …) and humans alike.
   - `core/master.py` must not import YAML, ProjectState, execution, network or sqlite modules;
   - only `core/sqlite_history.py` imports `sqlite3`;
   - no orchestration module imports a concrete adapter;
-  - session code names no provider.
+  - session code names no provider;
+  - no backend or verifier imports `subprocess`; only `worker_process.py`, `workspace.py`
+    and `attempts.py` start processes;
+  - `acceptance` is not in the operation vocabulary, and `integrate_attempt` is always gated.
 - Don't change `core/master.py`, `core/work_manager.py`, `core/project_state.py` or the
   provider and backend modules gratuitously, only when a requirement genuinely needs it.
 - **Never** let model or worker output mutate project state except through Master and policy.
@@ -761,9 +833,11 @@ These apply to AI agents (Claude Code, OpenCode, Codex, …) and humans alike.
 2. Read [§2 Status snapshot](#2-status-snapshot) and [§12 Roadmap](#12-roadmap). What is the current milestone, and what is next?
 3. `uv sync --extra dev && uv run python -m pytest -q -m "not integration"`.
 4. `python -m core.master status ai-system` (and `overview`) to see the managed project's state.
-5. If autonomous runs have happened on this machine, look at `sessions/*.yaml` and
-   `var/history.sqlite` (for example `sqlite3 var/history.sqlite "select seq,type,task_id,created_at from events order by seq desc limit 30"`).
-   A session left in `running` is recovered automatically by the next `resume`.
+5. If autonomous runs have happened on this machine, look at
+   `~/.local/share/master-system/sessions/*.yaml` and `~/.local/share/master-system/history.sqlite`
+   (for example `sqlite3 ~/.local/share/master-system/history.sqlite "select seq,type,task_id,created_at from events order by seq desc limit 30"`),
+   and the attempt worktrees under `~/.local/share/master-system-worktrees/`.
+   Anything a dead process left open is recovered automatically the next time a run takes the lock.
 6. Check [§17 Open questions](#17-open-questions-for-the-owner). If any are still open, ask the owner before building on them.
 7. Continue with the first unchecked acceptance criterion of the current milestone.
 
@@ -801,7 +875,9 @@ These apply to AI agents (Claude Code, OpenCode, Codex, …) and humans alike.
 | **Evidence** | Neutral facts read from history for decisions (attempt outcomes, verdicts, counts). |
 | **Readiness** | Whether a task can start: `ready` / `blocked` / `waiting` (`calculate_readiness`). |
 | **Recovery** | Closing runs and attempts left open by a dead process. It never replays. |
-| **INTEGRATE** *(proposed)* | A gated operation that merges a verified attempt's result SHA into the real branch. |
+| **INTEGRATE** | `integrate_attempt`: always gated, so Master can only request it; a human runs `python -m core.attempts integrate`, which fast-forwards the base branch to a verified attempt's result SHA. |
+| **Worktree / workspace** | The git worktree the orchestrator creates for one attempt; workers and verifiers get it as an `AttemptWorkspace`. |
+| **spec_hash** | sha256 of a task's `{title, acceptance}`; binds an attempt's evidence to the spec it was run against. |
 
 ---
 

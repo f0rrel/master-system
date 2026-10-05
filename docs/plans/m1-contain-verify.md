@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| Status | **Approved by the owner (2026-10-05)**, including P1–P8, with three additions (A-backup, A-grace, A-uvlock below). |
+| Status | **Implemented (2026-10-05).** Approved by the owner, including P1–P8, with three additions (A-backup, A-grace, A-uvlock below). Commits `f5d4499`..`9473634` plus the README update; commit 7 was split into 7a/7b. All acceptance criteria pass. |
 | Branch | `m1-contain-verify` (from `claude-week` `dab0928`) |
 | Closes | C1, C2, H1, M1, M2, and the history-path part of L5. M3 partly (item 11). |
 | Baseline | 983 passed, 1 skipped, 5 integration tests deselected |
