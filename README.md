@@ -191,7 +191,7 @@ OpenCode 1.18.34, Ollama 0.20.4, Claude Code 2.1.289.
 | Master reasoning | Ollama | `qwen2.5-coder:7b` at `http://localhost:11434` | `core/ollama_provider.py` |
 | Master reasoning | OpenCode server | provider `opencode`, model `big-pickle`, agent `plan`, at `http://127.0.0.1:4096` | Start with `opencode serve --port 4096` |
 | Master reasoning | DeepSeek API | `deepseek-v4-pro` at `https://api.deepseek.com` | Needs the `DEEPSEEK_API_KEY` env var |
-| Worker | OpenCode CLI | `opencode run --dir <workdir>` | `core/opencode_backend.py`. The timeout defaults to `None`, which is a known gap. |
+| Worker | OpenCode CLI | `opencode run --dir <attempt worktree>` | `core/opencode_backend.py`. Runs through `workspace.run`: inherits the lock, bounded by the attempt deadline. |
 | Worker | Ollama tool loop | `qwen3:8b`, 12 turns | `core/ollama_backend.py`. A homemade agent, to be frozen as a test fixture. |
 
 Other local models the owner has used: `qwen2.5:7b`, `qwen3:8b`, `gemma4:e2b`, `gemma4:e4b`, `manfred:latest`.

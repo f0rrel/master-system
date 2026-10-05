@@ -84,18 +84,18 @@ CONTEXT = {"project_id": "p", "task_id": "t1"}
 
 
 def test_backend_implements_the_execution_contract(tmp_path):
-    assert isinstance(OllamaExecutionBackend(workdir=tmp_path), ExecutionBackend)
+    assert isinstance(OllamaExecutionBackend(), ExecutionBackend)
 
 
 def test_model_and_runtime_are_configuration(tmp_path):
-    backend = OllamaExecutionBackend(workdir=tmp_path, model="llama3.2:3b", host="http://box:11434")
+    backend = OllamaExecutionBackend(model="llama3.2:3b", host="http://box:11434")
 
     assert backend.model == "llama3.2:3b"
     assert backend._url == "http://box:11434/api/chat"
 
 
 def test_defaults_are_only_defaults(tmp_path):
-    assert OllamaExecutionBackend(workdir=tmp_path).model == DEFAULT_MODEL
+    assert OllamaExecutionBackend().model == DEFAULT_MODEL
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -107,7 +107,7 @@ def test_defaults_are_only_defaults(tmp_path):
 ])
 def test_bad_configuration_is_refused(tmp_path, kwargs):
     with pytest.raises(ValueError):
-        OllamaExecutionBackend(workdir=tmp_path, **kwargs)
+        OllamaExecutionBackend(**kwargs)
 
 
 # --- a successful run ----------------------------------------------------
@@ -119,9 +119,9 @@ def test_the_model_can_write_a_file_and_finish(tmp_path):
         tool_reply(tool_call("write_file", path="mod.py", content="x = 1\n")),
         done_reply("Added mod.py."),
     )
-    backend = OllamaExecutionBackend(workdir=work, transport=transport)
+    backend = OllamaExecutionBackend(transport=transport)
 
-    result = backend.execute(TASK, CONTEXT)
+    result = backend.execute(TASK, CONTEXT, workspace=workspace_for(work))
 
     assert result.status == "success"
     assert (work / "mod.py").read_text() == "x = 1\n"
@@ -134,9 +134,9 @@ def test_the_model_can_write_a_file_and_finish(tmp_path):
 def test_the_request_carries_the_task_and_the_workspace(tmp_path):
     work = tmp_path / "ws"
     transport = FakeTransport(done_reply())
-    backend = OllamaExecutionBackend(workdir=work, transport=transport)
+    backend = OllamaExecutionBackend(transport=transport)
 
-    backend.execute(TASK, CONTEXT)
+    backend.execute(TASK, CONTEXT, workspace=workspace_for(work))
 
     sent = transport.requests[0]["payload"]
     assert sent["model"] == DEFAULT_MODEL
@@ -155,9 +155,9 @@ def test_tool_results_are_fed_back_to_the_model(tmp_path):
         tool_reply(tool_call("write_file", path="a.txt", content="hello")),
         done_reply("done"),
     )
-    backend = OllamaExecutionBackend(workdir=tmp_path / "ws", transport=transport)
+    backend = OllamaExecutionBackend(transport=transport)
 
-    backend.execute(TASK, CONTEXT)
+    backend.execute(TASK, CONTEXT, workspace=workspace_for(tmp_path / "ws"))
 
     second = transport.requests[1]["payload"]["messages"]
     assert second[-1] == {"role": "tool", "content": "wrote 5 characters to 'a.txt'"}
@@ -171,9 +171,9 @@ def test_reading_a_file_shows_its_contents_to_the_model(tmp_path):
         tool_reply(tool_call("read_file", path="existing.py/a.py")),
         done_reply("read it"),
     )
-    backend = OllamaExecutionBackend(workdir=work, transport=transport)
+    backend = OllamaExecutionBackend(transport=transport)
 
-    result = backend.execute(TASK, CONTEXT)
+    result = backend.execute(TASK, CONTEXT, workspace=workspace_for(work))
 
     assert "ORIGINAL = 1" in result.artifacts["tool_calls"][0]["output"]
 
@@ -185,7 +185,7 @@ def test_listing_files_reports_the_workspace(tmp_path):
     (work / "b.py").write_text("y")
     transport = FakeTransport(tool_reply(tool_call("list_files")), done_reply("ok"))
 
-    result = OllamaExecutionBackend(workdir=work, transport=transport).execute(TASK, CONTEXT)
+    result = OllamaExecutionBackend(transport=transport).execute(TASK, CONTEXT, workspace=workspace_for(work))
 
     assert '"a.py"' in result.artifacts["tool_calls"][0]["output"]
     assert '"b.py"' in result.artifacts["tool_calls"][0]["output"]
@@ -201,7 +201,7 @@ def test_several_calls_in_one_turn_all_run(tmp_path):
         done_reply("both written"),
     )
 
-    result = OllamaExecutionBackend(workdir=work, transport=transport).execute(TASK, CONTEXT)
+    result = OllamaExecutionBackend(transport=transport).execute(TASK, CONTEXT, workspace=workspace_for(work))
 
     assert (work / "one.py").read_text() == "1"
     assert (work / "two.py").read_text() == "2"
@@ -223,7 +223,7 @@ def test_a_model_cannot_write_outside_the_workspace(tmp_path, escape):
         done_reply("tried"),
     )
 
-    result = OllamaExecutionBackend(workdir=work, transport=transport).execute(TASK, CONTEXT)
+    result = OllamaExecutionBackend(transport=transport).execute(TASK, CONTEXT, workspace=workspace_for(work))
 
     assert "error:" in result.artifacts["tool_calls"][0]["output"]
     assert not (tmp_path / "outside.py").exists()
@@ -237,7 +237,7 @@ def test_an_absolute_path_is_refused(tmp_path):
         done_reply("tried"),
     )
 
-    result = OllamaExecutionBackend(workdir=tmp_path / "ws", transport=transport).execute(TASK, CONTEXT)
+    result = OllamaExecutionBackend(transport=transport).execute(TASK, CONTEXT, workspace=workspace_for(tmp_path / "ws"))
 
     assert "error:" in result.artifacts["tool_calls"][0]["output"]
     assert not target.exists()
@@ -248,7 +248,7 @@ def test_an_unknown_tool_is_reported_rather_than_crashing(tmp_path):
         tool_reply(tool_call("rm_rf_slash")), done_reply("gave up")
     )
 
-    result = OllamaExecutionBackend(workdir=tmp_path / "ws", transport=transport).execute(TASK, CONTEXT)
+    result = OllamaExecutionBackend(transport=transport).execute(TASK, CONTEXT, workspace=workspace_for(tmp_path / "ws"))
 
     assert "unknown tool" in result.artifacts["tool_calls"][0]["output"]
 
@@ -258,7 +258,7 @@ def test_a_missing_file_is_reported_not_raised(tmp_path):
         tool_reply(tool_call("read_file", path="nope.py")), done_reply("gone")
     )
 
-    result = OllamaExecutionBackend(workdir=tmp_path / "ws", transport=transport).execute(TASK, CONTEXT)
+    result = OllamaExecutionBackend(transport=transport).execute(TASK, CONTEXT, workspace=workspace_for(tmp_path / "ws"))
 
     assert "no such file" in result.artifacts["tool_calls"][0]["output"]
     assert result.status == "success"
@@ -269,7 +269,7 @@ def test_a_path_that_is_not_a_string_is_refused(tmp_path):
         tool_reply(tool_call("write_file", path=42, content="x")), done_reply("gave up")
     )
 
-    result = OllamaExecutionBackend(workdir=tmp_path / "ws", transport=transport).execute(TASK, CONTEXT)
+    result = OllamaExecutionBackend(transport=transport).execute(TASK, CONTEXT, workspace=workspace_for(tmp_path / "ws"))
 
     assert "error:" in result.artifacts["tool_calls"][0]["output"]
 
@@ -278,13 +278,11 @@ def test_a_path_that_is_not_a_string_is_refused(tmp_path):
 
 
 def test_an_unreachable_runtime_raises(tmp_path):
-    backend = OllamaExecutionBackend(
-        workdir=tmp_path,
-        transport=FakeTransport(error=OSError("connection refused")),
+    backend = OllamaExecutionBackend(transport=FakeTransport(error=OSError("connection refused")),
     )
 
     with pytest.raises(OllamaBackendError, match="could not reach Ollama"):
-        backend.execute(TASK, CONTEXT)
+        backend.execute(TASK, CONTEXT, workspace=workspace_for(tmp_path))
 
 
 def test_a_bad_http_status_raises(tmp_path):
@@ -292,18 +290,17 @@ def test_a_bad_http_status_raises(tmp_path):
     import io
 
     error = urllib.error.HTTPError("http://x", 404, "Not Found", {}, io.BytesIO(b"model not found"))
-    backend = OllamaExecutionBackend(workdir=tmp_path, transport=FakeTransport(error=error))
+    backend = OllamaExecutionBackend(transport=FakeTransport(error=error))
 
     with pytest.raises(OllamaBackendError, match="404"):
-        backend.execute(TASK, CONTEXT)
+        backend.execute(TASK, CONTEXT, workspace=workspace_for(tmp_path))
 
 
 def test_a_timeout_is_a_failed_result_not_a_crash(tmp_path):
-    backend = OllamaExecutionBackend(
-        workdir=tmp_path, timeout=5, transport=FakeTransport(error=TimeoutError())
+    backend = OllamaExecutionBackend(timeout=5, transport=FakeTransport(error=TimeoutError())
     )
 
-    result = backend.execute(TASK, CONTEXT)
+    result = backend.execute(TASK, CONTEXT, workspace=workspace_for(tmp_path))
 
     assert result.status == "failed"
     assert "timed out" in result.reason
@@ -311,25 +308,25 @@ def test_a_timeout_is_a_failed_result_not_a_crash(tmp_path):
 
 
 def test_a_reply_without_a_message_raises(tmp_path):
-    backend = OllamaExecutionBackend(workdir=tmp_path, transport=FakeTransport({"done": True}))
+    backend = OllamaExecutionBackend(transport=FakeTransport({"done": True}))
 
     with pytest.raises(OllamaBackendError, match="no message object"):
-        backend.execute(TASK, CONTEXT)
+        backend.execute(TASK, CONTEXT, workspace=workspace_for(tmp_path))
 
 
 def test_a_non_mapping_task_is_refused(tmp_path):
-    backend = OllamaExecutionBackend(workdir=tmp_path, transport=FakeTransport(done_reply()))
+    backend = OllamaExecutionBackend(transport=FakeTransport(done_reply()))
 
     with pytest.raises(OllamaBackendError, match="task must be a mapping"):
-        backend.execute("not a task", CONTEXT)
+        backend.execute("not a task", CONTEXT, workspace=workspace_for(tmp_path))
 
 
 def test_the_turn_budget_stops_a_model_that_never_finishes(tmp_path):
     transport = FakeTransport(*[tool_reply(tool_call("write_file", path=f"f{i}.txt", content="x"))
                                 for i in range(5)])
-    backend = OllamaExecutionBackend(workdir=tmp_path / "ws", transport=transport, max_turns=3)
+    backend = OllamaExecutionBackend(transport=transport, max_turns=3)
 
-    result = backend.execute(TASK, CONTEXT)
+    result = backend.execute(TASK, CONTEXT, workspace=workspace_for(tmp_path / "ws"))
 
     assert result.status == "partial"
     assert "did not finish" in result.reason
@@ -339,9 +336,9 @@ def test_the_turn_budget_stops_a_model_that_never_finishes(tmp_path):
 
 def test_the_turn_budget_is_reported_as_failed_when_nothing_was_done(tmp_path):
     transport = FakeTransport(*[tool_reply(tool_call("list_files")) for _ in range(3)])
-    backend = OllamaExecutionBackend(workdir=tmp_path / "ws", transport=transport, max_turns=2)
+    backend = OllamaExecutionBackend(transport=transport, max_turns=2)
 
-    result = backend.execute(TASK, CONTEXT)
+    result = backend.execute(TASK, CONTEXT, workspace=workspace_for(tmp_path / "ws"))
 
     assert result.status == "failed"
 
@@ -351,9 +348,9 @@ def test_malformed_tool_arguments_do_not_stop_the_loop(tmp_path):
                          "tool_calls": [{"function": {"name": "write_file",
                                                       "arguments": "{not json"}}]}}
     transport = FakeTransport(reply, done_reply("recovered"))
-    backend = OllamaExecutionBackend(workdir=tmp_path / "ws", transport=transport)
+    backend = OllamaExecutionBackend(transport=transport)
 
-    result = backend.execute(TASK, CONTEXT)
+    result = backend.execute(TASK, CONTEXT, workspace=workspace_for(tmp_path / "ws"))
 
     assert result.status == "success"
     assert "error:" in result.artifacts["tool_calls"][0]["output"]
@@ -616,24 +613,56 @@ def test_the_loop_is_unchanged_by_which_backend_it_was_given(tmp_path):
 # --- the orchestrator's workspace -------------------------------------------
 
 
-def test_a_given_workspace_is_used_instead_of_the_constructor_workdir(tmp_path):
-    import time
-    from core.workspace import AttemptWorkspace
+def test_the_backend_has_no_workspace_of_its_own():
+    import inspect
 
-    own = tmp_path / "own"
-    given = tmp_path / "given"
-    own.mkdir()
-    given.mkdir()
+    assert "workdir" not in inspect.signature(OllamaExecutionBackend).parameters
+    assert not hasattr(OllamaExecutionBackend, "workdir")
+
+
+def test_a_deadline_already_passed_stops_before_asking_the_model(tmp_path):
+    transport = FakeTransport(done_reply())
+
+    result = OllamaExecutionBackend(transport=transport).execute(
+        TASK, CONTEXT, workspace=workspace_for(tmp_path, seconds=-1)
+    )
+
+    assert result.status == "failed"
+    assert "deadline" in result.reason
+    assert transport.requests == []
+
+
+def test_the_deadline_is_checked_between_turns(tmp_path):
+    clock = {"now": 0.0}
     transport = FakeTransport(
-        tool_reply(tool_call("write_file", path="out.txt", content="x")),
+        tool_reply(tool_call("write_file", path="a.txt", content="1")),
+        tool_reply(tool_call("write_file", path="b.txt", content="2")),
         done_reply(),
     )
-    workspace = AttemptWorkspace(path=given, base_sha="b",
-                                 deadline=time.monotonic() + 30, deadline_at="later")
 
-    OllamaExecutionBackend(workdir=own, transport=transport).execute(
-        {"id": "t1", "title": "Write"}, {}, workspace=workspace
+    def advancing_transport(payload, url, timeout):
+        reply = transport(payload, url, timeout)
+        clock["now"] += 10  # each model call takes 10 s
+        return reply
+
+    import dataclasses
+    workspace = dataclasses.replace(workspace_for(tmp_path), deadline=15.0,
+                                    clock=lambda: clock["now"])
+
+    result = OllamaExecutionBackend(transport=advancing_transport).execute(
+        TASK, CONTEXT, workspace=workspace
     )
 
-    assert (given / "out.txt").exists()
-    assert not (own / "out.txt").exists()
+    assert result.status == "partial" and "deadline" in result.reason
+    assert len(transport.requests) == 2
+    assert (tmp_path / "a.txt").exists() and (tmp_path / "b.txt").exists()
+
+
+def test_each_request_is_bounded_by_the_time_left(tmp_path):
+    transport = FakeTransport(done_reply())
+
+    OllamaExecutionBackend(timeout=600, transport=transport).execute(
+        TASK, CONTEXT, workspace=workspace_for(tmp_path, seconds=30)
+    )
+
+    assert transport.requests[0]["timeout"] <= 30

@@ -11,7 +11,7 @@ Two things are configuration, not architecture
 -----------------------------------------------
 The runtime and the model are both constructor arguments::
 
-    OllamaExecutionBackend(workdir=..., model="qwen3:8b")
+    OllamaExecutionBackend(model="qwen3:8b")
 
 ``qwen3:8b`` is today's model and Ollama is today's runtime. Neither appears in
 this file's logic, in the orchestration layer, or in project state. The tool
@@ -37,7 +37,6 @@ the deterministic verifier is the only thing that executes anything.
 from __future__ import annotations
 
 import json
-import tempfile
 import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
@@ -160,14 +159,14 @@ class OllamaExecutionBackend(ExecutionBackend):
     """ExecutionBackend that drives a local Ollama model in one workspace.
 
     Like every backend it only decides *how* to carry out a task. It reads the
-    task and context, does the work inside ``workdir``, and returns an
+    task and context, does the work inside the orchestrator's workspace (never
+    a location of its own choosing), stops by the attempt deadline, and returns an
     :class:`ExecutionResult`. It never reads or writes project state; a
     task's status changes only when Master decides, through the approval path.
     """
 
     def __init__(
         self,
-        workdir: Optional[Path] = None,
         model: str = DEFAULT_MODEL,
         host: str = DEFAULT_HOST,
         timeout: Optional[int] = 600,
@@ -182,7 +181,6 @@ class OllamaExecutionBackend(ExecutionBackend):
         if max_turns < 1:
             raise ValueError("max_turns must be at least 1")
 
-        self._workdir = Path(workdir) if workdir else None
         self._model = model.strip()
         self._host = host.rstrip("/")
         self._url = f"{self._host}/api/chat"
@@ -196,19 +194,7 @@ class OllamaExecutionBackend(ExecutionBackend):
     def model(self) -> str:
         return self._model
 
-    @property
-    def workdir(self) -> Optional[Path]:
-        return self._workdir
-
     # --- workspace ------------------------------------------------------
-
-    def _resolve_workdir(self) -> Path:
-        workdir = self._workdir
-        if workdir is None:
-            workdir = Path(tempfile.mkdtemp(prefix="ollama-backend-"))
-        workdir = Path(workdir).resolve()
-        workdir.mkdir(parents=True, exist_ok=True)
-        return workdir
 
     def _resolve_inside(self, workdir: Path, relative: Any) -> Path:
         """Resolve a model-supplied path, refusing anything outside the workspace.
@@ -288,21 +274,17 @@ class OllamaExecutionBackend(ExecutionBackend):
     # --- execution ------------------------------------------------------
 
     def execute(self, task: Mapping[str, object], context: Mapping[str, object],
-                workspace=None) -> ExecutionResult:
+                *, workspace) -> ExecutionResult:
         if not isinstance(task, Mapping):
             raise OllamaBackendError("task must be a mapping")
 
-        workdir = (
-            Path(workspace.path).resolve() if workspace is not None
-            else self._resolve_workdir()
-        )
+        workdir = Path(workspace.path).resolve()
         messages = self._build_request(task, context, workdir)
 
         artifacts: dict[str, Any] = {
             "runtime": "ollama",
             "model": self._model,
             "url": self._url,
-            "workdir": str(workdir),
             "project_id": context.get("project_id") if isinstance(context, Mapping) else None,
             "task_id": task.get("id") if isinstance(task, Mapping) else None,
         }
@@ -310,6 +292,19 @@ class OllamaExecutionBackend(ExecutionBackend):
         wrote_something = False
 
         for turn in range(self._max_turns):
+            # In-process work cannot be killed from outside, so the deadline
+            # is checked before every turn and bounds every request.
+            if workspace.expired():
+                artifacts["turns"] = turn
+                artifacts["tool_calls"] = calls
+                return ExecutionResult(
+                    status="partial" if wrote_something else "failed",
+                    reason="the attempt deadline passed",
+                    artifacts=artifacts,
+                )
+            remaining = workspace.remaining()
+            timeout = remaining if self._timeout is None else min(self._timeout, remaining)
+
             payload = {
                 "model": self._model,
                 "messages": messages,
@@ -318,7 +313,7 @@ class OllamaExecutionBackend(ExecutionBackend):
             }
 
             try:
-                reply = self._transport(payload, self._url, self._timeout)
+                reply = self._transport(payload, self._url, timeout)
             except OllamaBackendError:
                 raise
             except TimeoutError:
@@ -326,7 +321,7 @@ class OllamaExecutionBackend(ExecutionBackend):
                 # a slow local model would be reported as an unreachable runtime.
                 return ExecutionResult(
                     status="failed",
-                    reason=f"Ollama request timed out after {self._timeout}s",
+                    reason=f"Ollama request timed out after {timeout:.0f}s",
                     artifacts=artifacts,
                 )
             except (OSError, urllib.error.URLError) as error:
