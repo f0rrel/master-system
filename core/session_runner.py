@@ -94,6 +94,7 @@ class SessionRunner:
         attempt_timeout_s: float = DEFAULT_ATTEMPT_TIMEOUT_S,
         verification_timeout_s: float = DEFAULT_VERIFICATION_TIMEOUT_S,
         worker_env=None,
+        stop_check=None,
     ):
         self._master = master
         self._provider = provider
@@ -115,6 +116,7 @@ class SessionRunner:
         self._attempt_timeout_s = attempt_timeout_s
         self._verification_timeout_s = verification_timeout_s
         self._worker_env = worker_env
+        self._stop_check = stop_check
 
     @property
     def store(self):
@@ -201,6 +203,7 @@ class SessionRunner:
             attempt_timeout_s=self._attempt_timeout_s,
             verification_timeout_s=self._verification_timeout_s,
             worker_env=self._worker_env,
+            stop_check=self._stop_check,
         )
         try:
             result = loop.run(session.project_id)

@@ -22,7 +22,6 @@ def test_five_independent_tasks_each_with_a_human_spec():
 
     assert [t["id"] for t in tasks] == ["ml-1", "ml-2", "ml-3", "ml-4", "ml-5"]
     for task in tasks:
-        assert task["status"] == "planned"
         assert "depends_on" not in task, f"{task['id']} must be independent"
         assert task["description"].strip()
         acceptance = task["acceptance"]

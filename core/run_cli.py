@@ -17,6 +17,9 @@ Commands:
     task describe <project> <task> (--text TEXT | --clear)      human edit, recorded
     task set-acceptance <project> <task> (--command C ... [--protect GLOB ...] | --clear)
 
+``--max-cost-usd X`` stops the run, before the next paid Master call, once the
+session's recorded Master cost reaches X (stop reason ``budget_exhausted``).
+
 ``--until-stopped`` keeps resuming while a run ends at the step limit, bounded
 by ``--max-runs`` (default 10) and ``--max-hours`` (default 8). It stops on any
 other stop reason: approval needed, attempt limit, no actionable work, an
@@ -148,7 +151,26 @@ def build_worker_env(config):
     return worker_environment(w.home, path_dirs=[node_bin], extra=extra)
 
 
-def build_runner(ctx):
+def budget_check(ctx, session_id, max_cost_usd):
+    """A stop_check that ends the run once the session's Master cost reaches the cap."""
+    if max_cost_usd is None:
+        return None
+    from core.report import _price, master_cost_usd
+
+    model = ctx.config.master.model
+    if _price({"input_tokens": 1}, model, ctx.config.prices) is None:
+        raise SetupError(f"--max-cost-usd needs a price for {model!r} in [prices]")
+
+    def check():
+        spent = master_cost_usd(ctx.history, session_id, ctx.config.prices, model)
+        if spent >= max_cost_usd:
+            return f"Master cost ${spent:.4f} reached the cap of ${max_cost_usd:.2f}"
+        return None
+
+    return check
+
+
+def build_runner(ctx, stop_check=None):
     from core.session_runner import SessionRunner
     from core.session_store import FileSessionStore
 
@@ -167,6 +189,7 @@ def build_runner(ctx):
         attempt_timeout_s=r.attempt_timeout_s,
         verification_timeout_s=r.verification_timeout_s,
         worker_env=build_worker_env(ctx.config),
+        stop_check=stop_check,
     )
 
 
@@ -178,9 +201,9 @@ def _describe(session) -> str:
             f"(stop: {session.last_stop_reason}, steps: {session.steps_completed})")
 
 
-def _run(ctx, args, out, first):
+def _run(ctx, args, out, first, session_id):
     """Run once, then (with --until-stopped) resume while runs end at the step limit."""
-    runner = build_runner(ctx)
+    runner = build_runner(ctx, budget_check(ctx, session_id, args.max_cost_usd))
     started = time.monotonic()
     session = first(runner)
     runs = 1
@@ -203,11 +226,13 @@ def _command_start(ctx, args, out):
     session_id = args.session or (
         f"{args.project_id}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}")
     return _run(ctx, args, out,
-                lambda runner: runner.start(args.project_id, args.objective, session_id))
+                lambda runner: runner.start(args.project_id, args.objective, session_id),
+                session_id)
 
 
 def _command_resume(ctx, args, out):
-    return _run(ctx, args, out, lambda runner: runner.resume(args.session_id))
+    return _run(ctx, args, out, lambda runner: runner.resume(args.session_id),
+                args.session_id)
 
 
 # --- status ------------------------------------------------------------------------------
@@ -353,6 +378,9 @@ def build_parser():
                          help="Keep resuming while runs end at the step limit.")
         sub.add_argument("--max-runs", type=int, default=10)
         sub.add_argument("--max-hours", type=float, default=8.0)
+        sub.add_argument("--max-cost-usd", type=float, default=None,
+                         help="Stop before the next Master call once the session's Master "
+                              "cost (priced from [prices]) reaches this.")
 
     start = commands.add_parser("start", help="Start a session and run it.")
     start.add_argument("project_id")

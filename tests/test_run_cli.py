@@ -394,3 +394,45 @@ def test_a_retitle_by_masters_own_operation_is_not_unexplained(setup, wired):
     _, out = cli(setup, "report", "s1", "--json")
 
     assert json.loads(out)["unexplained_spec_changes"] == []
+
+
+# --- the Master spending cap ------------------------------------------------------------
+
+
+def test_max_cost_stops_before_the_next_paid_call(setup, wired):
+    provider = wired([START, RUN, WAIT])
+    # Each decision: 100 input + 10 output tokens at $1000/M and $1000/M = $0.11.
+    config = config_file(setup, '[master]\nmodel = "test"\n'
+                                '[prices]\n"test" = { input = 1000.0, output = 1000.0 }\n')
+
+    code, out = cli_with(setup, config, "start", "alpha", "--objective", "o",
+                         "--session", "s1", "--max-cost-usd", "0.20")
+
+    assert code == 0
+    session = sessions(setup).load("s1")
+    assert session.last_stop_reason == "budget_exhausted"
+    assert session.steps_completed == 2          # the third call was never made
+    assert provider.replies == [WAIT]
+    stopped = setup["history"]().events(types=[EventType.RUN_STOPPED])[-1].payload
+    assert "reached the cap" in stopped["detail"]
+
+
+def test_max_cost_needs_a_price_for_the_master_model(setup, wired):
+    wired([START])
+    config = config_file(setup, '[master]\nmodel = "no-price-model"\n')
+
+    code, _ = cli_with(setup, config, "start", "alpha", "--objective", "o",
+                       "--max-cost-usd", "0.20")
+
+    assert code == 2
+    assert sessions(setup).list_sessions() == ()
+
+
+def test_without_a_cap_nothing_is_checked(setup, wired):
+    wired([START, RUN, WAIT])
+    config = config_file(setup, '[master]\nmodel = "no-price-model"\n')
+
+    code, _ = cli_with(setup, config, "start", "alpha", "--objective", "o", "--session", "s1")
+
+    assert code == 0
+    assert sessions(setup).load("s1").last_stop_reason == "master_stop"

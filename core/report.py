@@ -28,7 +28,7 @@ from core.evidence import spec_hash
 from core.history import EventType, HistoryStore
 from core.usage import add_usage
 
-__all__ = ["build_report", "render_report"]
+__all__ = ["build_report", "master_cost_usd", "render_report"]
 
 _RUN_ENDS = {EventType.RUN_STOPPED: "stopped", EventType.RUN_ERROR: "error",
              EventType.RUN_INTERRUPTED: "interrupted"}
@@ -61,6 +61,28 @@ def _price(usage: Mapping, model: Optional[str], prices: Mapping) -> Optional[fl
                   + usage.get("cached_input_tokens", 0) * rates.get("cached_input",
                                                                      rates.get("input", 0))
                   + usage.get("output_tokens", 0) * rates.get("output", 0)) / 1_000_000, 6)
+
+
+def master_cost_usd(history: HistoryStore, session_id: str, prices: Mapping,
+                    default_model: Optional[str] = None) -> float:
+    """What the Master's model calls in this session cost, from history.
+
+    Includes unusable replies. A call whose model has no price raises
+    ValueError: a cap that cannot price a call cannot be enforced.
+    """
+    total = 0.0
+    for e in history.events(session_id=session_id,
+                            types=[EventType.DECISION, EventType.RUN_STOPPED]):
+        reasoner = e.payload.get("reasoner")
+        for usage in (e.payload.get("usage"), e.payload.get("failed_call_usage")):
+            if not usage or not any(usage.get(k) for k in ("input_tokens", "output_tokens",
+                                                             "cached_input_tokens")):
+                continue
+            cost = _price(add_usage([usage]), _model_of(reasoner) or default_model, prices)
+            if cost is None:
+                raise ValueError(f"no price for the Master model of {reasoner!r}")
+            total += cost
+    return round(total, 6)
 
 
 def _completes(payload) -> bool:
@@ -135,7 +157,7 @@ def build_report(history: HistoryStore, session_id: str,
     worker_by_model: dict = {}
     for e in session_events:
         if e.type is EventType.ATTEMPT_FINISHED:
-            model = (e.payload.get("artifacts") or {}).get("model") or "unknown"
+            model = (e.payload.get("artifacts") or {}).get("model") or "worker default model"
             worker_by_model.setdefault(model, []).append(e.payload.get("worker_reported_usage"))
     worker = []
     for model, items in worker_by_model.items():

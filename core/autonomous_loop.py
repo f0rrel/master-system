@@ -79,6 +79,7 @@ __all__ = [
     "DEFAULT_REQUEST",
     "STOP_APPROVAL",
     "STOP_ATTEMPT_LIMIT",
+    "STOP_BUDGET",
     "STOP_MASTER",
     "STOP_NO_WORK",
     "STOP_OPERATION_FAILED",
@@ -103,6 +104,7 @@ STOP_STEP_LIMIT = "step_limit"
 STOP_UNUSABLE_REPLY = "unusable_reasoning_reply"
 STOP_OPERATION_FAILED = "operation_failed"
 STOP_ATTEMPT_LIMIT = "attempt_limit"
+STOP_BUDGET = "budget_exhausted"
 
 #: How many times one turn may be re-asked after the model replies with
 #: something unusable. One retry: a single malformed reply is usually a
@@ -172,6 +174,7 @@ class AutonomousLoop:
         attempt_timeout_s: float = DEFAULT_ATTEMPT_TIMEOUT_S,
         verification_timeout_s: float = DEFAULT_VERIFICATION_TIMEOUT_S,
         worker_env: Optional[Mapping] = None,
+        stop_check=None,
     ):
         if not isinstance(master, Master):
             raise TypeError(f"expected a Master, got {type(master).__name__}")
@@ -188,6 +191,9 @@ class AutonomousLoop:
         self._max_retries = max_retries
         self._history = history if history is not None else InMemoryHistoryStore()
         self._session_id = session_id
+        #: Called before every Master call; a non-empty string stops the run
+        #: with STOP_BUDGET and that detail (for example a spending cap).
+        self._stop_check = stop_check
         #: The project lock, when the caller already holds it. Without one,
         #: run() takes the lock itself for the duration of the run.
         self._lock = lock
@@ -479,6 +485,11 @@ class AutonomousLoop:
         while steps < self._max_steps:
             if self._actionable_task(project_id) is None:
                 return stop(STOP_NO_WORK)
+
+            if self._stop_check is not None:
+                exhausted = self._stop_check()
+                if exhausted:
+                    return stop(STOP_BUDGET, detail=exhausted)
 
             steps += 1
             self._steps = steps
