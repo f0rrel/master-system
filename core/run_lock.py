@@ -64,6 +64,17 @@ class ProjectLock:
         self._file = handle
         return self
 
+    def fileno(self) -> int:
+        """The locked file's descriptor, for passing to a worker process.
+
+        A process that inherits it keeps the lock held after this process
+        dies. Never call ``release`` while such a process may still run:
+        unlocking releases the lock for every holder of the descriptor.
+        """
+        if self._file is None:
+            raise RuntimeError("lock is not held")
+        return self._file.fileno()
+
     def release(self) -> None:
         if self._file is None:
             return
