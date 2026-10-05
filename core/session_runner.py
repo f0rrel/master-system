@@ -14,17 +14,15 @@ says "running", and history says exactly how far the run got.
 
 Recovery
 --------
-Every run holds the project's :class:`core.run_lock.ProjectLock`. A session
-found in RUNNING while that lock can be acquired was left by a process that no
-longer exists. Before running again, the runner marks every run of that
-session with no recorded end as ``run_interrupted``, and every attempt with no
-recorded outcome as ``attempt_interrupted``, adds the interrupted runs' steps
-from history, and stops the session with ``interrupted``. Nothing is replayed:
-the worker may or may not have changed the workspace, so the interrupted
-attempt is shown to Master as evidence and Master decides what to do.
+Every run holds the project's :class:`core.run_lock.ProjectLock`, and so does
+every worker process the run starts. Right after acquiring the lock the runner
+calls :func:`core.recovery.recover_project`, which closes everything a dead
+process left open in this project -- any session, any run, any attempt -- and
+records what each interrupted attempt's worktree holds. Nothing is replayed:
+the interrupted attempt is shown to Master as evidence and Master decides.
 
-If the lock is held, the session is still running somewhere and resuming it is
-refused without touching anything.
+If the lock is held -- by another run, or by a worker that outlived its loop --
+resuming is refused without touching anything.
 
 An exception during a run -- a worker or verifier that raised -- is recorded by
 the loop as ``run_error``; the runner stops the session with ``error`` and
@@ -56,7 +54,13 @@ from core.history import EventType, HistoryStore
 from core.master import Master
 from core.paths import RuntimePaths
 from core.provider import ReasoningProvider
+from core.recovery import STOP_INTERRUPTED, recover_project
 from core.run_lock import ProjectLock
+from core.task_orchestrator import (
+    DEFAULT_ATTEMPT_TIMEOUT_S,
+    DEFAULT_VERIFICATION_TIMEOUT_S,
+    default_worktrees,
+)
 from core.session_store import FileSessionStore
 from core.verification import VerificationBackend
 from core.work_session import SessionStatus, WorkSession, status_for_stop_reason
@@ -64,10 +68,6 @@ from core.work_session import SessionStatus, WorkSession, status_for_stop_reason
 
 #: Session-level stop reasons, set by the runner rather than the loop.
 STOP_ERROR = "error"
-STOP_INTERRUPTED = "interrupted"
-
-_RUN_ENDS = (EventType.RUN_STOPPED, EventType.RUN_ERROR, EventType.RUN_INTERRUPTED)
-_ATTEMPT_ENDS = (EventType.ATTEMPT_FINISHED, EventType.ATTEMPT_INTERRUPTED)
 
 
 class SessionRunner:
@@ -91,6 +91,8 @@ class SessionRunner:
         max_steps: int = 20,
         max_retries: int = DEFAULT_MAX_RETRIES,
         max_attempts_per_task: int = DEFAULT_MAX_ATTEMPTS,
+        attempt_timeout_s: float = DEFAULT_ATTEMPT_TIMEOUT_S,
+        verification_timeout_s: float = DEFAULT_VERIFICATION_TIMEOUT_S,
     ):
         self._master = master
         self._provider = provider
@@ -104,10 +106,13 @@ class SessionRunner:
 
             history = SQLiteHistoryStore(paths.history_path)
         self._history = history
+        self._worktrees = default_worktrees(master, paths)
         self._request = request
         self._max_steps = max_steps
         self._max_retries = max_retries
         self._max_attempts_per_task = max_attempts_per_task
+        self._attempt_timeout_s = attempt_timeout_s
+        self._verification_timeout_s = verification_timeout_s
 
     @property
     def store(self):
@@ -169,9 +174,11 @@ class SessionRunner:
         session = self._store.load(session_id)
         self._require_resumable(session)
 
-        if session.status is SessionStatus.RUNNING:
-            # We hold the lock, so the process that set RUNNING is gone.
-            session = self._recover(session)
+        # We hold the lock, so anything open in this project is a dead
+        # process's: close it out (any session, not just this one).
+        recover_project(self._history, session.project_id, store=self._store,
+                        worktrees=self._worktrees)
+        session = self._store.load(session_id)
 
         session = self._store.save(session.evolve(status=SessionStatus.RUNNING))
 
@@ -188,6 +195,9 @@ class SessionRunner:
             max_attempts_per_task=self._max_attempts_per_task,
             lock=lock,
             paths=self._paths,
+            worktrees=self._worktrees,
+            attempt_timeout_s=self._attempt_timeout_s,
+            verification_timeout_s=self._verification_timeout_s,
         )
         try:
             result = loop.run(session.project_id)
@@ -212,54 +222,6 @@ class SessionRunner:
         if run_id is None:
             return 0
         return len(self._history.events(run_id=run_id, types=[EventType.DECISION]))
-
-    def _recover(self, session: WorkSession) -> WorkSession:
-        """Close out runs and attempts a dead process left open. No replay."""
-        events = self._history.events(session_id=session.session_id)
-        ended_runs = {e.run_id for e in events if e.type in _RUN_ENDS}
-        open_runs = [
-            e.run_id
-            for e in events
-            if e.type is EventType.RUN_STARTED and e.run_id not in ended_runs
-        ]
-        ended_attempts = {e.attempt_id for e in events if e.type in _ATTEMPT_ENDS}
-
-        steps = 0
-        for run_id in open_runs:
-            for event in events:
-                if (
-                    event.run_id == run_id
-                    and event.type is EventType.ATTEMPT_STARTED
-                    and event.attempt_id not in ended_attempts
-                ):
-                    self._history.append(
-                        type=EventType.ATTEMPT_INTERRUPTED,
-                        run_id=run_id,
-                        session_id=session.session_id,
-                        project_id=event.project_id,
-                        task_id=event.task_id,
-                        attempt_id=event.attempt_id,
-                        payload={
-                            "reason": "the process ended before the attempt's "
-                            "outcome was recorded"
-                        },
-                    )
-            self._history.append(
-                type=EventType.RUN_INTERRUPTED,
-                run_id=run_id,
-                session_id=session.session_id,
-                project_id=session.project_id,
-                payload={"reason": "the process ended before the run's end was recorded"},
-            )
-            steps += self._steps_in_run(run_id)
-
-        return self._store.save(
-            session.evolve(
-                status=SessionStatus.STOPPED,
-                last_stop_reason=STOP_INTERRUPTED,
-                steps_completed=session.steps_completed + steps,
-            )
-        )
 
     # --- translating a run into durable state ----------------------------
 

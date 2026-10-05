@@ -559,7 +559,8 @@ a script against the code.
   - runtime state moved outside every workspace.
 - Not yet: containers, parallel attempts, auto-merge, DBOS.
 - Acceptance:
-  - [ ] `kill -9` during a worker: recovery is refused until the worker exits, the worktree is kept, and its diff stats are recorded.
+  - [x] `kill -9` during a worker: recovery is refused until the worker exits, the worktree is kept, and its diff stats are recorded.
+    (`tests/test_recovery.py::test_kill9_of_the_loop_keeps_the_lock_until_the_worker_exits`)
   - [x] A worker that edits a protected test gets `fail`.
     (`tests/test_acceptance_verifier.py`)
   - [x] Re-titling a task or changing its acceptance invalidates an earlier pass.

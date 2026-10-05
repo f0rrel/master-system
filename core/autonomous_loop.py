@@ -59,6 +59,7 @@ from core.reasoning import (
     ReasoningInterface,
 )
 from core.reasoning_engine import ReasoningEngine, ReasoningError
+from core.recovery import recover_project
 from core.run_lock import ProjectLock
 from core.paths import RuntimePaths
 from core.task_orchestrator import (
@@ -391,6 +392,10 @@ class AutonomousLoop:
         project_path = self._master.project_state(project_id).project_path
         with ProjectLock(project_path, holder="autonomous loop") as lock:
             self._lock = lock
+            # Holding the lock proves nothing else runs here: close out what
+            # dead processes left open before starting.
+            recover_project(self._history, project_id,
+                            worktrees=self._orchestrator.worktrees)
             try:
                 return self._run_locked(project_id)
             finally:
