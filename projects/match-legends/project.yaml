@@ -13,3 +13,16 @@ github:
   repo: f0rrel/Match_Legends_mobile_game
   release_branch: main
   site_dir: www
+planner:
+  test_dir: tests/tasks
+  setup:
+  - npm ci --prefer-offline --no-audit --no-fund
+  base_checks:
+  - node --test tests/unit/*.test.js
+  - npx playwright test tests/smoke
+  protected_paths:
+  - tests/*
+  - package.json
+  - package-lock.json
+  - playwright.config.js
+  - .nvmrc

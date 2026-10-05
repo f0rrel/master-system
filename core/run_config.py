@@ -36,6 +36,11 @@ run_usd = 0.20
 interval_s = 300
 ntfy_server = "https://ntfy.sh"   # the topic is in ~/.config/master-system/ntfy-topic
 
+[planner]                         # ms chat: the planner model
+provider = "deepseek"
+model = "deepseek-v4-flash"
+chat_usd = 0.10                   # cap per chat
+
 [github]                          # the GitHub App (docs/github-setup.md)
 app_id = ""                       # its private key: ~/.config/master-system/github-app.pem
 
@@ -123,6 +128,16 @@ class DaemonSettings:
 
 
 @dataclass(frozen=True)
+class PlannerSettings:
+    provider: str = "deepseek"
+    model: str = "deepseek-v4-flash"
+    base_url: Optional[str] = None
+    timeout_s: float = 300
+    #: Priced spend allowed per planner chat.
+    chat_usd: float = 0.10
+
+
+@dataclass(frozen=True)
 class GitHubSettings:
     #: The GitHub App's numeric id ("App ID" on its settings page); empty = not set up.
     app_id: str = ""
@@ -138,6 +153,7 @@ class RunConfig:
     budget: BudgetSettings = field(default_factory=BudgetSettings)
     daemon: DaemonSettings = field(default_factory=DaemonSettings)
     github: GitHubSettings = field(default_factory=GitHubSettings)
+    planner: PlannerSettings = field(default_factory=PlannerSettings)
     #: model name -> {"input": usd_per_m, "output": usd_per_m, "cached_input": usd_per_m}
     prices: Mapping[str, Mapping[str, float]] = field(default_factory=lambda: {
         "deepseek-v4-flash": {"input": 0.44, "output": 1.32, "cached_input": 0.0028},
@@ -174,7 +190,7 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
         raise ConfigError(f"cannot read {path}: {error}") from error
 
     unknown = sorted(set(data) - {"master", "worker", "run", "prices", "budget", "daemon",
-                                  "github"})
+                                  "github", "planner"})
     if unknown:
         raise ConfigError(f"unknown sections {unknown} in {path}")
 
@@ -246,5 +262,15 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
     github = GitHubSettings(app_id=str(g.get("app_id", "")).strip(),
                             key_path=str(g.get("key_path", "")).strip())
 
+    pl = _section(data, "planner", ("provider", "model", "base_url", "timeout_s", "chat_usd"))
+    planner = PlannerSettings(
+        provider=str(pl.get("provider", PlannerSettings.provider)),
+        model=str(pl.get("model", PlannerSettings.model)),
+        base_url=pl.get("base_url"),
+        timeout_s=_positive(pl, "planner", "timeout_s", PlannerSettings.timeout_s),
+        chat_usd=_positive(pl, "planner", "chat_usd", PlannerSettings.chat_usd),
+    )
+
     return RunConfig(master=master, worker=worker, run=run, prices=prices,
-                     budget=budget, daemon=daemon, github=github, source=path)
+                     budget=budget, daemon=daemon, github=github, planner=planner,
+                     source=path)

@@ -44,6 +44,8 @@ MILESTONE_FIELDS = ("id", "name", "status")
 # changed only through set_task_acceptance / set_task_description, which no
 # model operation reaches.
 MUTABLE_TASK_FIELDS = ("milestone", "title", "status", "assigned_to")
+#: A human-set estimate of a task's difficulty; it picks the starting worker tier.
+TASK_SIZES = ("small", "medium", "hard")
 MUTABLE_MILESTONE_FIELDS = ("name", "status")
 
 
@@ -309,6 +311,41 @@ class WorkManager:
     def set_task_manual_check(self, task_id, manual_check):
         """Set or remove how a human checks the task's result by hand. Human-only."""
         return self._set_text_field(task_id, "manual_check", manual_check)
+
+    def add_planned_work(self, milestone, tasks):
+        """Add one milestone (an epic) and its fully specified tasks, all or nothing.
+
+        Human-only: used by the planner when the owner approves a draft. The
+        records are complete task records (description, acceptance,
+        manual_check, size, depends_on); the result is validated like any
+        project state, and both files are restored if it is invalid.
+        """
+        snapshot = self._state.snapshot()
+        milestones_doc = deepcopy(snapshot.milestones_doc)
+        tasks_doc = deepcopy(snapshot.tasks_doc)
+        _require_text(milestone.get("id"), "Milestone id")
+        _require_text(milestone.get("name"), "Milestone name")
+        if milestone["id"] in self._milestone_ids(snapshot):
+            raise DuplicateRecordError(f"Milestone already exists: {milestone['id']}")
+        existing = {t.get("id") for t in tasks_doc.get("tasks", [])}
+        for task in tasks:
+            if task.get("id") in existing:
+                raise DuplicateRecordError(f"Task already exists: {task.get('id')}")
+            if task.get("size") not in (None, *TASK_SIZES):
+                raise InvalidFieldError(f"Invalid task size: {task.get('size')}")
+        old_milestones, old_tasks = deepcopy(milestones_doc), deepcopy(tasks_doc)
+        milestones_doc.setdefault("milestones", []).append(
+            {"id": milestone["id"], "name": milestone["name"], "status": "planned"})
+        tasks_doc.setdefault("tasks", []).extend(deepcopy(list(tasks)))
+        write_yaml_atomically(self._milestones_path, milestones_doc)
+        write_yaml_atomically(self._tasks_path, tasks_doc)
+        try:
+            self._state.snapshot()
+        except ValueError:
+            write_yaml_atomically(self._milestones_path, old_milestones)
+            write_yaml_atomically(self._tasks_path, old_tasks)
+            raise
+        return deepcopy(list(tasks))
 
     def _set_text_field(self, task_id, field, value):
         if value is not None:

@@ -1,0 +1,212 @@
+"""core.planner, core.planner_checks and `ms chat`: drafts, must-fail checks, approval."""
+
+import io
+import json
+import os
+import shutil
+
+import pytest
+import yaml
+
+from conftest import git, make_repo
+from core.history import EventType, InMemoryHistoryStore
+from core.master import Master
+from core.ms import chat_loop
+from core.paths import RuntimePaths
+from core.planner import DraftProblem, PlannerChat, draft_problems, planner_settings
+from core.planner_checks import make_approver, make_checker
+from core.project_state import ProjectState
+
+pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+
+FAILING = ("const test = require('node:test');\nconst assert = require('node:assert');\n"
+           "const { greet } = require('../../greet.js');\n"
+           "test('greets', () => assert.strictEqual(greet('Ada'), 'Hi Ada'));\n")
+PASSING = FAILING.replace("'Hi Ada'", "'Hey Ada'")
+BROKEN = "const test = require('node:test');\ntest('x', () => {\n"
+
+
+def draft(content=FAILING, **task_extra):
+    task = {"id": "t-2", "title": "Say hi", "size": "small", "depends_on": [],
+            "description": "greet() must say Hi.", "manual_check": "1. Open the page.",
+            "tests": [{"path": "tests/tasks/t-2-greet.test.js", "content": content}],
+            "test_commands": ["node --test tests/tasks/t-2-greet.test.js"]}
+    task.update(task_extra)
+    return {"epic": {"id": "epic-hi", "title": "Friendlier greetings", "description": "d"},
+            "tasks": [task]}
+
+
+class Scripted:
+    def __init__(self, replies):
+        self.replies = [json.dumps(r) if not isinstance(r, str) else r for r in replies]
+        self.prompts = []
+
+    def complete(self, prompt, schema=None):
+        self.prompts.append(prompt)
+        self.last_usage = {"input_tokens": 10000, "output_tokens": 1000}
+        return self.replies.pop(0)
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path / "repo", {
+        "greet.js": "exports.greet = (name) => 'Hey ' + name;\n",
+        "README.md": "# Toy\nA toy project.\n", "tests/tasks/README.md": "pending tests\n"})
+    git(repo, "branch", "develop")
+    root = tmp_path / "projects"
+    project = root / "toy"
+    project.mkdir(parents=True)
+    (project / "project.yaml").write_text(yaml.safe_dump({
+        "id": "toy", "name": "Toy", "status": "active", "repository": str(repo),
+        "base_branch": "develop",
+        "planner": {"test_dir": "tests/tasks", "setup": [], "base_checks": ["true"],
+                    "protected_paths": ["tests/*"]}}))
+    (project / "milestones.yaml").write_text(yaml.safe_dump(
+        {"milestones": [{"id": "m1", "name": "M1", "status": "in_progress"}]}))
+    (project / "tasks.yaml").write_text(yaml.safe_dump({"tasks": [
+        {"id": "t-1", "milestone": "m1", "title": "First", "status": "completed"}]}))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    paths = RuntimePaths(state_dir=tmp_path / "state", worktrees_root=tmp_path / "worktrees")
+    master = Master(root)
+    history = InMemoryHistoryStore()
+    worker_env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path)}
+    checker = make_checker(master, paths, worker_env, timeout_s=120)
+    approver = make_approver(master, history, paths, checker)
+
+    def chat(replies, **kwargs):
+        return PlannerChat("toy", master, history, Scripted(replies),
+                           store_dir=tmp_path / "state" / "planner",
+                           prices={"deepseek-v4-flash": {"input": 0.44, "output": 1.32}},
+                           model_label="deepseek:deepseek-v4-flash", checker=checker,
+                           approver=approver, **kwargs)
+
+    return {"repo": repo, "project": project, "history": history, "chat": chat,
+            "master": master}
+
+
+def answer(draft_value=None, reply="ok", questions=(), read_files=()):
+    return {"reply": reply, "questions": list(questions), "read_files": list(read_files),
+            "draft": draft_value}
+
+
+def test_a_turn_can_read_files_then_drafts_and_is_costed(env):
+    chat = env["chat"]([answer(read_files=["greet.js"]),
+                        answer(draft(), reply="Here is a plan.",
+                               questions=["Should it also say bye?"])])
+    result = chat.turn("I want greet to say Hi")
+
+    assert result == {"reply": "Here is a plan.", "questions": ["Should it also say bye?"],
+                      "draft_changed": True}
+    second_prompt = chat._provider.prompts[1]
+    assert "FILE greet.js:\nexports.greet" in second_prompt
+    assert "t-2" in chat._provider.prompts[0]  # the next free id is offered
+    turns = env["history"].events(types=[EventType.PLANNER_TURN])
+    assert len(turns) == 2 and turns[0].payload["reasoner"] == "deepseek:deepseek-v4-flash"
+    assert chat.state.cost_usd == pytest.approx(2 * (0.0044 + 0.00132))
+    assert ProjectState(env["project"]).get_task("t-2") is None  # nothing queued
+
+
+def test_the_chat_cap_stops_turns(env):
+    chat = env["chat"]([answer()], max_cost_usd=0.001)
+    chat.turn("hello")
+    with pytest.raises(DraftProblem, match="cap"):
+        chat.turn("again")
+
+
+def test_draft_problems_catch_bad_drafts(env):
+    settings = planner_settings({"planner": {"test_dir": "tests/tasks"}})
+    assert draft_problems(draft(), {"t-1"}, {"m1"}, settings) == []
+    bad = draft(size="huge", test_commands=["npm test"],
+                tests=[{"path": "src/x.js", "content": "x"}])
+    problems = draft_problems(bad, {"t-1"}, {"m1"}, settings)
+    assert any("size" in p for p in problems)
+    assert any("must be a .js file under tests/tasks/" in p for p in problems)
+    assert any("must run one of its test files" in p for p in problems)
+    assert any("already used" in p for p in draft_problems(draft(id="t-1"), {"t-1"}, {"m1"},
+                                                            settings))
+
+
+def test_a_good_test_fails_on_the_current_code_and_passes_the_check(env):
+    chat = env["chat"]([answer(draft())])
+    chat.turn("go")
+    result = chat.check()
+    assert result["ok"], result["items"]
+
+
+def test_a_test_that_already_passes_is_refused(env):
+    chat = env["chat"]([answer(draft(PASSING))])
+    chat.turn("go")
+    result = chat.check()
+    assert not result["ok"]
+    assert any("passes already" in i["note"] for i in result["items"])
+
+
+def test_a_broken_test_is_refused(env):
+    chat = env["chat"]([answer(draft(BROKEN))])
+    chat.turn("go")
+    result = chat.check()
+    assert not result["ok"]
+    assert any(not i["ok"] and "valid JavaScript" in i["what"] for i in result["items"])
+
+
+def test_approve_needs_a_passing_check_of_the_current_draft(env):
+    chat = env["chat"]([answer(draft()), answer(draft(title="Say hello"))])
+    chat.turn("go")
+    with pytest.raises(DraftProblem, match="check"):
+        chat.approve()
+    chat.check()
+    chat.turn("rename it")  # the draft changed: its check no longer counts
+    with pytest.raises(DraftProblem, match="check"):
+        chat.approve()
+
+
+def test_approve_commits_the_tests_and_queues_the_tasks(env):
+    chat = env["chat"]([answer(draft())])
+    chat.turn("go")
+    chat.check()
+    assert chat.approve() == ["t-2"]
+
+    repo = env["repo"]
+    assert "Hi Ada" in git(repo, "show", "develop:tests/tasks/t-2-greet.test.js")
+    assert "approved by the owner" in git(repo, "log", "-1", "--format=%B", "develop").lower()
+    assert git(repo, "rev-parse", "main") != git(repo, "rev-parse", "develop")
+    task = ProjectState(env["project"]).get_task("t-2")
+    assert task["status"] == "planned" and task["size"] == "small"
+    assert task["milestone"] == "epic-hi"
+    assert task["acceptance"] == {"commands": ["node --test tests/tasks/t-2-greet.test.js",
+                                               "true"], "protected_paths": ["tests/*"]}
+    assert task["manual_check"] == "1. Open the page."
+    [action] = env["history"].events(types=[EventType.HUMAN_ACTION])
+    assert action.payload["actor"] == "owner via planner"
+    assert action.payload["action"] == "planner_approved"
+    assert chat.state.status == "approved"
+
+
+def test_the_chat_loop_drives_a_whole_conversation(env):
+    chat = env["chat"]([answer(draft(), reply="Plan ready.", questions=["Bye too?"]),
+                        answer(None, reply="Fine, no bye.")])
+    lines = iter(["I want Hi", "no bye", "show", "check", "approve"])
+    out = io.StringIO()
+    assert chat_loop(chat, read=lambda prompt: next(lines), out=out) == 0
+    text = out.getvalue()
+    assert "planner> Plan ready." in text and "? Bye too?" in text
+    assert "draft updated: 1 task(s)" in text
+    assert "EPIC epic-hi: Friendlier greetings" in text
+    assert "All checks passed" in text and "Queued t-2" in text
+    assert "[this chat: $" in text
+
+
+def test_discard_queues_nothing(env):
+    chat = env["chat"]([answer(draft())])
+    lines = iter(["go", "discard"])
+    out = io.StringIO()
+    chat_loop(chat, read=lambda prompt: next(lines), out=out)
+    assert "Nothing was queued" in out.getvalue()
+    assert ProjectState(env["project"]).get_task("t-2") is None
+
+
+def test_a_saved_chat_continues(env, tmp_path):
+    chat = env["chat"]([answer(draft())])
+    chat.turn("go")
+    again = env["chat"]([], chat_id=chat.state.chat_id)
+    assert again.state.draft == draft() and again.state.messages[0]["text"] == "go"

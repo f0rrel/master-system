@@ -2,6 +2,7 @@
 
     ms status                  projects, tasks, what waits for you, today's spend, links
     ms report [session]        a session's report (default: the latest)
+    ms chat <project> [--new]  talk to the planner: it drafts tasks with tests; `approve` queues them
     ms pause | resume          stop or allow new work (a running task finishes)
     ms stop                    stop the current run now, and pause
     ms daemon                  the background service loop (run by systemd)
@@ -375,6 +376,128 @@ def _command_report(args, out):
     return 0
 
 
+# --- planner chat ---------------------------------------------------------------------------
+
+
+def build_planner(config, project_id, chat_id=None):
+    from types import SimpleNamespace
+
+    from core.daemon import load_env_file
+    from core.master import Master
+    from core.planner import PlannerChat
+    from core.planner_checks import make_approver, make_checker
+    from core.run_cli import build_provider, build_worker_env
+    from core.run_config import MasterConfig
+    from core.sqlite_history import SQLiteHistoryStore
+
+    for key, value in load_env_file(default_config_path().parent / "master.env").items():
+        os.environ.setdefault(key, value)
+    p = config.planner
+    provider = build_provider(SimpleNamespace(master=MasterConfig(
+        provider=p.provider, model=p.model, base_url=p.base_url, timeout_s=p.timeout_s)))
+    paths = _paths()
+    master = Master(config.run.projects_root)
+    history = SQLiteHistoryStore(paths.history_path)
+    checker = make_checker(master, paths, build_worker_env(config),
+                           timeout_s=config.run.verification_timeout_s)
+    return PlannerChat(project_id, master, history, provider,
+                       store_dir=paths.state_dir / "planner", prices=config.prices,
+                       model_label=f"{p.provider}:{p.model}", checker=checker,
+                       approver=make_approver(master, history, paths, checker),
+                       max_cost_usd=p.chat_usd, chat_id=chat_id)
+
+
+def latest_open_chat(store_dir: Path, project_id: str):
+    import json
+
+    chats = []
+    for path in sorted(Path(store_dir).glob(f"{project_id}-*.json")):
+        try:
+            data = json.loads(path.read_text())
+        except ValueError:
+            continue
+        if data.get("status") == "open":
+            chats.append(data["chat_id"])
+    return chats[-1] if chats else None
+
+
+CHAT_HELP = ("Type what you want in plain words. Commands: show (the draft), check (run the "
+             "checks), approve (queue the tasks), discard, help, quit.")
+
+
+def chat_loop(chat, read=input, out=None):
+    """The conversation. ``read`` returns the owner's next line (EOFError ends it)."""
+    from core.planner import DraftProblem, render_draft
+
+    out = out or sys.stdout
+    while True:
+        try:
+            line = read("you> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nBye. The chat is saved; `ms chat` continues it.", file=out)
+            return 0
+        if not line:
+            continue
+        command = line.lower()
+        try:
+            if command in ("quit", "exit", "bye"):
+                print("The chat is saved; `ms chat` continues it.", file=out)
+                return 0
+            if command == "help":
+                print(CHAT_HELP, file=out)
+            elif command == "show":
+                print(render_draft(chat.state.draft, chat.state.check), file=out)
+                for problem in chat.problems() if chat.state.draft else []:
+                    print(f"  (incomplete) {problem}", file=out)
+            elif command == "check":
+                print("Checking the tests on the latest code (this can take a few minutes)...",
+                      file=out, flush=True)
+                result = chat.check()
+                for item in result["items"]:
+                    print(f"  [{'ok' if item['ok'] else '!!'}] {item['what']}"
+                          + ("" if item["ok"] else f"\n       {item['note']}"), file=out)
+                print("All checks passed. Type `approve` to queue the tasks." if result["ok"]
+                      else "Some checks failed; tell the planner what to fix (or paste the "
+                      "failure).", file=out)
+            elif command == "approve":
+                print("Re-checking on the latest code and queueing...", file=out, flush=True)
+                ids = chat.approve()
+                print(f"Approved. Queued {', '.join(ids)}; the service starts on them within a "
+                      "few minutes. You'll get a notification when they're done.", file=out)
+                return 0
+            elif command == "discard":
+                chat.discard()
+                print("Discarded. Nothing was queued.", file=out)
+                return 0
+            else:
+                answer = chat.turn(line)
+                print(f"planner> {answer['reply']}", file=out)
+                for question in answer["questions"]:
+                    print(f"  ? {question}", file=out)
+                if answer["draft_changed"]:
+                    tasks = len((chat.state.draft or {}).get("tasks") or [])
+                    print(f"  (draft updated: {tasks} task(s); `show` to read it, `check` to "
+                          "test it)", file=out)
+                print(f"  [this chat: ${chat.state.cost_usd:.4f} of "
+                      f"${chat.max_cost_usd:.2f}]", file=out)
+        except DraftProblem as problem:
+            print(f"  {problem}", file=out)
+        except Exception as error:  # the provider or git failed; the chat is saved
+            print(f"  error: {error}", file=out)
+
+
+def _command_chat(args, out):
+    config = _config(args)
+    chat_id = None if args.new else latest_open_chat(_paths().state_dir / "planner",
+                                                     args.project)
+    chat = build_planner(config, args.project, chat_id)
+    print(f"Planner for {args.project} ({config.planner.model}, up to "
+          f"${config.planner.chat_usd:.2f} per chat)"
+          + (f", continuing chat {chat_id}" if chat_id else "") + ".", file=out)
+    print(CHAT_HELP, file=out)
+    return chat_loop(chat, out=out)
+
+
 # --- github ---------------------------------------------------------------------------------
 
 
@@ -505,6 +628,10 @@ def build_parser():
     notify = commands.add_parser("notify", help="Phone notifications.")
     notify.add_argument("action", choices=["setup", "test"])
     notify.set_defaults(handler=_command_notify)
+    chat = commands.add_parser("chat", help="Talk to the planner about what you want.")
+    chat.add_argument("project")
+    chat.add_argument("--new", action="store_true", help="Start a new chat.")
+    chat.set_defaults(handler=_command_chat)
     github = commands.add_parser("github", help="Set up and check the GitHub App.")
     github.add_argument("action", choices=["setup", "check"])
     github.add_argument("--app-id", default=None)

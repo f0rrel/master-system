@@ -374,6 +374,10 @@ class ProjectState:
                     for problem in description_problems(task["manual_check"], "manual_check")
                 )
 
+            if "size" in task and task["size"] not in ("small", "medium", "hard"):
+                problems.append(f"task {task_id} has invalid size {task['size']!r} "
+                                "(small, medium or hard)")
+
             if "acceptance" in task:
                 problems.extend(
                     f"task {task_id}: {problem}"

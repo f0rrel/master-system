@@ -180,6 +180,10 @@ class Master:
         deliberately not in the operation allowlist."""
         return self._work(project_id).set_task_description(task_id, description)
 
+    def add_planned_work(self, project_id, milestone, tasks):
+        """Add an epic and its fully specified tasks. Human-only (the approved planner flow)."""
+        return self._work(project_id).add_planned_work(milestone, tasks)
+
     def set_task_manual_check(self, project_id, task_id, manual_check):
         """Set or (with None) clear how a human checks the result by hand.
         For humans only: deliberately not in the operation allowlist."""

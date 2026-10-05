@@ -560,6 +560,7 @@ The approval prompt defaults to **no**. A `run_task` in a proposal is never exec
 ms status             # projects, tasks by state, what waits for you, today's spend, links
 ms report [session]   # a session's report (default: the latest)
 ms install            # put `ms` on PATH (~/.local/bin/ms)
+ms chat <project>     # the planner: describe what you want; it drafts tasks with tests; `approve` queues them
 ms service install    # the background service: starts at login, processes approved tasks
 ms pause | ms resume  # start nothing new / allow new work (a running task finishes)
 ms stop               # stop the current run now (recorded as interrupted), and pause
@@ -845,6 +846,7 @@ Add a row whenever an architectural decision is made or reversed.
 | **H-D2:** in such a project a task completes only when its latest attempt is integrated (completion-gate reason `not_integrated`), so a dependency is satisfied only when its code is in develop (closes N2 there) | "Done" means "in the preview" | **Approved (2026-10-06)** |
 | **H-D3:** a rebase conflict or failed re-verification is recorded as `integration_refused` (history schema v4) and shown to Master as "run the task again"; the next attempt starts from the new develop, within the attempt limit | No human needed for an ordinary conflict | **Approved (2026-10-06)** |
 | **H-D4/G1:** after each run the service pushes develop and a `gh-pages` site (release branch's `www/` at `/`, develop's at `/develop/`) with a GitHub App installation token (JWT signed by `openssl`; token only in the git process's environment via GIT_ASKPASS). The app has Contents/Pull requests/Pages write and no Administration; a ruleset on main allows no bypass (docs/github-setup.md) | Stable preview URL; the app can never change main | **Approved (2026-10-06)** |
+| **H-D6:** `ms chat` (core/planner.py): a planner model (`[planner]`, default DeepSeek V4 Flash, cap per chat) drafts an epic of tasks with tests, asks the owner about unclear points, and can read the development branch's files (read-only, git). A draft is approved only after deterministic checks in a fresh worktree (tests are valid JS; each task's test commands fail on the current code, not because the test is broken; base checks pass). `approve` re-checks under the project lock, commits the tests to develop, writes the epic (milestone) and tasks all-or-nothing (`Master.add_planned_work`, human-only), and records `human_action` (actor `owner via planner`, draft hash) per task. Tasks gain a human-only `size` (small/medium/hard) | Acceptance edits stay human-only: only the owner's `approve` writes them | **Approved (2026-10-06)**; checks and flow taken without the owner |
 | History schema v4 adds `integration_refused`, `published`, `planner_turn`, `release` (migration with backup, as before) | One migration for all of Milestone 3 | Taken without the owner |
 | Merged Milestone 1 to main (2026-10-05) | Milestone 1 complete and reviewed; `main` fast-forwarded to `m1-contain-verify`, tagged `m1-contain-verify` | **Approved (2026-10-05)** |
 

@@ -97,7 +97,7 @@ def spend_since(history: HistoryStore, since_iso: str, prices: Mapping,
     master = worker = 0.0
     unpriced = 0
     for e in history.events(types=[EventType.DECISION, EventType.RUN_STOPPED,
-                                   EventType.ATTEMPT_FINISHED]):
+                                   EventType.ATTEMPT_FINISHED, EventType.PLANNER_TURN]):
         if e.created_at < since_iso:
             continue
         if e.type is EventType.ATTEMPT_FINISHED:
