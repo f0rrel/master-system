@@ -1,0 +1,85 @@
+tasks:
+- id: ml-1
+  milestone: m2-overnight
+  title: Seeded random number generator
+  status: planned
+  description: 'In www/js/match-logic.js, inside the marked section ''TASK SECTION ml-1'', add createRng(seed):
+    a deterministic generator (for example mulberry32) returning floats in [0, 1), and export it as api.createRng.
+    The board functions already accept an rng parameter. Read tests/tasks/ml-1-seeded-rng.test.js for
+    the exact requirements. Change nothing outside that section unless strictly needed.'
+  acceptance:
+    commands:
+    - npm ci --prefer-offline --no-audit --no-fund
+    - node --test tests/unit/*.test.js
+    - node --test tests/tasks/ml-1-seeded-rng.test.js
+    - npx playwright test tests/smoke
+    protected_paths: &id001
+    - tests/*
+    - package.json
+    - package-lock.json
+    - playwright.config.js
+    - .nvmrc
+- id: ml-2
+  milestone: m2-overnight
+  title: Shuffle the board in place when no moves are left
+  status: planned
+  description: 'In www/js/match-logic.js, inside ''TASK SECTION ml-2'', add shuffleBoard(board, rng):
+    return a NEW board that rearranges the same tiles (same cells, same type counts) so it has no matches
+    and at least one legal move; do not modify the input; deterministic for a given rng. Export it as
+    api.shuffleBoard. Then, in www/index.html, where the game says ''No moves left — board reshuffled''
+    and deals a fresh board, use MatchLogic.shuffleBoard(session.board) instead. Requirements: tests/tasks/ml-2-shuffle.test.js.'
+  acceptance:
+    commands:
+    - npm ci --prefer-offline --no-audit --no-fund
+    - node --test tests/unit/*.test.js
+    - node --test tests/tasks/ml-2-shuffle.test.js
+    - npx playwright test tests/smoke
+    protected_paths: *id001
+- id: ml-3
+  milestone: m2-overnight
+  title: Extract the scoring rules into scoreMatch
+  status: planned
+  description: 'In www/js/match-logic.js, inside ''TASK SECTION ml-3'', add scoreMatch({size, maxRun,
+    combo, buffMult}) implementing the game''s existing scoring: size * BASE_POINTS * combo * sizeBonus
+    (2 for a run of 5+, 1.5 for 4, else 1), rounded; then, if buffMult is given, multiplied by it and
+    rounded again. Export it as api.scoreMatch, and make resolveCascade in www/index.html use it instead
+    of computing the score inline. Requirements: tests/tasks/ml-3-scoring.test.js.'
+  acceptance:
+    commands:
+    - npm ci --prefer-offline --no-audit --no-fund
+    - node --test tests/unit/*.test.js
+    - node --test tests/tasks/ml-3-scoring.test.js
+    - npx playwright test tests/smoke
+    protected_paths: *id001
+- id: ml-4
+  milestone: m2-overnight
+  title: Hint button
+  status: planned
+  description: 'In www/js/match-logic.js, inside ''TASK SECTION ml-4'', add findHint(board): return {a:
+    {q, r}, b: {q, r}}, two adjacent cells whose swap makes a match, or null; do not modify the board.
+    Export it as api.findHint. In www/index.html add a visible button with id ''hint-btn'' on the game
+    screen; clicking it adds the CSS class ''hint'' (give it a visible style) to exactly those two tiles,
+    without using up a move. Requirements: tests/tasks/ml-4-hint.test.js and tests/tasks/ml-4-hint.spec.js.'
+  acceptance:
+    commands:
+    - npm ci --prefer-offline --no-audit --no-fund
+    - node --test tests/unit/*.test.js
+    - node --test tests/tasks/ml-4-hint.test.js
+    - npx playwright test tests/tasks/ml-4-hint.spec.js
+    - npx playwright test tests/smoke
+    protected_paths: *id001
+- id: ml-5
+  milestone: m2-overnight
+  title: Persist progress in localStorage
+  status: planned
+  description: 'In www/index.html, make the Storage object fall back to localStorage when window.storage
+    is not available, for both load and save, so progress (gems, unlocked legends, the chosen legend,
+    unlocked levels) survives a reload. Keep window.storage as the first choice when it exists. Requirements:
+    tests/tasks/ml-5-persist.spec.js.'
+  acceptance:
+    commands:
+    - npm ci --prefer-offline --no-audit --no-fund
+    - node --test tests/unit/*.test.js
+    - npx playwright test tests/tasks/ml-5-persist.spec.js
+    - npx playwright test tests/smoke
+    protected_paths: *id001

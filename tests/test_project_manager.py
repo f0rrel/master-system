@@ -108,7 +108,7 @@ def test_lists_every_discovered_project(two_projects):
 
 def test_default_root_is_the_repository_projects_directory():
     assert DEFAULT_PROJECTS_ROOT == REPO_ROOT / "projects"
-    assert ProjectManager().list_projects() == ["ai-system"]
+    assert ProjectManager().list_projects() == ["ai-system", "match-legends"]
 
 
 def test_root_is_configurable(tmp_path):
@@ -823,12 +823,12 @@ def test_three_way_malformed_duplicate_is_reported_once_per_directory(
 def test_overview_of_repository_project():
     overview = ProjectManager().overview()
 
-    assert overview["project_count"] == 1
+    assert overview["project_count"] == 2
     assert overview["problem_count"] == 0
-    assert overview["projects"][0]["project_id"] == "ai-system"
-    assert overview["projects"][0]["project_status"] == "active"
-    assert overview["totals"]["tasks"] == 4
-    assert overview["totals"]["milestones"] == 8
+    assert [p["project_id"] for p in overview["projects"]] == ["ai-system", "match-legends"]
+    assert all(p["project_status"] == "active" for p in overview["projects"])
+    assert overview["totals"]["tasks"] == 4 + 5
+    assert overview["totals"]["milestones"] == 8 + 1
 
 
 def test_manager_reads_without_writing(projects_root):

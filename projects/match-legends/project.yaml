@@ -1,0 +1,8 @@
+id: match-legends
+name: Match Legends
+description: >
+  The Match Legends mobile game (github.com/f0rrel/Match_Legends_mobile_game),
+  managed in a dedicated clone with pushing disabled. Milestone 2 target project.
+status: active
+repository: ~/AI/managed/match-legends
+base_branch: main
