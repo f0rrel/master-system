@@ -201,3 +201,39 @@ def test_a_loop_refuses_to_start_while_the_project_is_locked(project):
             loop.run("alpha")
 
     assert history.events() == ()
+
+
+# --- release never unlocks for other holders -------------------------------
+
+
+def test_a_child_holding_the_inherited_descriptor_keeps_the_lock_after_release(project, tmp_path):
+    sentinel = tmp_path / "let-go"
+    lock = ProjectLock(project, holder="loop").acquire()
+    # Stands in for a worker that escaped its process group (setsid).
+    child = subprocess.Popen(
+        ["sh", "-c", f"while [ ! -f {sentinel} ]; do sleep 0.05; done"],
+        pass_fds=(lock.fileno(),), start_new_session=True,
+    )
+    try:
+        lock.release()
+
+        with pytest.raises(ProjectBusyError):
+            ProjectLock(project).acquire()
+    finally:
+        sentinel.write_text("go")
+        child.wait(timeout=10)
+
+    with ProjectLock(project):
+        pass
+
+
+def test_release_does_not_unlock_the_shared_description(project, monkeypatch):
+    import fcntl
+
+    calls = []
+    real_flock = fcntl.flock
+    monkeypatch.setattr(fcntl, "flock", lambda fd, op: (calls.append(op), real_flock(fd, op))[1])
+
+    ProjectLock(project).acquire().release()
+
+    assert fcntl.LOCK_UN not in calls

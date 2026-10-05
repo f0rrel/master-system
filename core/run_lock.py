@@ -68,20 +68,27 @@ class ProjectLock:
         """The locked file's descriptor, for passing to a worker process.
 
         A process that inherits it keeps the lock held after this process
-        dies. Never call ``release`` while such a process may still run:
-        unlocking releases the lock for every holder of the descriptor.
+        releases it or dies: ``release`` only closes this process's
+        descriptor, so the lock ends when the last holder does.
         """
         if self._file is None:
             raise RuntimeError("lock is not held")
         return self._file.fileno()
 
     def release(self) -> None:
+        """Close this process's descriptor. Deliberately no ``LOCK_UN``.
+
+        ``flock`` belongs to the open file description, which worker processes
+        share through inherited descriptors. ``LOCK_UN`` would release the lock
+        for all of them, so a worker that escaped its process group would keep
+        running unlocked while recovery raced it. Closing only drops this
+        holder; the lock is released when the last holder closes or exits.
+        """
         if self._file is None:
             return
         try:
-            fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
-        finally:
             self._file.close()
+        finally:
             self._file = None
 
     def __enter__(self) -> "ProjectLock":
