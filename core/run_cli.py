@@ -12,6 +12,7 @@ Commands:
     start  <project> --objective TEXT [--session ID] [--until-stopped ...]
     resume <session> [--until-stopped ...]
     status [<project>]
+    report <session> [--json]                                    from history alone
     task describe <project> <task> (--text TEXT | --clear)      human edit, recorded
     task set-acceptance <project> <task> (--command C ... [--protect GLOB ...] | --clear)
 
@@ -63,9 +64,16 @@ class Context:
             state_dir=Path(args.state_dir) if args.state_dir else defaults.state_dir,
             worktrees_root=defaults.worktrees_root,
         )
-        root = args.root or self.config.run.projects_root
-        self.master = Master(root)
+        self._root = args.root or self.config.run.projects_root
+        self._master = None
         self._history = None
+
+    @property
+    def master(self):
+        # Built on first use, so 'report' works from history alone.
+        if self._master is None:
+            self._master = Master(self._root)
+        return self._master
 
     @property
     def history(self):
@@ -247,6 +255,26 @@ def _command_status(ctx, args, out):
     return EXIT_OK
 
 
+# --- report ----------------------------------------------------------------------------
+
+
+def _command_report(ctx, args, out):
+    from core.report import build_report, render_report
+
+    try:
+        report = build_report(ctx.history, args.session_id, ctx.config.prices)
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return EXIT_ERROR
+    if args.json:
+        import json
+
+        print(json.dumps(report, indent=2), file=out)
+    else:
+        print(render_report(report), file=out, end="")
+    return EXIT_OK
+
+
 # --- task: human edits, recorded ---------------------------------------------------
 
 
@@ -310,6 +338,11 @@ def build_parser():
     resume.add_argument("session_id")
     run_options(resume)
     resume.set_defaults(handler=_command_resume)
+
+    report = commands.add_parser("report", help="The session's report, from history alone.")
+    report.add_argument("session_id")
+    report.add_argument("--json", action="store_true")
+    report.set_defaults(handler=_command_report)
 
     status = commands.add_parser("status", help="Tasks, sessions, open attempts, events.")
     status.add_argument("project_id", nargs="?")

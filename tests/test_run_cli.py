@@ -317,3 +317,80 @@ def test_the_real_composition_wires_the_configured_parts(setup, monkeypatch, tmp
     if find_node_bin(22) is not None:
         env = run_cli.build_worker_env(config)
         assert env["HOME"] == str(tmp_path / "wh") and "DEEPSEEK_API_KEY" not in env
+
+
+# --- report: from history alone ------------------------------------------------------
+
+import shutil
+
+
+def test_the_report_is_built_from_history_alone(setup, wired):
+    wired([START, RUN, DONE])
+    cli(setup, "task", "describe", "alpha", "t1", "--text", "Write done.txt")
+    cli(setup, "start", "alpha", "--objective", "o", "--session", "s1")
+    config = config_file(setup, '[prices]\n"test" = { input = 1.0, output = 2.0 }\n')
+    shutil.rmtree(setup["root"])  # no project files at all
+
+    code, out = cli_with(setup, config, "report", "s1", "--json")
+
+    assert code == 0, out
+    report = json.loads(out)
+    assert report["steps"] == 3 and len(report["runs"]) == 1
+    assert report["runs"][0]["stop_reason"] == "no_actionable_work"
+    [attempt] = report["attempts"]
+    assert (attempt["task_id"], attempt["outcome"], attempt["verdict"]) == ("t1", "finished", "pass")
+    assert report["wall_clock_seconds"] is not None
+    [master] = report["master_usage"]
+    assert master["reasoner"] == "scripted:test"
+    assert master["usage"]["input_tokens"] == 300 and master["usage"]["output_tokens"] == 30
+    assert master["cost_usd"] == round((300 * 1.0 + 30 * 2.0) / 1e6, 6)
+    assert report["worker_usage"][0]["usage"]["input_tokens"] == 5000
+    assert report["worker_usage"][0]["claimed"] is True
+    assert [h["action"] for h in report["human_touches"]] == ["set_description"]
+    assert report["unexplained_spec_changes"] == []
+    [trace] = report["completions"]
+    assert trace["attempt_id"] == attempt["attempt_id"]
+    assert trace["result_sha"] == attempt["result_sha"] and trace["verdict"] == "pass"
+    assert trace["integrated_sha"] is None
+
+
+def test_the_text_report_reads_well(setup, wired):
+    wired([START, RUN, DONE])
+    cli(setup, "start", "alpha", "--objective", "o", "--session", "s1")
+
+    code, out = cli(setup, "report", "s1")
+
+    assert code == 0
+    for heading in ("REPORT", "Runs: 1", "Attempts: 1", "Tokens and cost", "Human touches",
+                    "Completions: 1", "(claimed)"):
+        assert heading in out
+
+
+def test_an_edit_outside_run_cli_is_reported_as_unexplained(setup, wired):
+    wired([START, RUN, WAIT, RUN, WAIT])
+    cli(setup, "start", "alpha", "--objective", "o", "--session", "s1")
+    from core.master import Master
+    Master(setup["root"]).update_task("alpha", "t1", title="Renamed behind its back")
+    cli(setup, "resume", "s1")
+
+    _, out = cli(setup, "report", "s1", "--json")
+
+    [change] = json.loads(out)["unexplained_spec_changes"]
+    assert change["task_id"] == "t1"
+
+
+def test_an_unknown_session_has_no_report(setup):
+    code, _ = cli(setup, "report", "nope")
+
+    assert code == 1
+
+
+def test_a_retitle_by_masters_own_operation_is_not_unexplained(setup, wired):
+    retitle = act({"operation": "update_task", "project_id": "alpha", "task_id": "t1",
+                   "title": "A clearer title"})
+    wired([START, RUN, retitle, RUN, WAIT])
+    cli(setup, "start", "alpha", "--objective", "o", "--session", "s1")
+
+    _, out = cli(setup, "report", "s1", "--json")
+
+    assert json.loads(out)["unexplained_spec_changes"] == []
