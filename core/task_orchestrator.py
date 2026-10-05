@@ -239,6 +239,7 @@ class TaskOrchestrator:
                     "worktree": str(worktree),
                     "branch": branch,
                     "spec_hash": spec_hash(task),
+                    "task_title": task.get("title"),
                     # Human-written; copied so the report can show it from
                     # history alone. Not part of the spec hash.
                     "manual_check": task.get("manual_check"),

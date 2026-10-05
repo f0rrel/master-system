@@ -134,6 +134,9 @@ class Daemon:
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
     max_failures: int = 3
     preview_url: Callable[[str], Optional[str]] = lambda project_id: None
+    #: Called every cycle per project (even without a run), e.g. the release
+    #: watcher; returns notification lines.
+    watchers: list = field(default_factory=list)
 
     # --- files the service and `ms` share ---
 
@@ -189,6 +192,15 @@ class Daemon:
             return [f"daily cap reached (${spent:.4f} of ${daily:.2f})"]
 
         for project_id in self.master.list_projects():
+            for watcher in self.watchers:
+                try:
+                    lines = watcher(project_id) or []
+                except Exception as error:
+                    lines = [f"release check failed: {error}"]
+                if lines:
+                    self.notifier.send(f"{project_id}: release", "\n".join(lines),
+                                       tags="rocket", click=self.preview_url(project_id))
+                    log += [f"{project_id}: {line}" for line in lines]
             if self.is_busy(project_id):
                 log.append(f"{project_id}: busy")
                 continue

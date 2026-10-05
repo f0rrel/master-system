@@ -3,6 +3,7 @@
     ms status                  projects, tasks, what waits for you, today's spend, links
     ms report [session]        a session's report (default: the latest)
     ms chat <project> [--new]  talk to the planner: it drafts tasks with tests; `approve` queues them
+    ms release <project>       release notes + a pull request develop -> main for you to merge
     ms pause | resume          stop or allow new work (a running task finishes)
     ms stop                    stop the current run now, and pause
     ms daemon                  the background service loop (run by systemd)
@@ -106,6 +107,7 @@ def build_daemon(config, config_path):
     from core.host import subprocess_runner
     from core.master import Master
     from core.publish import Publisher
+    from core.release import Releaser
     from core.run_cli import _lock_holder
     from core.sqlite_history import SQLiteHistoryStore
 
@@ -119,13 +121,37 @@ def build_daemon(config, config_path):
     env_file = default_config_path().parent / "master.env"
     publisher = Publisher(master, history, lambda repo: github_app(config, repo),
                           paths.state_dir)
+    releaser = Releaser(master, history, lambda repo: github_app(config, repo),
+                        askpass_dir=paths.state_dir, prices=config.prices, publisher=publisher)
     return Daemon(
         master=master, history=history, config=config, state_dir=paths.state_dir,
         notifier=Notifier.from_file(config.daemon.ntfy_server),
         run=subprocess_runner(config_path, env_file, paths.state_dir / "logs" / "runs",
                               paths.state_dir),
-        after_run=[publisher], is_busy=is_busy, preview_url=publisher.preview_url,
+        after_run=[publisher, release_ready_notice(releaser)], is_busy=is_busy,
+        preview_url=publisher.preview_url, watchers=[releaser.watch],
     )
+
+
+def release_ready_notice(releaser):
+    """After a run: say once per batch that a release is possible (H-D: approve releases)."""
+    def notice(project_id, session_id):
+        from core.workspace import is_ancestor
+
+        if releaser.open_pending(project_id):
+            return []
+        try:
+            repo, develop, release, _ = releaser._setup(project_id)
+        except ValueError:
+            return []
+        from core.workspace import branch_tip
+
+        tip = branch_tip(repo, develop)
+        if tip and not is_ancestor(repo, tip, release):
+            return ["Release ready: develop has work that is not released yet. "
+                    "Say `release` in `ms chat`, or run `ms release`."]
+        return []
+    return notice
 
 
 def github_app(config, repo):
@@ -422,10 +448,11 @@ def latest_open_chat(store_dir: Path, project_id: str):
 
 
 CHAT_HELP = ("Type what you want in plain words. Commands: show (the draft), check (run the "
-             "checks), approve (queue the tasks), discard, help, quit.")
+             "checks), approve (queue the tasks), discard, release (open the release pull "
+             "request), help, quit.")
 
 
-def chat_loop(chat, read=input, out=None):
+def chat_loop(chat, read=input, out=None, releaser=None):
     """The conversation. ``read`` returns the owner's next line (EOFError ends it)."""
     from core.planner import DraftProblem, render_draft
 
@@ -465,6 +492,11 @@ def chat_loop(chat, read=input, out=None):
                 print(f"Approved. Queued {', '.join(ids)}; the service starts on them within a "
                       "few minutes. You'll get a notification when they're done.", file=out)
                 return 0
+            elif command == "release":
+                if releaser is None:
+                    print("  Releases are not available here.", file=out)
+                else:
+                    print(f"  {releaser.prepare(chat.project_id)['message']}", file=out)
             elif command == "discard":
                 chat.discard()
                 print("Discarded. Nothing was queued.", file=out)
@@ -495,7 +527,33 @@ def _command_chat(args, out):
           f"${config.planner.chat_usd:.2f} per chat)"
           + (f", continuing chat {chat_id}" if chat_id else "") + ".", file=out)
     print(CHAT_HELP, file=out)
-    return chat_loop(chat, out=out)
+    return chat_loop(chat, out=out, releaser=build_releaser(config))
+
+
+# --- release -------------------------------------------------------------------------------
+
+
+def build_releaser(config):
+    from core.master import Master
+    from core.publish import Publisher
+    from core.release import Releaser
+    from core.sqlite_history import SQLiteHistoryStore
+
+    paths = _paths()
+    master = Master(config.run.projects_root)
+    history = SQLiteHistoryStore(paths.history_path)
+    factory = lambda repo: github_app(config, repo)  # noqa: E731
+    publisher = Publisher(master, history, factory, paths.state_dir)
+    return Releaser(master, history, factory, askpass_dir=paths.state_dir,
+                    prices=config.prices, publisher=publisher)
+
+
+def _command_release(args, out):
+    result = build_releaser(_config(args)).prepare(args.project)
+    print(result["message"], file=out)
+    if result.get("notes") and not result.get("opened"):
+        print("\n" + result["notes"], file=out)
+    return 0
 
 
 # --- github ---------------------------------------------------------------------------------
@@ -628,6 +686,9 @@ def build_parser():
     notify = commands.add_parser("notify", help="Phone notifications.")
     notify.add_argument("action", choices=["setup", "test"])
     notify.set_defaults(handler=_command_notify)
+    release = commands.add_parser("release", help="Open the release pull request.")
+    release.add_argument("project")
+    release.set_defaults(handler=_command_release)
     chat = commands.add_parser("chat", help="Talk to the planner about what you want.")
     chat.add_argument("project")
     chat.add_argument("--new", action="store_true", help="Start a new chat.")
