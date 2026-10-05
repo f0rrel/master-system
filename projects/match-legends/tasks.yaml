@@ -2,7 +2,7 @@ tasks:
 - id: ml-1
   milestone: m2-overnight
   title: Seeded random number generator
-  status: planned
+  status: completed
   description: 'In www/js/match-logic.js, inside the marked section ''TASK SECTION
     ml-1'', add createRng(seed): a deterministic generator (for example mulberry32)
     returning floats in [0, 1), and export it as api.createRng. The board functions
@@ -24,7 +24,7 @@ tasks:
 - id: ml-2
   milestone: m2-overnight
   title: Shuffle the board in place when no moves are left
-  status: planned
+  status: completed
   description: 'In www/js/match-logic.js, inside ''TASK SECTION ml-2'', add shuffleBoard(board,
     rng): return a NEW board that rearranges the same tiles (same cells, same type
     counts) so it has no matches and at least one legal move; do not modify the input;
@@ -59,7 +59,7 @@ tasks:
 - id: ml-4
   milestone: m2-overnight
   title: Hint button
-  status: planned
+  status: completed
   description: 'In www/js/match-logic.js, inside ''TASK SECTION ml-4'', add findHint(board):
     return {a: {q, r}, b: {q, r}}, two adjacent cells whose swap makes a match, or
     null; do not modify the board. Export it as api.findHint. In www/index.html add
@@ -78,7 +78,7 @@ tasks:
 - id: ml-5
   milestone: m2-overnight
   title: Persist progress in localStorage
-  status: planned
+  status: completed
   description: 'In www/index.html, make the Storage object fall back to localStorage
     when window.storage is not available, for both load and save, so progress (gems,
     unlocked legends, the chosen legend, unlocked levels) survives a reload. Keep
