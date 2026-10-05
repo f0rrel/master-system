@@ -287,11 +287,15 @@ class OllamaExecutionBackend(ExecutionBackend):
 
     # --- execution ------------------------------------------------------
 
-    def execute(self, task: Mapping[str, object], context: Mapping[str, object]) -> ExecutionResult:
+    def execute(self, task: Mapping[str, object], context: Mapping[str, object],
+                workspace=None) -> ExecutionResult:
         if not isinstance(task, Mapping):
             raise OllamaBackendError("task must be a mapping")
 
-        workdir = self._resolve_workdir()
+        workdir = (
+            Path(workspace.path).resolve() if workspace is not None
+            else self._resolve_workdir()
+        )
         messages = self._build_request(task, context, workdir)
 
         artifacts: dict[str, Any] = {

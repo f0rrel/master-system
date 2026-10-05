@@ -195,3 +195,50 @@ def test_replaceable_mocked(tmp_path):
         assert res.status == "success"
     finally:
         ob.subprocess.run = old
+
+
+# --- the orchestrator's workspace -------------------------------------------
+
+
+def _workspace(path, seconds=30, grace=1):
+    import time
+    from core.workspace import AttemptWorkspace
+
+    return AttemptWorkspace(path=path, base_sha="b", deadline=time.monotonic() + seconds,
+                            deadline_at="later", grace=grace)
+
+
+def _fake_opencode(tmp_path, body):
+    script = tmp_path / "fake-opencode"
+    script.write_text("#!/bin/sh\n" + body + "\n")
+    script.chmod(0o755)
+    return script
+
+
+def test_with_a_workspace_opencode_runs_there_through_the_helper(tmp_path):
+    work = tmp_path / "ws"
+    work.mkdir()
+    fake = _fake_opencode(tmp_path, 'pwd > where; echo "$@" > args; echo done')
+    workspace = _workspace(work)
+
+    result = OpenCodeCliBackend(opencode_bin=fake).execute(
+        {"id": "t1", "title": "Do X"}, {"project_id": "p"}, workspace=workspace
+    )
+
+    assert result.status == "success"
+    assert (work / "where").read_text().strip() == str(work.resolve())
+    assert f"--dir {work}" in (work / "args").read_text()
+    assert len(workspace.processes) == 1
+
+
+def test_with_a_workspace_the_deadline_ends_opencode(tmp_path):
+    work = tmp_path / "ws"
+    work.mkdir()
+    fake = _fake_opencode(tmp_path, "sleep 60")
+
+    result = OpenCodeCliBackend(opencode_bin=fake).execute(
+        {"id": "t1", "title": "Do X"}, {}, workspace=_workspace(work, seconds=1)
+    )
+
+    assert result.status == "failed"
+    assert result.artifacts["timeout"] is True

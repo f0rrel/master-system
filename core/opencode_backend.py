@@ -35,7 +35,8 @@ class OpenCodeCliBackend(ExecutionBackend):
         self._opencode_bin = Path(opencode_bin) if opencode_bin else Path("opencode")
         self._log_level = log_level
 
-    def execute(self, task: Mapping[str, object], context: Mapping[str, object]) -> ExecutionResult:
+    def execute(self, task: Mapping[str, object], context: Mapping[str, object],
+                workspace=None) -> ExecutionResult:
         if not isinstance(task, Mapping):
             raise OpenCodeBackendError("task must be a mapping")
 
@@ -53,7 +54,7 @@ class OpenCodeCliBackend(ExecutionBackend):
         )
         prompt = "\n\n".join(p for p in prompt_parts if p)
 
-        workdir = self._workdir
+        workdir = workspace.path if workspace is not None else self._workdir
         if workdir is None:
             workdir = Path(tempfile.mkdtemp(prefix="opencode-backend-"))
 
@@ -76,6 +77,9 @@ class OpenCodeCliBackend(ExecutionBackend):
             "project_id": project_id,
             "task_id": task_id,
         }
+
+        if workspace is not None:
+            return self._run_in_workspace(workspace, cmd[1:], artifacts)
 
         try:
             result = subprocess.run(
@@ -111,3 +115,31 @@ class OpenCodeCliBackend(ExecutionBackend):
             reason = f"OpenCode CLI exited with non-zero code {result.returncode}"
 
         return ExecutionResult(status=status, reason=reason, artifacts=artifacts)
+
+    def _run_in_workspace(self, workspace, arguments, artifacts) -> ExecutionResult:
+        """Run through the orchestrator's workspace: its lock, deadline and group."""
+        try:
+            outcome = workspace.run([str(self._opencode_bin), *arguments])
+        except FileNotFoundError as e:
+            raise OpenCodeBackendError(f"OpenCode binary not found: {self._opencode_bin}") from e
+        except OSError as e:
+            raise OpenCodeBackendError(f"Failed to invoke OpenCode: {e}") from e
+
+        artifacts["returncode"] = outcome.returncode
+        artifacts["stdout"] = outcome.stdout
+        artifacts["stderr"] = outcome.stderr
+        if outcome.timed_out:
+            artifacts["timeout"] = True
+            return ExecutionResult(
+                status="failed", reason="the attempt deadline passed", artifacts=artifacts
+            )
+        if outcome.returncode == 0:
+            return ExecutionResult(
+                status="success", reason="OpenCode CLI completed successfully",
+                artifacts=artifacts,
+            )
+        return ExecutionResult(
+            status="failed",
+            reason=f"OpenCode CLI exited with non-zero code {outcome.returncode}",
+            artifacts=artifacts,
+        )

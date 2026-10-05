@@ -621,3 +621,28 @@ def test_the_loop_is_unchanged_by_which_backend_it_was_given(tmp_path):
     # Same authoritative outcome whichever runtime did the work. Only the
     # workspace path differs, so compare the task, not the whole state blob.
     assert master_a.status("p")["tasks"] == master_b.status("p")["tasks"]
+
+# --- the orchestrator's workspace -------------------------------------------
+
+
+def test_a_given_workspace_is_used_instead_of_the_constructor_workdir(tmp_path):
+    import time
+    from core.workspace import AttemptWorkspace
+
+    own = tmp_path / "own"
+    given = tmp_path / "given"
+    own.mkdir()
+    given.mkdir()
+    transport = FakeTransport(
+        tool_reply(tool_call("write_file", path="out.txt", content="x")),
+        done_reply(),
+    )
+    workspace = AttemptWorkspace(path=given, base_sha="b",
+                                 deadline=time.monotonic() + 30, deadline_at="later")
+
+    OllamaExecutionBackend(workdir=own, transport=transport).execute(
+        {"id": "t1", "title": "Write"}, {}, workspace=workspace
+    )
+
+    assert (given / "out.txt").exists()
+    assert not (own / "out.txt").exists()
