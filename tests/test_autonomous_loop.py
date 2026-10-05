@@ -23,6 +23,7 @@ from core.autonomous_loop import (
 from core.execution import ExecutionResult
 from core.master import Master
 from core.provider import ReasoningProvider
+from core.history import InMemoryHistoryStore
 from core.reasoning import Decision, SPECS
 from core import reasoning
 from core.verification import VerificationResult
@@ -191,8 +192,8 @@ def test_execution_and_verification_results_are_fed_back_to_master(master):
 
     # The decision after run_task was made with its outcome in view.
     assert len(provider.prompts) == 3
-    assert "last_result" in provider.prompts[2]
-    assert '"status": "success"' in provider.prompts[2]
+    assert "execution_evidence" in provider.prompts[2]
+    assert '"outcome": "success"' in provider.prompts[2]
     assert '"verdict": "pass"' in provider.prompts[2]
 
 
@@ -212,7 +213,7 @@ def test_a_worker_failure_reaches_master_and_does_not_complete(master):
     assert result.stop_reason == STOP_MASTER
     assert result.decision.decision is Decision.WAIT
     assert status_of(master) == "in_progress"
-    assert '"status": "failed"' in provider.prompts[2]
+    assert '"outcome": "failed"' in provider.prompts[2]
     assert '"verdict": "fail"' in provider.prompts[2]
 
 
@@ -405,18 +406,20 @@ def test_results_never_mutate_state_on_their_own(master):
 
 
 def test_completion_requires_a_second_explicit_master_decision(master):
+    history = InMemoryHistoryStore()
     loop, provider, backend, verifier = build(
         master,
-        [start(), no_op("wait")],
+        [start(), dispatch(), no_op("wait")],
         exec_result=ExecutionResult(status="success", state_updates={"status": "completed"}),
         verify_result=VerificationResult(verdict="pass", summary="verified"),
+        history=history,
     )
 
     loop.run("alpha")
     assert status_of(master) == "in_progress"
 
     # A later, explicit Master decision is what finishes the task.
-    loop2, _, _, _ = build(master, [finish()])
+    loop2, _, _, _ = build(master, [finish()], history=history)
     assert loop2.run("alpha").stop_reason == STOP_NO_WORK
     assert status_of(master) == "completed"
 
@@ -488,13 +491,13 @@ def malformed(key):
 
 def test_a_malformed_reply_is_retried_and_the_loop_continues(master):
     loop, provider, backend, verifier = build(
-        master, [malformed("operation_type"), start(), finish()]
+        master, [malformed("operation_type"), start(), dispatch(), finish()]
     )
 
     result = loop.run("alpha")
 
     assert result.stop_reason == STOP_NO_WORK
-    assert len(provider.prompts) == 3
+    assert len(provider.prompts) == 4
     assert status_of(master) == "completed"
 
 

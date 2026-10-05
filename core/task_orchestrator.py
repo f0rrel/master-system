@@ -20,9 +20,10 @@ class TaskOrchestrator:
     """Thin orchestration seam coordinating exec → verify → feedback.
 
     The orchestrator does not decide WHAT to do. It coordinates execution
-    and verification for an explicitly specified task, preserves both results
-    as structured read-only data, and returns them in a form suitable for
-    feeding into the next reasoning cycle. It never mutates ProjectState.
+    and verification for an explicitly specified task and returns both results
+    as structured read-only data. It never mutates ProjectState. The next
+    reasoning cycle sees the outcome through history, not through this return
+    value, so the evidence survives the process that produced it.
 
     With a history store, one call is one execution attempt, recorded as
     ``attempt_started`` (committed before the backend runs), then exactly one
@@ -37,14 +38,12 @@ class TaskOrchestrator:
         master: Master,
         execution_backend: ExecutionBackend,
         verification_backend: VerificationBackend,
-        reasoning_engine=None,
         history: Optional[HistoryStore] = None,
     ):
         self._master = master
         self._execution_backend = execution_backend
         self._verification_backend = verification_backend
         self._runner = TaskExecutionRunner(master, execution_backend)
-        self._reasoning_engine = reasoning_engine
         self._history = history
 
     def prepare(self, project_id: str, task_id: str):
@@ -184,6 +183,4 @@ class TaskOrchestrator:
                 "evidence": dict(ver_res.evidence),
             },
         }
-        if self._reasoning_engine is not None and hasattr(self._reasoning_engine, "attach_last_result"):
-            self._reasoning_engine.attach_last_result(result)
         return result

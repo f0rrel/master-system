@@ -20,6 +20,7 @@ import yaml
 
 from core.autonomous_loop import (
     STOP_APPROVAL,
+    STOP_ATTEMPT_LIMIT,
     STOP_MASTER,
     STOP_NO_WORK,
     STOP_STEP_LIMIT,
@@ -160,7 +161,9 @@ def test_start_runs_the_loop_and_persists_a_session(projects, tmp_path):
 
 
 def test_start_records_the_stop_reason(projects, tmp_path):
-    runner = make_runner(projects, [start_task(status="completed")], tmp_path)
+    runner = make_runner(
+        projects, [start_task(), run_task(), start_task(status="completed")], tmp_path
+    )
 
     session = runner.start("alpha", "finish t1", "run-1")
 
@@ -225,7 +228,7 @@ def test_a_session_holds_no_task_list_of_its_own(projects, tmp_path):
 
 def test_master_still_owns_the_task_status(projects, tmp_path):
     runner = make_runner(
-        projects, [start_task(), start_task(status="completed")], tmp_path
+        projects, [start_task(), run_task(), start_task(status="completed")], tmp_path
     )
 
     runner.start("alpha", "finish t1", "run-1")
@@ -264,13 +267,12 @@ def test_an_unusable_reply_is_recorded(projects, tmp_path):
     assert session.status is SessionStatus.STOPPED
 
 
-def test_a_gated_decision_is_recorded_as_needing_a_human():
-    """Exercised directly, because no production operation is gated today.
+def test_a_policy_gated_decision_is_recorded_as_needing_a_human():
+    """Exercised directly, because no production operation is policy-gated.
 
-    Every entry in SPECS is ROUTINE, so AutonomousLoop cannot currently reach
-    STOP_APPROVAL at all. Testing the recording path through the real loop
-    would mean gating an operation globally to force it, which would test the
-    test rather than the code.
+    Every entry in SPECS is ROUTINE, so the policy half of STOP_APPROVAL is
+    unreachable through the real loop; the completion gate half is covered by
+    test_completing_without_passing_evidence_needs_a_human.
     """
     from core.autonomous_loop import LoopResult
     from core.reasoning import ApprovalState, Decision, MasterDecision, Operation
@@ -295,10 +297,45 @@ def test_a_gated_decision_is_recorded_as_needing_a_human():
         "operation": "unlisted_capability",
         "approval_state": "proposed",
         "decision": "act",
+        "reason": "policy",
     }
 
 
-def test_no_operation_is_gated_so_the_approval_stop_is_unreachable_today():
+def test_completing_without_passing_evidence_needs_a_human(projects, tmp_path):
+    runner = SessionRunner(
+        Master(projects),
+        ScriptedProvider([start_task(), run_task(), start_task(status="completed")]),
+        FakeExecutionBackend(),
+        FakeVerificationBackend(VerificationResult(verdict="fail", summary="no")),
+        store=FileSessionStore(tmp_path / "sessions"),
+    )
+
+    session = runner.start("alpha", "finish t1", "run-1")
+
+    assert session.status is SessionStatus.NEEDS_HUMAN
+    assert session.last_stop_reason == STOP_APPROVAL
+    assert session.pending_approval == {
+        "operation": "update_task",
+        "approval_state": "proposed",
+        "decision": "act",
+        "reason": "verification_fail",
+    }
+    assert Master(projects).status("alpha")["tasks"][0]["status"] == "in_progress"
+
+
+def test_exhausting_the_attempt_budget_needs_a_human(projects, tmp_path):
+    runner = make_runner(
+        projects, [start_task()] + [run_task()] * 3, tmp_path, max_attempts_per_task=2
+    )
+
+    session = runner.start("alpha", "finish t1", "run-1")
+
+    assert session.status is SessionStatus.NEEDS_HUMAN
+    assert session.last_stop_reason == STOP_ATTEMPT_LIMIT
+    assert runner._execution_backend.calls == ["t1", "t1"]
+
+
+def test_no_operation_is_policy_gated_today():
     """A fact about the current policy, asserted so a change is noticed."""
     from core.reasoning import SPECS, ImpactLevel
 
@@ -400,7 +437,7 @@ def test_resuming_a_session_runs_the_loop_again(projects, tmp_path):
     runner = make_runner(projects, [start_task(), no_op("wait")], tmp_path)
     runner.start("alpha", "finish t1", "run-1")
 
-    runner2 = make_runner(projects, [start_task(status="completed")], tmp_path)
+    runner2 = make_runner(projects, [start_task(status="blocked")], tmp_path)
     session = runner2.resume("run-1")
 
     assert session.steps_completed == 3, "the resumed run added its own step"

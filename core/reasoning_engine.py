@@ -264,13 +264,23 @@ express it as an operation, and the system carries it out:
   already in_progress. run_task changes no state, and it is refused for any
   task that is not in_progress. Starting work therefore takes two decisions:
   update_task to in_progress, then run_task.
-- After execution, a verifier inspects the result; that result is shown to you
-  in the next PROJECT STATE as "last_result".
-- You can then record the outcome with an operation, for example marking a task
-  "completed" or "blocked" based on the evidence you were given.
+- After execution, a verifier inspects the result. PROJECT STATE then shows,
+  under "execution_evidence", each task's attempts in this session, its attempts
+  in total, and its latest attempt: the outcome (success, failed, partial,
+  blocked, needs_human, cancelled, error, or interrupted) and the verification
+  verdict, summary and findings. "recent_decisions" lists your last decisions.
+- An "interrupted" attempt means the worker started but the system stopped
+  before its outcome was recorded; what it did is uncertain. Nothing is retried
+  for you: decide whether to run_task again, block the task, or ask for help.
+- Each task may be run at most "attempt_limit" times per session. Beyond that,
+  run_task is refused and a human has to look.
+- You can then record the outcome with an operation. Marking a task
+  "completed" applies on its own only when its latest attempt was verified as
+  "pass"; otherwise it waits for a human. You can mark it "blocked" whenever
+  the evidence supports that.
 So a task's text describing implementation or testing does not mean you must do
 that yourself, and does not mean you cannot advance it. Judge progress by the
-state and the last_result evidence, and choose the next operation from those.
+state and the execution evidence, and choose the next operation from those.
 
 REQUEST
 {request}
@@ -381,7 +391,7 @@ class Proposal:
 class ReasoningEngine:
     """Turns a human request plus project state into an approvable proposal."""
 
-    def __init__(self, provider, master=None, interface=None):
+    def __init__(self, provider, master=None, interface=None, evidence_source=None):
         if master is None:
             master = Master()
         if interface is None:
@@ -389,6 +399,10 @@ class ReasoningEngine:
         self._provider = provider
         self._master = master
         self._interface = interface
+        #: Supplies execution evidence read from history, e.g.
+        #: :class:`core.evidence.HistoryEvidence`. Optional: without one the
+        #: model sees project state only.
+        self._evidence_source = evidence_source
 
     @property
     def provider(self):
@@ -446,14 +460,13 @@ class ReasoningEngine:
             "in_progress_tasks": in_progress_tasks,
             "completed_tasks": completed_tasks,
         }
-        if hasattr(self, "_last_result") and self._last_result is not None:
-            context["last_result"] = self._last_result
+        if self._evidence_source is not None:
+            context.update(
+                self._evidence_source.for_project(
+                    project_id, [t["id"] for t in in_progress_tasks]
+                )
+            )
         return context
-
-    def attach_last_result(self, result):
-        """Attach last execution/verification result for next reasoning cycle."""
-        self._last_result = result
-
 
     def build_prompt(self, request, project_id):
         prompt = PROMPT_TEMPLATE.format(

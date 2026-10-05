@@ -573,6 +573,13 @@ def test_the_full_loop_runs_through_ollama_without_touching_the_loop(tmp_path):
 def test_the_loop_is_unchanged_by_which_backend_it_was_given(tmp_path):
     """Same loop, two different backends: no branching anywhere in between."""
     from core.autonomous_loop import STOP_NO_WORK, AutonomousLoop
+    from core.verification import VerificationResult
+
+    class AlwaysPasses:
+        """What is compared here is the loop, not the verifier."""
+
+        def verify(self, task, context, evidence=None):
+            return VerificationResult(verdict="pass", summary="ok")
 
     def run_with(backend_factory):
         scratch = tmp_path / backend_factory.__name__
@@ -585,7 +592,7 @@ def test_the_loop_is_unchanged_by_which_backend_it_was_given(tmp_path):
         )
         loop = AutonomousLoop(
             master, provider, backend_factory(work),
-            SubprocessPytestVerifier(), request="r", max_steps=5,
+            AlwaysPasses(), request="r", max_steps=5,
         )
         return loop.run("p"), master
 

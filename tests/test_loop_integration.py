@@ -9,6 +9,8 @@ from core.master import Master
 from core.task_orchestrator import TaskOrchestrator
 from core.reasoning_engine import ReasoningEngine
 from core.reasoning import ReasoningInterface, Decision
+from core.evidence import HistoryEvidence
+from core.history import InMemoryHistoryStore
 
 
 def make_project(root, tasks):
@@ -56,19 +58,29 @@ class Prov:
         return self._r if isinstance(self._r, str) else json.dumps(self._r)
 
 
+def attempt(m, exec_backend, verifier):
+    """Run one recorded attempt and return evidence read back from history."""
+    history = InMemoryHistoryStore()
+    TaskOrchestrator(m, exec_backend, verifier, history=history).orchestrate(
+        "p", "t1", run_id="r1"
+    )
+    return HistoryEvidence(history)
+
+
+def latest(ctx):
+    return ctx["execution_evidence"]["tasks"]["t1"]["latest_attempt"]
+
+
 def test_success_fail_changes_decision(tmp_path):
     root = make_project(tmp_path, [{"id": "t1", "status": "in_progress"}])
     m = Master(root)
     before = m.status("p")
-    orch = TaskOrchestrator(m, FakeExec(), FakeVerify("fail", "qa-issue"))
-    res = orch.orchestrate("p", "t1")
-    e = ReasoningEngine(Prov({"decision": "wait", "reason": "initial", "operation": None}), m, ReasoningInterface(m))
-    e.attach_last_result(res)
+    evidence = attempt(m, FakeExec(), FakeVerify("fail", "qa-issue"))
+    e = ReasoningEngine(Prov({"decision": "wait", "reason": "initial", "operation": None}), m, ReasoningInterface(m), evidence_source=evidence)
     ctx = e.context_for("p")
-    assert ctx.get("last_result") is not None
-    assert ctx["last_result"]["verification"]["verdict"] == "fail"
-    e2 = ReasoningEngine(Prov({"decision": "needs_information", "reason": "qa failed", "operation": None}), m, ReasoningInterface(m))
-    e2.attach_last_result(res)
+    assert latest(ctx) is not None
+    assert latest(ctx)["verification"]["verdict"] == "fail"
+    e2 = ReasoningEngine(Prov({"decision": "needs_information", "reason": "qa failed", "operation": None}), m, ReasoningInterface(m), evidence_source=evidence)
     dec = e2.reason("next", "p")
     assert dec._decision.decision == Decision.NEEDS_INFORMATION
     after = m.status("p")
@@ -78,24 +90,20 @@ def test_success_fail_changes_decision(tmp_path):
 def test_success_pass(tmp_path):
     root = make_project(tmp_path, [{"id": "t1", "status": "in_progress"}])
     m = Master(root)
-    orch = TaskOrchestrator(m, FakeExec(), FakeVerify("pass"))
-    res = orch.orchestrate("p", "t1")
-    e = ReasoningEngine(Prov({"decision": "wait", "reason": "ok", "operation": None}), m, ReasoningInterface(m))
-    e.attach_last_result(res)
+    evidence = attempt(m, FakeExec(), FakeVerify("pass"))
+    e = ReasoningEngine(Prov({"decision": "wait", "reason": "ok", "operation": None}), m, ReasoningInterface(m), evidence_source=evidence)
     ctx = e.context_for("p")
-    assert ctx["last_result"]["verification"]["verdict"] == "pass"
+    assert latest(ctx)["verification"]["verdict"] == "pass"
 
 
 def test_success_needs_human_loop(tmp_path):
     from core.reasoning import Decision
     root = make_project(tmp_path, [{"id": "t1", "status": "in_progress"}])
     m = Master(root)
-    orch = TaskOrchestrator(m, FakeExec(), FakeVerify("needs_human"))
-    res = orch.orchestrate("p", "t1")
-    e = ReasoningEngine(Prov({"decision": "request_approval", "reason": "needs human", "operation": {"operation": "inspect_project", "project_id": "p"}}), m, ReasoningInterface(m))
-    e.attach_last_result(res)
+    evidence = attempt(m, FakeExec(), FakeVerify("needs_human"))
+    e = ReasoningEngine(Prov({"decision": "request_approval", "reason": "needs human", "operation": {"operation": "inspect_project", "project_id": "p"}}), m, ReasoningInterface(m), evidence_source=evidence)
     ctx = e.context_for("p")
-    assert ctx["last_result"]["verification"]["verdict"] == "needs_human"
+    assert latest(ctx)["verification"]["verdict"] == "needs_human"
     dec = e.reason("next", "p")
     assert dec._decision.decision == Decision.REQUEST_APPROVAL
 
@@ -104,11 +112,9 @@ def test_execution_failure_loop(tmp_path):
     from core.reasoning import Decision
     root = make_project(tmp_path, [{"id": "t1", "status": "in_progress"}])
     m = Master(root)
-    orch = TaskOrchestrator(m, FakeExec(ExecutionResult(status="failed", reason="boom")), FakeVerify("fail"))
-    res = orch.orchestrate("p", "t1")
-    e = ReasoningEngine(Prov({"decision": "wait", "reason": "exec failed", "operation": None}), m, ReasoningInterface(m))
-    e.attach_last_result(res)
+    evidence = attempt(m, FakeExec(ExecutionResult(status="failed", reason="boom")), FakeVerify("fail"))
+    e = ReasoningEngine(Prov({"decision": "wait", "reason": "exec failed", "operation": None}), m, ReasoningInterface(m), evidence_source=evidence)
     ctx = e.context_for("p")
-    assert ctx["last_result"]["execution"]["status"] == "failed"
+    assert latest(ctx)["outcome"] == "failed"
     dec = e.reason("next", "p")
     assert dec._decision.decision == Decision.WAIT

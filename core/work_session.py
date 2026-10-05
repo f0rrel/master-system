@@ -182,18 +182,27 @@ def _validate_progress(value: object) -> Optional[dict]:
 
 
 def _validate_pending(value: object) -> Optional[dict]:
-    """Validate pending_approval, which may only describe enums we already have."""
+    """Validate pending_approval, which may only describe enums we already have.
+
+    ``reason`` is optional and says why a human is needed: ``policy`` for an
+    operation the approval policy gates, or a completion-gate reason such as
+    ``verification_fail``.
+    """
     if value is None:
         return None
     if not isinstance(value, Mapping):
         raise InvalidSessionError("pending_approval must be a mapping or null")
-    allowed = ("operation", "approval_state", "decision")
+    required = ("operation", "approval_state", "decision")
+    allowed = required + ("reason",)
     unexpected = sorted(set(value) - set(allowed))
     if unexpected:
         raise InvalidSessionError(
             f"pending_approval has unsupported keys {unexpected}; allowed: {list(allowed)}"
         )
-    return {key: _require_text(value[key], f"pending_approval.{key}") for key in allowed}
+    pending = {key: _require_text(value.get(key), f"pending_approval.{key}") for key in required}
+    if "reason" in value:
+        pending["reason"] = _require_text(value["reason"], "pending_approval.reason")
+    return pending
 
 
 @dataclass(frozen=True)
@@ -386,18 +395,19 @@ def status_for_stop_reason(stop_reason: object) -> SessionStatus:
     """Map a loop stop reason onto a session status.
 
     Only two outcomes are distinguished. A run that stopped waiting on a human
-    is ``NEEDS_HUMAN``, because resuming it without that human's answer would
-    just repeat the same stop. Everything else -- no work left, step limit
-    reached, Master declined, a refused operation, an unusable reply -- is
-    ``STOPPED``: the run ended cleanly and the session is resumable.
+    -- an approval, or a task that used up its attempts -- is ``NEEDS_HUMAN``,
+    because resuming it without that human's answer would just repeat the same
+    stop. Everything else -- no work left, step limit reached, Master
+    declined, a refused operation, an unusable reply -- is ``STOPPED``: the
+    run ended cleanly and the session is resumable.
 
     ``running``/``created`` are not produced here, and neither are ``completed``
     or ``failed``: this function reports what happened to a bounded run, and
     deciding that an objective is met is not a thing a stop reason can say.
     """
-    from core.autonomous_loop import STOP_APPROVAL
+    from core.autonomous_loop import STOP_APPROVAL, STOP_ATTEMPT_LIMIT
 
-    if stop_reason == STOP_APPROVAL:
+    if stop_reason in (STOP_APPROVAL, STOP_ATTEMPT_LIMIT):
         return SessionStatus.NEEDS_HUMAN
     return SessionStatus.STOPPED
 

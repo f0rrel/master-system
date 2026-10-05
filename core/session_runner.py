@@ -34,6 +34,7 @@ from core.autonomous_loop import (
     AutonomousLoop,
     LoopResult,
 )
+from core.evidence import DEFAULT_MAX_ATTEMPTS
 from core.execution import ExecutionBackend
 from core.master import Master
 from core.provider import ReasoningProvider
@@ -60,6 +61,7 @@ class SessionRunner:
         request: Optional[str] = None,
         max_steps: int = 20,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        max_attempts_per_task: int = DEFAULT_MAX_ATTEMPTS,
     ):
         self._master = master
         self._provider = provider
@@ -69,6 +71,7 @@ class SessionRunner:
         self._request = request
         self._max_steps = max_steps
         self._max_retries = max_retries
+        self._max_attempts_per_task = max_attempts_per_task
 
     @property
     def store(self):
@@ -117,6 +120,8 @@ class SessionRunner:
             request=self._request or session.objective,
             max_steps=self._max_steps,
             max_retries=self._max_retries,
+            session_id=session.session_id,
+            max_attempts_per_task=self._max_attempts_per_task,
         )
         result = loop.run(session.project_id)
 
@@ -153,11 +158,16 @@ class SessionRunner:
             changes["last_task_id"] = output.get("task_id")
 
         decision = result.decision
-        if decision is not None and getattr(decision, "pending_approval", False):
+        if (
+            result.stop_reason == STOP_APPROVAL
+            and decision is not None
+            and decision.operation is not None
+        ):
             changes["pending_approval"] = {
                 "operation": decision.operation.operation,
                 "approval_state": decision.operation.state.value,
                 "decision": decision.decision.value,
+                "reason": result.approval_reason or "policy",
             }
         elif result.stop_reason != STOP_APPROVAL:
             # Cleared once a run proceeds past the point that needed a human, so

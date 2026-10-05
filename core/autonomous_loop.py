@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from core.execution import ExecutionBackend
+from core.evidence import DEFAULT_MAX_ATTEMPTS, HistoryEvidence
 from core.execution_runner import ExecutionError
 from core.history import EventType, HistoryStore, InMemoryHistoryStore, jsonable
 from core.master import Master
@@ -66,6 +67,7 @@ __all__ = [
     "DEFAULT_MAX_RETRIES",
     "DEFAULT_REQUEST",
     "STOP_APPROVAL",
+    "STOP_ATTEMPT_LIMIT",
     "STOP_MASTER",
     "STOP_NO_WORK",
     "STOP_OPERATION_FAILED",
@@ -89,6 +91,7 @@ STOP_APPROVAL = "approval_required"
 STOP_STEP_LIMIT = "step_limit"
 STOP_UNUSABLE_REPLY = "unusable_reasoning_reply"
 STOP_OPERATION_FAILED = "operation_failed"
+STOP_ATTEMPT_LIMIT = "attempt_limit"
 
 #: How many times one turn may be re-asked after the model replies with
 #: something unusable. One retry: a single malformed reply is usually a
@@ -112,6 +115,10 @@ class LoopResult:
     detail: Optional[str] = None
     #: Identifies this run's events in history.
     run_id: Optional[str] = None
+    #: Why the decision is waiting for a human when ``stop_reason`` is
+    #: ``approval_required``: ``policy`` for a gated operation, otherwise the
+    #: completion gate's reason, e.g. ``verification_fail``.
+    approval_reason: Optional[str] = None
 
     def __str__(self) -> str:
         where = self.stop_reason
@@ -147,6 +154,7 @@ class AutonomousLoop:
         max_retries: int = DEFAULT_MAX_RETRIES,
         history: Optional[HistoryStore] = None,
         session_id: Optional[str] = None,
+        max_attempts_per_task: int = DEFAULT_MAX_ATTEMPTS,
     ):
         if not isinstance(master, Master):
             raise TypeError(f"expected a Master, got {type(master).__name__}")
@@ -163,16 +171,20 @@ class AutonomousLoop:
         self._max_retries = max_retries
         self._history = history if history is not None else InMemoryHistoryStore()
         self._session_id = session_id
+        self._evidence = HistoryEvidence(
+            self._history, session_id=session_id, max_attempts=max_attempts_per_task
+        )
 
         # One interface shared by the engine and the loop, so every decision
         # lands on the same approval gate and the same Master instance.
         self._interface = ReasoningInterface(master)
-        self._engine = ReasoningEngine(provider, master, self._interface)
+        self._engine = ReasoningEngine(
+            provider, master, self._interface, evidence_source=self._evidence
+        )
         self._orchestrator = TaskOrchestrator(
             master,
             execution_backend,
             verification_backend,
-            reasoning_engine=self._engine,
             history=self._history,
         )
 
@@ -269,7 +281,7 @@ class AutonomousLoop:
         task_id = operation.arguments.get("task_id")
         return task_id if isinstance(task_id, str) and task_id.strip() else None
 
-    def _record_decision(self, run_id, project_id, step, decision):
+    def _record_decision(self, run_id, project_id, step, decision, gate_reason=None):
         operation = decision.operation if decision is not None else None
         self._record(
             EventType.DECISION,
@@ -285,6 +297,7 @@ class AutonomousLoop:
                 else None
             ),
             pending_approval=bool(decision is not None and decision.pending_approval),
+            gate_reason=gate_reason,
         )
 
     def _record_result(self, run_id, project_id, step, task_id, outcome):
@@ -333,6 +346,7 @@ class AutonomousLoop:
             raise ValueError("project_id must be a non-empty string")
 
         run_id = uuid.uuid4().hex
+        self._evidence.run_id = run_id
         self._record(
             EventType.RUN_STARTED,
             run_id,
@@ -368,7 +382,7 @@ class AutonomousLoop:
         steps = 0
         last_output = None
 
-        def stop(reason, decision=None, detail=None):
+        def stop(reason, decision=None, detail=None, approval_reason=None):
             return LoopResult(
                 stop_reason=reason,
                 steps=steps,
@@ -376,6 +390,7 @@ class AutonomousLoop:
                 last_output=last_output,
                 detail=detail,
                 run_id=run_id,
+                approval_reason=approval_reason,
             )
 
         while steps < self._max_steps:
@@ -389,9 +404,21 @@ class AutonomousLoop:
             if proposal is None:
                 return stop(STOP_UNUSABLE_REPLY, detail=unusable)
 
+            # A completed status applies on its own only with evidence that the
+            # latest attempt passed verification. Worked out before the
+            # decision is recorded so the record says why it is waiting.
+            gate_reason = None
+            if (
+                decision is not None
+                and decision.decision is Decision.ACT
+                and decision.operation is not None
+                and not decision.pending_approval
+            ):
+                gate_reason = self._evidence.completion_gate(decision.operation)
+
             # The decision is the recorded intent: it is written before any
             # state changes or any worker runs.
-            self._record_decision(run_id, project_id, steps, decision)
+            self._record_decision(run_id, project_id, steps, decision, gate_reason)
 
             # Anything but an explicit ACT stops the loop. This covers WAIT,
             # BLOCKED, NEEDS_INFORMATION, REQUEST_APPROVAL, and a reply that
@@ -403,7 +430,17 @@ class AutonomousLoop:
             # An ACT on something policy gates does not become an instruction
             # just because the model said ACT. Policy decides, not the model.
             if decision.pending_approval:
-                return stop(STOP_APPROVAL, decision)
+                return stop(STOP_APPROVAL, decision, approval_reason="policy")
+
+            # Completing without passing evidence is not refused, it is held
+            # for a human: they may know something the evidence does not.
+            if gate_reason is not None:
+                return stop(
+                    STOP_APPROVAL,
+                    decision,
+                    detail=f"completion requires a human: {gate_reason}",
+                    approval_reason=gate_reason,
+                )
 
             operation = decision.operation
             spec = SPECS.get(operation.operation)
@@ -424,10 +461,20 @@ class AutonomousLoop:
                         self._orchestrator.prepare(project_id, task_id)
                     except ExecutionError as error:
                         refusal = ("not_executable", str(error))
+                if refusal is None and self._evidence.attempt_limit_reached(
+                    project_id, task_id
+                ):
+                    refusal = (
+                        "attempt_limit",
+                        f"task {task_id!r} has had {self._evidence.max_attempts} "
+                        "attempt(s) in this session",
+                    )
                 if refusal is not None:
                     self._record_refusal(run_id, project_id, steps, operation, *refusal)
                     return stop(
-                        STOP_OPERATION_FAILED,
+                        STOP_ATTEMPT_LIMIT
+                        if refusal[0] == "attempt_limit"
+                        else STOP_OPERATION_FAILED,
                         decision,
                         f"{operation.operation} -> refused ({refusal[0]}): {refusal[1]}",
                     )
@@ -469,6 +516,7 @@ def run_autonomous(
     request: str = DEFAULT_REQUEST,
     max_steps: int = 20,
     history: Optional[HistoryStore] = None,
+    max_attempts_per_task: int = DEFAULT_MAX_ATTEMPTS,
 ) -> LoopResult:
     """Entry point. Every collaborator is injected, nothing is hard-coded.
 
@@ -484,4 +532,5 @@ def run_autonomous(
         request=request,
         max_steps=max_steps,
         history=history,
+        max_attempts_per_task=max_attempts_per_task,
     ).run(project_id)

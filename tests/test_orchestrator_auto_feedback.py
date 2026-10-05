@@ -9,6 +9,8 @@ from core.master import Master
 from core.task_orchestrator import TaskOrchestrator
 from core.reasoning_engine import ReasoningEngine
 from core.reasoning import ReasoningInterface, Decision
+from core.evidence import HistoryEvidence
+from core.history import InMemoryHistoryStore
 
 
 def make_project(root, tasks):
@@ -59,13 +61,15 @@ class Prov:
 def test_auto_feedback_success_fail_causes_different_decision(tmp_path):
     root = make_project(tmp_path, [{"id": "t1", "status": "in_progress"}])
     m = Master(root)
-    e = ReasoningEngine(Prov({"decision": "needs_information", "reason": "qa failed", "operation": None}), m, ReasoningInterface(m))
-    orch = TaskOrchestrator(m, FakeExec(), FakeVerify("fail", "qa-issue"), reasoning_engine=e)
+    history = InMemoryHistoryStore()
+    e = ReasoningEngine(Prov({"decision": "needs_information", "reason": "qa failed", "operation": None}), m, ReasoningInterface(m), evidence_source=HistoryEvidence(history))
+    orch = TaskOrchestrator(m, FakeExec(), FakeVerify("fail", "qa-issue"), history=history)
     before = m.status("p")
-    orch.orchestrate("p", "t1")
+    orch.orchestrate("p", "t1", run_id="r1")
     ctx = e.context_for("p")
-    assert ctx.get("last_result") is not None
-    assert ctx["last_result"]["verification"]["verdict"] == "fail"
+    latest = ctx["execution_evidence"]["tasks"]["t1"]["latest_attempt"]
+    assert latest is not None
+    assert latest["verification"]["verdict"] == "fail"
     dec = e.reason("next", "p")
     assert dec._decision.decision == Decision.NEEDS_INFORMATION
     after = m.status("p")
