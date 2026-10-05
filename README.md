@@ -97,20 +97,20 @@ leave room for it without implementing it early.
 
 | Item | State (2026-10-05) |
 | --- | --- |
-| Current milestone | **Milestone 1, "Contain and verify": implemented** on branch `m1-contain-verify`; all five acceptance criteria pass (see [§12](#12-roadmap)). Not merged. It also closes the earlier "Trustworthy loop" milestone. **Next: Milestone 2, "Run it for real"**: not started, waiting for the owner. |
-| Tests | 1133 passed, 1 skipped, 5 integration tests deselected (`uv run python -m pytest -q -m "not integration"`, about 45 s; scenario tests start real processes and git worktrees) |
+| Current milestone | **Milestone 1, "Contain and verify": done and merged to `main`** (two review fixes included); all five acceptance criteria pass (see [§12](#12-roadmap)). It also closes the earlier "Trustworthy loop" milestone. **Next: Milestone 2, "Run it for real"**: plan in `docs/plans/m2-run-for-real.md`, waiting for owner approval. |
+| Tests | 1140 passed, 1 skipped, 5 integration tests deselected (`uv run python -m pytest -q -m "not integration"`, about 45 s; scenario tests start real processes and git worktrees) |
 | Can the autonomous loop be run from a CLI? | **No.** It runs only inside tests. No composition root exists yet (gap H5, Milestone 2). |
 | Production verifier in `core/`? | **Yes:** `AcceptanceVerifier` (`core/acceptance_verifier.py`) checks a task's human-written `acceptance` in the attempt's worktree. |
 | Workers (execution backends) | `OpenCodeCliBackend` (runs `opencode run` through the attempt workspace) and `OllamaExecutionBackend` (a homemade tool loop, to be frozen). Both work only in the worktree the orchestrator gives them. |
 | Reasoning providers (for Master) | Ollama, OpenCode server, DeepSeek API |
-| Branches | `main` = `49c0a4e` (baseline). `claude-week` holds the "Trustworthy loop" work. `m1-contain-verify` (from `claude-week`) holds Milestone 1. Nothing is merged into `main`. |
+| Branches | `main` = Milestone 1 (fast-forwarded to `m1-contain-verify`, tag `m1-contain-verify`), which includes the `claude-week` work. Milestone 2 is planned on `m2-run-for-real`. |
 | Managed project | `projects/ai-system` is the system's own project. Its tasks are stale: `foundation-001` and `-002` are `in_progress`, although that work was done by hand. **Self-hosting is stopped until Milestone 3** (approved 2026-10-05): no worker runs against this repository. |
 
 ### Next actions
 
-1. Owner reviews Milestone 1 (`m1-contain-verify`; plan in `docs/plans/m1-contain-verify.md`)
-   and decides when to merge `claude-week` / `m1-contain-verify` into `main` (§17).
-2. Owner decides the next worker (§17), then starts Milestone 2, "Run it for real".
+1. Owner reviews and approves the Milestone 2 plan (`docs/plans/m2-run-for-real.md`).
+2. Prepare Match Legends with the owner, in that repository, on its own branch (plan §3).
+3. Implement Milestone 2.
 
 ---
 
@@ -762,6 +762,9 @@ Add a row whenever an architectural decision is made or reversed.
 | *Implementation:* recovery records an observation error instead of failing | A broken worktree must not block recovery of the rest | Taken without the owner |
 | *Implementation:* `create_task(status=completed)` is gated like `update_task` | Otherwise creating a task as completed bypasses the gate | Taken without the owner (claude-week); conservative |
 | *Process:* plan commit 7 was split into 7a (loop holds the lock) and 7b (orchestrator owns the workspace) | It was bigger than planned | Per the owner's instruction to split large commits |
+| Worker output goes to log files under the state dir (path + sha256 in history); the helper waits on the process, not its pipes | A finished worker with a background child was reported `timed_out` (independent review) | **Approved (2026-10-05)**, implemented |
+| `ProjectLock.release` closes its descriptor and never calls `LOCK_UN` | Unlocking would release the lock for a worker that escaped its group (independent review) | **Approved (2026-10-05)**, implemented |
+| Merged Milestone 1 to main (2026-10-05) | Milestone 1 complete and reviewed; `main` fast-forwarded to `m1-contain-verify`, tagged `m1-contain-verify` | **Approved (2026-10-05)** |
 
 ---
 
@@ -852,7 +855,8 @@ These apply to AI agents (Claude Code, OpenCode, Codex, …) and humans alike.
 - [x] Attempt budget: per task since the last human action, or keep per session?
   **Per task since the last human action (2026-10-05)**, implemented in Milestone 3.
 - [ ] Which worker comes next: the OpenCode CLI as it is, an ACP client, or the OpenHands SDK?
-- [ ] Should `claude-week` be merged into `main` now, or after milestone 1?
+- [x] Should `claude-week` be merged into `main` now, or after milestone 1?
+  **After Milestone 1: `main` was fast-forwarded to `m1-contain-verify` (tag `m1-contain-verify`) on 2026-10-05.**
 - [x] Is a DBOS spike in milestone 4 acceptable? **Yes (2026-10-05).**
 
 ---
