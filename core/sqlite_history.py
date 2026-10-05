@@ -26,7 +26,7 @@ __all__ = [
     "SQLiteHistoryStore",
 ]
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 #: How long a writer waits for another connection's lock before failing.
 BUSY_TIMEOUT_MS = 5000
 
@@ -116,7 +116,7 @@ class SQLiteHistoryStore:
                  "CREATE TABLE schema_meta (version INTEGER NOT NULL)",
                  ("INSERT INTO schema_meta (version) VALUES (?)", (SCHEMA_VERSION,))]
             )
-        elif version in (1, 2):
+        elif version in (1, 2, 3):
             self._migrate(version)
         elif version != SCHEMA_VERSION:
             raise RuntimeError(

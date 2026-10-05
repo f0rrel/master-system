@@ -36,6 +36,9 @@ run_usd = 0.20
 interval_s = 300
 ntfy_server = "https://ntfy.sh"   # the topic is in ~/.config/master-system/ntfy-topic
 
+[github]                          # the GitHub App (docs/github-setup.md)
+app_id = ""                       # its private key: ~/.config/master-system/github-app.pem
+
 [prices]                          # USD per million tokens, by model name
 "deepseek-v4-flash" = { input = 0.44, output = 1.32, cached_input = 0.0028 }
 ```
@@ -52,7 +55,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Optional
 
-__all__ = ["BudgetSettings", "ConfigError", "DaemonSettings", "MasterConfig", "RunConfig",
+__all__ = ["BudgetSettings", "ConfigError", "DaemonSettings", "GitHubSettings", "MasterConfig", "RunConfig",
            "RunSettings", "WorkerConfig",
            "default_config_path", "load_config"]
 
@@ -120,12 +123,21 @@ class DaemonSettings:
 
 
 @dataclass(frozen=True)
+class GitHubSettings:
+    #: The GitHub App's numeric id ("App ID" on its settings page); empty = not set up.
+    app_id: str = ""
+    #: The app's private key; default ~/.config/master-system/github-app.pem.
+    key_path: str = ""
+
+
+@dataclass(frozen=True)
 class RunConfig:
     master: MasterConfig = field(default_factory=MasterConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     run: RunSettings = field(default_factory=RunSettings)
     budget: BudgetSettings = field(default_factory=BudgetSettings)
     daemon: DaemonSettings = field(default_factory=DaemonSettings)
+    github: GitHubSettings = field(default_factory=GitHubSettings)
     #: model name -> {"input": usd_per_m, "output": usd_per_m, "cached_input": usd_per_m}
     prices: Mapping[str, Mapping[str, float]] = field(default_factory=lambda: {
         "deepseek-v4-flash": {"input": 0.44, "output": 1.32, "cached_input": 0.0028},
@@ -161,7 +173,8 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
     except (OSError, tomllib.TOMLDecodeError) as error:
         raise ConfigError(f"cannot read {path}: {error}") from error
 
-    unknown = sorted(set(data) - {"master", "worker", "run", "prices", "budget", "daemon"})
+    unknown = sorted(set(data) - {"master", "worker", "run", "prices", "budget", "daemon",
+                                  "github"})
     if unknown:
         raise ConfigError(f"unknown sections {unknown} in {path}")
 
@@ -229,5 +242,9 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
         ntfy_server=str(d.get("ntfy_server", DaemonSettings.ntfy_server)).rstrip("/"),
     )
 
+    g = _section(data, "github", ("app_id", "key_path"))
+    github = GitHubSettings(app_id=str(g.get("app_id", "")).strip(),
+                            key_path=str(g.get("key_path", "")).strip())
+
     return RunConfig(master=master, worker=worker, run=run, prices=prices,
-                     budget=budget, daemon=daemon, source=path)
+                     budget=budget, daemon=daemon, github=github, source=path)

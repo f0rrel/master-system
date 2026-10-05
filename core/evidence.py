@@ -50,6 +50,8 @@ _ATTEMPT_TYPES = (
     EventType.ATTEMPT_FINISHED,
     EventType.VERIFICATION,
     EventType.ATTEMPT_INTERRUPTED,
+    EventType.INTEGRATION,
+    EventType.INTEGRATION_REFUSED,
 )
 
 
@@ -92,6 +94,10 @@ class AttemptSummary:
     verdict: Optional[str] = None
     summary: Optional[str] = None
     findings: tuple = ()
+    #: An integration event names this attempt (its result is on the base branch).
+    integrated: bool = False
+    #: Why the system could not integrate it (projects with auto_integrate).
+    integration_refused: Optional[str] = None
 
     def to_context(self, current_spec_hash: Optional[str] = None) -> dict:
         verification = None
@@ -109,6 +115,9 @@ class AttemptSummary:
                 self.spec_hash is not None and self.spec_hash == current_spec_hash
             ),
             "verification": verification,
+            **({"integration": "refused: " + self.integration_refused
+                + " (run the task again: the next attempt starts from the new base)"}
+               if self.integration_refused and not self.integrated else {}),
         }
 
 
@@ -155,6 +164,10 @@ def attempts_for_task(
             record["verdict"] = payload.get("verdict")
             record["summary"] = payload.get("summary")
             record["findings"] = tuple(payload.get("findings") or ())
+        elif event.type is EventType.INTEGRATION:
+            record["integrated"] = True
+        elif event.type is EventType.INTEGRATION_REFUSED:
+            record["integration_refused"] = payload.get("reason")
     return [AttemptSummary(**record) for record in attempts.values()]
 
 
@@ -172,6 +185,7 @@ class HistoryEvidence:
         *,
         session_id: Optional[str] = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        integration_required=None,
     ):
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
@@ -179,6 +193,9 @@ class HistoryEvidence:
         self._session_id = session_id
         self.max_attempts = max_attempts
         self.run_id: Optional[str] = None
+        #: project_id -> True when the system integrates verified work itself
+        #: (H-D2): then a task completes only once its attempt is integrated.
+        self._integration_required = integration_required or (lambda project_id: False)
 
     def _scope(self) -> dict:
         if self._session_id is not None:
@@ -263,6 +280,8 @@ class HistoryEvidence:
             return "verification_errored"
         if latest.verdict != "pass":
             return f"verification_{latest.verdict}"
+        if self._integration_required(project_id) and not latest.integrated:
+            return "not_integrated"
         return None
 
     # --- context for Master ---------------------------------------------

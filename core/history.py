@@ -72,6 +72,15 @@ class EventType(Enum):
     INTEGRATION = "integration"
     #: A human edited a task's spec through run_cli (actor, action, spec hashes).
     HUMAN_ACTION = "human_action"
+    #: Schema v4 (Milestone 3). The system could not integrate a verified
+    #: attempt (rebase conflict, failed re-verification, ...): reason, detail.
+    INTEGRATION_REFUSED = "integration_refused"
+    #: A branch or site was published (pushed) to the project's remote.
+    PUBLISHED = "published"
+    #: One turn of the planner chat (usage, model; the draft's hash).
+    PLANNER_TURN = "planner_turn"
+    #: A release step: notes and PR opened, or tag and GitHub Release made.
+    RELEASE = "release"
 
 
 #: Events that belong to one execution attempt and must name it.
@@ -82,6 +91,7 @@ ATTEMPT_EVENT_TYPES = frozenset(
         EventType.ATTEMPT_INTERRUPTED,
         EventType.ATTEMPT_PROCESS,
         EventType.INTEGRATION,
+        EventType.INTEGRATION_REFUSED,
     }
 )
 

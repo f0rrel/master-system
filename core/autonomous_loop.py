@@ -175,6 +175,7 @@ class AutonomousLoop:
         verification_timeout_s: float = DEFAULT_VERIFICATION_TIMEOUT_S,
         worker_env: Optional[Mapping] = None,
         stop_check=None,
+        auto_integrate=None,
     ):
         if not isinstance(master, Master):
             raise TypeError(f"expected a Master, got {type(master).__name__}")
@@ -198,7 +199,8 @@ class AutonomousLoop:
         #: run() takes the lock itself for the duration of the run.
         self._lock = lock
         self._evidence = HistoryEvidence(
-            self._history, session_id=session_id, max_attempts=max_attempts_per_task
+            self._history, session_id=session_id, max_attempts=max_attempts_per_task,
+            integration_required=auto_integrate.applies if auto_integrate else None,
         )
 
         # One interface shared by the engine and the loop, so every decision
@@ -219,6 +221,7 @@ class AutonomousLoop:
             verification_timeout_s=verification_timeout_s,
             log_root=(paths if paths is not None else RuntimePaths.default()).state_dir / "logs",
             worker_env=worker_env,
+            auto_integrate=auto_integrate,
         )
 
     @property

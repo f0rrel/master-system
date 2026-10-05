@@ -111,6 +111,7 @@ class TaskOrchestrator:
         verification_timeout_s: float = DEFAULT_VERIFICATION_TIMEOUT_S,
         log_root: Optional[Path] = None,
         worker_env: Optional[Mapping[str, str]] = None,
+        auto_integrate=None,
     ):
         if attempt_timeout_s <= 0 or verification_timeout_s <= 0:
             raise ValueError("timeouts must be positive")
@@ -126,6 +127,9 @@ class TaskOrchestrator:
         #: (an allowlist; no secrets). Default: core.worker_env with the
         #: default worker home and the newest Node >= 22 found, if any.
         self._worker_env = dict(worker_env) if worker_env is not None else default_worker_env()
+        #: Integrates a passing attempt into the base branch right after its
+        #: verification, for projects that opt in (core.auto_integrate).
+        self._auto_integrate = auto_integrate
         #: Process logs live in the state dir, never in the worktree.
         self._log_root = (
             Path(log_root) if log_root is not None
@@ -393,4 +397,7 @@ class TaskOrchestrator:
             "findings": [dict(f) for f in ver_res.findings],
             "evidence": dict(ver_res.evidence),
         }
+        if (ver_res.verdict == "pass" and self._auto_integrate is not None
+                and self._auto_integrate.applies(project_id)):
+            result["integration"] = self._auto_integrate(project_id, attempt_id, lock_fd)
         return result

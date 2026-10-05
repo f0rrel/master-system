@@ -175,12 +175,16 @@ def build_runner(ctx, stop_check=None):
     from core.session_runner import SessionRunner
     from core.session_store import FileSessionStore
 
+    from core.auto_integrate import AutoIntegrator
+
     r = ctx.config.run
+    verifier = build_verifier(ctx.config)
+    worker_env = build_worker_env(ctx.config)
     return SessionRunner(
         ctx.master,
         build_provider(ctx.config),
         build_worker(ctx.config),
-        build_verifier(ctx.config),
+        verifier,
         store=FileSessionStore(ctx.paths.sessions_dir),
         history=ctx.history,
         paths=ctx.paths,
@@ -189,8 +193,11 @@ def build_runner(ctx, stop_check=None):
         max_attempts_per_task=r.max_attempts_per_task,
         attempt_timeout_s=r.attempt_timeout_s,
         verification_timeout_s=r.verification_timeout_s,
-        worker_env=build_worker_env(ctx.config),
+        worker_env=worker_env,
         stop_check=stop_check,
+        auto_integrate=AutoIntegrator(ctx.master, ctx.history, ctx.paths, verifier=verifier,
+                                      worker_env=worker_env,
+                                      verification_timeout_s=r.verification_timeout_s),
     )
 
 

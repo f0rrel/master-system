@@ -285,7 +285,7 @@ def test_a_v1_database_is_backed_up_then_migrated(tmp_path):
 
     store = SQLiteHistoryStore(path)
 
-    assert version_of(path) == SCHEMA_VERSION == 3
+    assert version_of(path) == SCHEMA_VERSION == 4
     assert [e.payload["n"] for e in store.events()] == [0, 1, 2]
     assert [e.seq for e in store.events()] == [1, 2, 3]
     # The new types fit, and numbering continues after the old rows.
@@ -352,7 +352,7 @@ def test_a_new_database_is_created_at_the_current_version_without_a_backup(tmp_p
     assert list(tmp_path.glob("*.bak-*")) == []
 
 
-def test_a_v2_database_is_backed_up_then_migrated_to_v3(tmp_path):
+def test_a_v2_database_is_backed_up_then_migrated_to_current(tmp_path):
     path = tmp_path / "history.sqlite"
     make_v1(path)
     raw = sqlite3.connect(str(path))
@@ -362,8 +362,26 @@ def test_a_v2_database_is_backed_up_then_migrated_to_v3(tmp_path):
 
     store = SQLiteHistoryStore(path)
 
-    assert version_of(path) == 3
+    assert version_of(path) == SCHEMA_VERSION
     assert store.migration_backup.name.startswith("history.sqlite.bak-v2-")
     event = store.append(type=EventType.HUMAN_ACTION, run_id="r", project_id="alpha",
                          task_id="t1", payload={"action": "set_description"})
+    assert event.seq == 4
+
+
+def test_a_v3_database_is_backed_up_then_migrated_to_v4(tmp_path):
+    path = tmp_path / "history.sqlite"
+    make_v1(path)
+    raw = sqlite3.connect(str(path))
+    raw.execute("UPDATE schema_meta SET version = 3")
+    raw.commit()
+    raw.close()
+
+    store = SQLiteHistoryStore(path)
+
+    assert version_of(path) == 4
+    assert store.migration_backup.name.startswith("history.sqlite.bak-v3-")
+    event = store.append(type=EventType.INTEGRATION_REFUSED, run_id="r", project_id="alpha",
+                         task_id="t1", attempt_id="a" * 32,
+                         payload={"reason": "rebase_conflict"})
     assert event.seq == 4

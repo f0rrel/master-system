@@ -14,7 +14,9 @@ def test_the_definition_is_valid_and_points_at_the_dedicated_clone():
     project = state.project()
 
     assert project["repository"] == "~/AI/managed/match-legends"
-    assert project["base_branch"] == "main"
+    assert project["base_branch"] == "develop"
+    assert project["auto_integrate"] is True
+    assert project["github"]["release_branch"] == "main"
 
 
 def test_five_independent_tasks_each_with_a_human_spec():

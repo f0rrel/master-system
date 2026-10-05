@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 from core.daemon import OBJECTIVE, RunRequest, load_env_file
 
-__all__ = ["subprocess_runner", "systemctl"]
+__all__ = ["git", "openssl_sign_rs256", "subprocess_runner", "systemctl"]
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -57,3 +57,24 @@ def subprocess_runner(config_path: Optional[str], env_file: Path, log_dir: Path,
                 (Path(state_dir) / "run.pid").unlink(missing_ok=True)
 
     return run
+
+
+def git(args, cwd, *, extra_env=None, input_text=None, timeout=300) -> str:
+    """Run git for the control plane (publishing); raises RuntimeError on failure."""
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", **(extra_env or {}))
+    done = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True,
+                          errors="replace", env=env, input=input_text, timeout=timeout)
+    if done.returncode != 0:
+        raise RuntimeError(f"git {args[0]} failed ({done.returncode}): "
+                           f"{done.stderr.strip()[-500:]}")
+    return done.stdout.strip()
+
+
+def openssl_sign_rs256(key_path: Path, data: bytes) -> bytes:
+    """RS256 signature of ``data`` with a PEM private key, by the openssl CLI."""
+    done = subprocess.run(["openssl", "dgst", "-sha256", "-sign", str(key_path)],
+                          input=data, capture_output=True, timeout=30)
+    if done.returncode != 0:
+        raise RuntimeError("openssl could not sign with the GitHub App key "
+                           f"({done.stderr.decode(errors='replace').strip()[-200:]})")
+    return done.stdout

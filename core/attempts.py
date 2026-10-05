@@ -62,7 +62,7 @@ from core.workspace import (
     is_ancestor,
 )
 
-__all__ = ["IntegrationRefused", "IntegrationResult", "integrate", "main"]
+__all__ = ["IntegrationRefused", "IntegrationResult", "integrate", "integrate_held", "main"]
 
 
 class IntegrationRefused(Exception):
@@ -121,7 +121,8 @@ def _attempt_records(history: HistoryStore, project_id: str, attempt_id: str):
 
 
 def _rebase_and_verify(history, worktrees, repo, project_id, attempt_id, task, started,
-                       result_sha, tip, lock, paths, verifier, worker_env, timeout_s):
+                       result_sha, tip, lock_fd, paths, verifier, worker_env, timeout_s,
+                       actor):
     """Replay the attempt onto tip, re-run acceptance there, record the verdict."""
     path = worktrees.free_path(project_id, f"{attempt_id}-rebase")
     worktrees.create(repo, path, attempt_id, tip, branch=f"attempt/{path.name}")
@@ -138,7 +139,7 @@ def _rebase_and_verify(history, worktrees, repo, project_id, attempt_id, task, s
         path=path, base_sha=tip, result_sha=new_sha,
         deadline=time.monotonic() + timeout_s, deadline_at=deadline_at,
         log_dir=paths.state_dir / "logs" / project_id / attempt_id, phase="reintegration",
-        lock_fd=lock.fileno(), env=worker_env,
+        lock_fd=lock_fd, env=worker_env,
     )
     evidence = {"base_sha": tip, "result_sha": new_sha, "rebased_from": result_sha}
     verdict = verifier.verify(task, {"project_id": project_id, "task_id": started.task_id},
@@ -158,7 +159,7 @@ def _rebase_and_verify(history, worktrees, repo, project_id, attempt_id, task, s
             "result_sha": new_sha,
             "rebased_from": result_sha,
             "worktree": str(path),
-            "actor": "human-cli",
+            "actor": actor,
             "deadline_at": deadline_at,
             "processes": process_records(workspace),
         },
@@ -185,90 +186,103 @@ def integrate(master: Master, history: HistoryStore, project_id: str, attempt_id
     with ProjectLock(state.project_path, holder=f"integrate {attempt_id}") as lock:
         recover_project(history, project_id, store=FileSessionStore(paths.sessions_dir),
                         worktrees=worktrees)
+        return integrate_held(master, history, project_id, attempt_id, lock_fd=lock.fileno(),
+                              paths=paths, rebase=rebase, verifier=verifier,
+                              worker_env=worker_env,
+                              verification_timeout_s=verification_timeout_s)
 
-        attempt_id = resolve_attempt_id(history, project_id, attempt_id)
-        started, finished, verification, integrations = _attempt_records(
-            history, project_id, attempt_id)
-        if started is None:
-            raise IntegrationRefused("unknown_attempt",
-                                     f"no attempt {attempt_id} in project {project_id!r}")
-        attempt = started.payload
-        done = finished.payload if finished is not None else {}
-        if done.get("outcome") != "finished" or not done.get("result_sha"):
-            raise IntegrationRefused(
-                "not_finished",
-                f"attempt {attempt_id} did not finish with a committed result "
-                f"(outcome: {done.get('outcome') or 'none recorded'})",
-            )
-        verdict = verification.payload.get("verdict") if verification else None
-        if verdict != "pass":
-            raise IntegrationRefused("not_verified",
-                                     f"attempt {attempt_id} was not verified as pass "
-                                     f"(verdict: {verdict})")
-        task = state.get_task(started.task_id)
-        if task is None or attempt.get("spec_hash") != spec_hash(task):
-            raise IntegrationRefused(
-                "spec_changed",
-                f"task {started.task_id!r} changed since attempt {attempt_id} ran",
-            )
-        project = state.project()
-        repository, base_branch = project.get("repository"), project.get("base_branch")
-        if (
-            not repository
-            or Path(repository).expanduser().resolve() != Path(attempt.get("repository", "")).resolve()
-            or base_branch != attempt.get("base_branch")
-        ):
-            raise IntegrationRefused(
-                "repository_changed",
-                "project.yaml no longer names the repository and base branch the "
-                "attempt was made against",
-            )
 
-        try:
-            repo, _ = worktrees.check_repository(Path(repository).expanduser(), base_branch)
-            result_sha = done["result_sha"]
-            tip = branch_tip(repo, base_branch)
-            for sha in [result_sha, *(e.payload.get("result_sha") for e in integrations)]:
-                if sha and is_ancestor(repo, sha, tip):
-                    return IntegrationResult(attempt_id, base_branch, sha, tip,
-                                             "already_integrated")
-            target, rebased_from = result_sha, None
-            if not is_ancestor(repo, tip, result_sha):
-                if not rebase:
-                    raise IntegrationRefused(
-                        "base_moved",
-                        f"{base_branch!r} has moved on since the attempt's base; "
-                        "integrate with --rebase, or re-run the task from the new base",
-                    )
-                target = _rebase_and_verify(
-                    history, worktrees, repo, project_id, attempt_id, task, started,
-                    result_sha, tip, lock, paths, verifier or AcceptanceVerifier(),
-                    worker_env if worker_env is not None else default_worker_env(),
-                    verification_timeout_s)
-                rebased_from = result_sha
-            method = fast_forward(repo, base_branch, tip, target)
-            if rebased_from:
-                method = f"rebased_{method}"
-        except WorkspaceError as error:
-            raise IntegrationRefused("git_refused", str(error)) from error
-
-        history.append(
-            type=EventType.INTEGRATION,
-            run_id=uuid.uuid4().hex,
-            project_id=project_id,
-            task_id=started.task_id,
-            attempt_id=attempt_id,
-            payload={
-                "repository": str(repo),
-                "base_branch": base_branch,
-                "previous_sha": tip,
-                "result_sha": target,
-                "rebased_from": rebased_from,
-                "method": method,
-                "actor": "human-cli",
-            },
+def integrate_held(master: Master, history: HistoryStore, project_id: str, attempt_id: str,
+                   *, lock_fd: int, paths: RuntimePaths, rebase: bool = False,
+                   verifier=None, worker_env=None,
+                   verification_timeout_s: float = DEFAULT_VERIFICATION_TIMEOUT_S,
+                   actor: str = "human-cli") -> IntegrationResult:
+    """``integrate`` for a caller that already holds the project lock (a run)."""
+    state = master.project_state(project_id)
+    worktrees = default_worktrees(master, paths)
+    attempt_id = resolve_attempt_id(history, project_id, attempt_id)
+    started, finished, verification, integrations = _attempt_records(
+        history, project_id, attempt_id)
+    if started is None:
+        raise IntegrationRefused("unknown_attempt",
+                                 f"no attempt {attempt_id} in project {project_id!r}")
+    attempt = started.payload
+    done = finished.payload if finished is not None else {}
+    if done.get("outcome") != "finished" or not done.get("result_sha"):
+        raise IntegrationRefused(
+            "not_finished",
+            f"attempt {attempt_id} did not finish with a committed result "
+            f"(outcome: {done.get('outcome') or 'none recorded'})",
         )
-        return IntegrationResult(attempt_id, base_branch, target, tip, method, rebased_from)
+    verdict = verification.payload.get("verdict") if verification else None
+    if verdict != "pass":
+        raise IntegrationRefused("not_verified",
+                                 f"attempt {attempt_id} was not verified as pass "
+                                 f"(verdict: {verdict})")
+    task = state.get_task(started.task_id)
+    if task is None or attempt.get("spec_hash") != spec_hash(task):
+        raise IntegrationRefused(
+            "spec_changed",
+            f"task {started.task_id!r} changed since attempt {attempt_id} ran",
+        )
+    project = state.project()
+    repository, base_branch = project.get("repository"), project.get("base_branch")
+    if (
+        not repository
+        or Path(repository).expanduser().resolve() != Path(attempt.get("repository", "")).resolve()
+        or base_branch != attempt.get("base_branch")
+    ):
+        raise IntegrationRefused(
+            "repository_changed",
+            "project.yaml no longer names the repository and base branch the "
+            "attempt was made against",
+        )
+
+    try:
+        repo, _ = worktrees.check_repository(Path(repository).expanduser(), base_branch)
+        result_sha = done["result_sha"]
+        tip = branch_tip(repo, base_branch)
+        for sha in [result_sha, *(e.payload.get("result_sha") for e in integrations)]:
+            if sha and is_ancestor(repo, sha, tip):
+                return IntegrationResult(attempt_id, base_branch, sha, tip,
+                                         "already_integrated")
+        target, rebased_from = result_sha, None
+        if not is_ancestor(repo, tip, result_sha):
+            if not rebase:
+                raise IntegrationRefused(
+                    "base_moved",
+                    f"{base_branch!r} has moved on since the attempt's base; "
+                    "integrate with --rebase, or re-run the task from the new base",
+                )
+            target = _rebase_and_verify(
+                history, worktrees, repo, project_id, attempt_id, task, started,
+                result_sha, tip, lock_fd, paths, verifier or AcceptanceVerifier(),
+                worker_env if worker_env is not None else default_worker_env(),
+                verification_timeout_s, actor)
+            rebased_from = result_sha
+        method = fast_forward(repo, base_branch, tip, target)
+        if rebased_from:
+            method = f"rebased_{method}"
+    except WorkspaceError as error:
+        raise IntegrationRefused("git_refused", str(error)) from error
+
+    history.append(
+        type=EventType.INTEGRATION,
+        run_id=uuid.uuid4().hex,
+        project_id=project_id,
+        task_id=started.task_id,
+        attempt_id=attempt_id,
+        payload={
+            "repository": str(repo),
+            "base_branch": base_branch,
+            "previous_sha": tip,
+            "result_sha": target,
+            "rebased_from": rebased_from,
+            "method": method,
+            "actor": actor,
+        },
+    )
+    return IntegrationResult(attempt_id, base_branch, target, tip, method, rebased_from)
 
 
 def build_parser():

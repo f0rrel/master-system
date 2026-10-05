@@ -576,6 +576,12 @@ once). After each run the owner gets a short phone notification: done, blocked, 
 today, and the preview link. The Master's key is read from `~/.config/master-system/master.env`
 into the run's environment only.
 
+Branches (Match Legends, `project.yaml`): `main` = the released game, changed only by a
+release PR the owner merges; `develop` = where the system integrates verified work
+(`auto_integrate: true`); `gh-pages` = the published site. Preview:
+<https://f0rrel.github.io/Match_Legends_mobile_game/develop/>. GitHub App setup:
+`docs/github-setup.md`, then `ms github setup --app-id N` and `ms github check`.
+
 ### Run the autonomous loop (`core/run_cli.py`)
 
 ```bash
@@ -832,6 +838,11 @@ Add a row whenever an architectural decision is made or reversed.
 | M3 hands-off plan approved (`docs/plans/m3-hands-off.md`), H-D1..H-D6 as proposed, start on login | The owner's role: talk to a planner, play-test develop, approve releases | **Approved (2026-10-06)** |
 | A background service starts runs on its own: approved, ready tasks with acceptance; daily and per-run caps; no retry after 3 failures since the last human action; ntfy notifications | Hands-off; it cannot spend on a hopeless task every day | **Approved (2026-10-06)**; details taken without the owner |
 | `core/host.py` joins the process-starting modules (the service's own runs and systemd unit; never workers) | The boundary test lists who may start processes | Taken without the owner |
+| **H-D1:** for a project with `auto_integrate: true`, integrating a verified attempt into its `base_branch` (`develop`) is a ROUTINE system action, done by the orchestrator right after the attempt passes, under the run's lock, with the same rules as a human integration (finished, pass, current spec; rebase + re-verification if the base moved; the base moves to exactly the (re-)verified commit). `integrate` into the release branch (`main`) stays human-only: it happens only by the owner merging a release PR on GitHub | Hands-off: the owner play-tests develop, approves releases | **Approved (2026-10-06)**, changes P4/D1 for develop only |
+| **H-D2:** in such a project a task completes only when its latest attempt is integrated (completion-gate reason `not_integrated`), so a dependency is satisfied only when its code is in develop (closes N2 there) | "Done" means "in the preview" | **Approved (2026-10-06)** |
+| **H-D3:** a rebase conflict or failed re-verification is recorded as `integration_refused` (history schema v4) and shown to Master as "run the task again"; the next attempt starts from the new develop, within the attempt limit | No human needed for an ordinary conflict | **Approved (2026-10-06)** |
+| **H-D4/G1:** after each run the service pushes develop and a `gh-pages` site (release branch's `www/` at `/`, develop's at `/develop/`) with a GitHub App installation token (JWT signed by `openssl`; token only in the git process's environment via GIT_ASKPASS). The app has Contents/Pull requests/Pages write and no Administration; a ruleset on main allows no bypass (docs/github-setup.md) | Stable preview URL; the app can never change main | **Approved (2026-10-06)** |
+| History schema v4 adds `integration_refused`, `published`, `planner_turn`, `release` (migration with backup, as before) | One migration for all of Milestone 3 | Taken without the owner |
 | Merged Milestone 1 to main (2026-10-05) | Milestone 1 complete and reviewed; `main` fast-forwarded to `m1-contain-verify`, tagged `m1-contain-verify` | **Approved (2026-10-05)** |
 
 ---

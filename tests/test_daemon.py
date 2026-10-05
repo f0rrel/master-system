@@ -289,3 +289,21 @@ def test_the_service_unit_runs_the_daemon_and_reports_bad_stops(tmp_path):
     assert "ExecStopPost=/repo/.venv/bin/python -m core.ms --config /cfg/overnight.toml service stopped" in unit
     assert "WantedBy=default.target" in unit and "Restart=on-failure" in unit
     assert "master.env" not in unit
+
+
+def test_github_setup_saves_the_app_id_and_keeps_the_rest(home):
+    config = home / "config" / "master-system" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('[master]\nmodel = "deepseek-v4-flash"\n\n[run]\nmax_steps = 30\n')
+    assert run_ms("github", "setup", "--app-id", "1234567")[0] == 0
+    assert run_ms("github", "setup", "--app-id", "7654321")[0] == 0
+    loaded = load_config(config)
+    assert loaded.github.app_id == "7654321"
+    assert loaded.run.max_steps == 30 and loaded.master.model == "deepseek-v4-flash"
+    assert run_ms("github", "setup", "--app-id", "abc")[0] == 1
+
+
+def test_github_check_without_setup_says_what_is_missing(home):
+    code, out = run_ms("github", "check")
+    assert code == 1
+    assert "App ID configured (missing)" in out and "ms github setup" in out
