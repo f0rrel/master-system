@@ -224,7 +224,8 @@ def test_a_crashed_attempt_is_recovered_as_interrupted_and_not_replayed(tmp_path
     assert backend.calls == []
     # ...and handed the uncertainty to Master as evidence.
     evidence = context_of(r._provider.prompts[0])["execution_evidence"]["tasks"]["t1"]
-    assert evidence["latest_attempt"] == {"outcome": "interrupted", "verification": None}
+    assert evidence["latest_attempt"]["outcome"] == "interrupted"
+    assert evidence["latest_attempt"]["verification"] is None
     assert evidence["attempts_this_session"] == 1
     # The crashed run's two decisions plus the resumed run's one.
     assert session.steps_completed == 3
@@ -243,7 +244,8 @@ def test_rerunning_after_a_crash_is_an_explicit_counted_decision(tmp_path):
     assert backend.calls == ["t1"]
     evidence = context_of(r._provider.prompts[1])["execution_evidence"]["tasks"]["t1"]
     assert evidence["attempts_this_session"] == 2
-    assert evidence["latest_attempt"]["outcome"] == "success"
+    assert evidence["latest_attempt"]["outcome"] == "finished"
+    assert evidence["latest_attempt"]["worker_reported_status"] == "success"
 
 
 def test_recovery_is_recorded_once(tmp_path):
@@ -349,10 +351,10 @@ def test_a_resumed_process_sees_the_previous_verification(tmp_path):
     r.resume("s1")
 
     evidence = context_of(r._provider.prompts[0])["execution_evidence"]["tasks"]["t1"]
-    assert evidence["latest_attempt"] == {
-        "outcome": "success",
-        "verification": {"verdict": "pass", "summary": "checked", "findings": []},
-    }
+    assert evidence["latest_attempt"]["outcome"] == "finished"
+    assert evidence["latest_attempt"]["spec_current"] is True
+    assert evidence["latest_attempt"]["verification"] == {
+        "verdict": "pass", "summary": "checked", "findings": []}
     recent = context_of(r._provider.prompts[0])["recent_decisions"]
     assert [d["operation"] for d in recent] == ["update_task", "run_task", None]
 

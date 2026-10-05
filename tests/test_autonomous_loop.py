@@ -195,7 +195,8 @@ def test_execution_and_verification_results_are_fed_back_to_master(master):
     # The decision after run_task was made with its outcome in view.
     assert len(provider.prompts) == 3
     assert "execution_evidence" in provider.prompts[2]
-    assert '"outcome": "success"' in provider.prompts[2]
+    assert '"outcome": "finished"' in provider.prompts[2]
+    assert '"worker_reported_status": "success"' in provider.prompts[2]
     assert '"verdict": "pass"' in provider.prompts[2]
 
 
@@ -215,7 +216,7 @@ def test_a_worker_failure_reaches_master_and_does_not_complete(master):
     assert result.stop_reason == STOP_MASTER
     assert result.decision.decision is Decision.WAIT
     assert status_of(master) == "in_progress"
-    assert '"outcome": "failed"' in provider.prompts[2]
+    assert '"worker_reported_status": "failed"' in provider.prompts[2]
     assert '"verdict": "fail"' in provider.prompts[2]
 
 

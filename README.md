@@ -561,7 +561,8 @@ a script against the code.
 - Acceptance:
   - [ ] `kill -9` during a worker: recovery is refused until the worker exits, the worktree is kept, and its diff stats are recorded.
   - [ ] A worker that edits a protected test gets `fail`.
-  - [ ] Re-titling a task or changing its acceptance invalidates an earlier pass.
+  - [x] Re-titling a task or changing its acceptance invalidates an earlier pass.
+    (`tests/test_evidence.py`: `spec_changed`)
     ("Reopening invalidates a pass" moved to Milestone 3, decision P7.)
   - [x] An attempt past its deadline is killed and recorded as `timed_out`.
     (`tests/test_attempt_workspace.py`, `tests/test_worker_process.py`)

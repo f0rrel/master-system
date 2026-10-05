@@ -8,16 +8,25 @@ Three consumers read execution history, and all of them go through the same
 * the attempt limit, which bounds how often one session may run one task;
 * the evidence Master is shown before its next decision.
 
-Only neutral facts leave this module: an attempt's outcome (an
-:class:`core.execution.ExecutionResult` status, or ``error``, ``interrupted``
-or ``unfinished``) and the verifier's verdict, summary and findings. Worker
-output, worker identity and the execution reason stay in history as opaque
-provenance and are never shown to Master or branched on.
+Only neutral facts leave this module: the attempt's outcome as the
+orchestrator observed it (``finished``, ``timed_out``, ``error``,
+``interrupted`` or ``unfinished``), what changed (files, insertions,
+deletions), whether the attempt was made against the task's current spec, and
+the verifier's verdict, summary and findings. The worker's own status is shown
+only as ``worker_reported_status``, a claim. Worker output, worker identity
+and the execution reason stay in history as opaque provenance and are never
+shown to Master or branched on.
+
+Evidence is bound to what it verified: every attempt records the
+``spec_hash`` of the task (title and acceptance) it was run against, and a
+pass for a different spec does not authorise completion.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+import json
+from dataclasses import dataclass, field
 from typing import Iterable, Mapping, Optional
 
 from core.history import EventType, HistoryStore
@@ -28,6 +37,7 @@ __all__ = [
     "AttemptSummary",
     "HistoryEvidence",
     "attempts_for_task",
+    "spec_hash",
 ]
 
 #: Attempts one session may make at one task before a human must look.
@@ -43,6 +53,14 @@ _ATTEMPT_TYPES = (
 )
 
 
+def spec_hash(task: Optional[Mapping]) -> str:
+    """sha256 of the canonical JSON of the task's spec: its title and acceptance."""
+    task = task or {}
+    spec = {"title": task.get("title"), "acceptance": task.get("acceptance")}
+    canonical = json.dumps(spec, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True)
 class AttemptSummary:
     """One execution attempt, reduced to the facts decisions may use."""
@@ -50,16 +68,23 @@ class AttemptSummary:
     attempt_id: str
     session_id: Optional[str]
     run_id: str
-    #: ExecutionResult status, or ``error`` (the worker raised),
-    #: ``interrupted`` (found unfinished during recovery) or ``unfinished``
-    #: (no outcome recorded yet).
+    #: Decided by the orchestrator: ``finished``, ``timed_out``, ``error``
+    #: (the worker or its workspace raised), ``interrupted`` (found
+    #: unfinished during recovery) or ``unfinished`` (no outcome yet).
     outcome: str
+    #: The worker's own ExecutionResult status. A claim, never a fact.
+    worker_reported_status: Optional[str] = None
+    #: The spec the attempt was run against; None for attempts recorded
+    #: before spec hashes existed.
+    spec_hash: Optional[str] = None
+    result_sha: Optional[str] = None
+    changes: dict = field(default_factory=dict)
     verified: bool = False
     verdict: Optional[str] = None
     summary: Optional[str] = None
     findings: tuple = ()
 
-    def to_context(self) -> dict:
+    def to_context(self, current_spec_hash: Optional[str] = None) -> dict:
         verification = None
         if self.verified:
             verification = {
@@ -67,7 +92,15 @@ class AttemptSummary:
                 "summary": self.summary,
                 "findings": list(self.findings),
             }
-        return {"outcome": self.outcome, "verification": verification}
+        return {
+            "outcome": self.outcome,
+            "worker_reported_status": self.worker_reported_status,
+            "changes": dict(self.changes),
+            "spec_current": (
+                self.spec_hash is not None and self.spec_hash == current_spec_hash
+            ),
+            "verification": verification,
+        }
 
 
 def attempts_for_task(
@@ -84,6 +117,7 @@ def attempts_for_task(
                 "session_id": event.session_id,
                 "run_id": event.run_id,
                 "outcome": "unfinished",
+                "spec_hash": event.payload.get("spec_hash"),
             }
             continue
         record = attempts.get(event.attempt_id)
@@ -92,12 +126,18 @@ def attempts_for_task(
         payload = event.payload
         if event.type is EventType.ATTEMPT_FINISHED:
             if "outcome" in payload:
-                outcome = payload["outcome"]
-                if outcome == "finished":
-                    outcome = payload.get("worker_reported_status") or "finished"
-            else:  # recorded before Milestone 1
-                outcome = payload.get("status") or "error"
-            record["outcome"] = outcome
+                record["outcome"] = payload["outcome"]
+                record["worker_reported_status"] = payload.get("worker_reported_status")
+            else:  # recorded before Milestone 1: "status" was the worker's claim
+                status = payload.get("status")
+                record["outcome"] = "error" if status in (None, "error") else "finished"
+                record["worker_reported_status"] = None if status == "error" else status
+            record["result_sha"] = payload.get("result_sha")
+            diffstat = payload.get("diffstat")
+            if isinstance(diffstat, Mapping):
+                record["changes"] = {
+                    key: diffstat.get(key) for key in ("files", "insertions", "deletions")
+                }
         elif event.type is EventType.ATTEMPT_INTERRUPTED:
             if record["outcome"] == "unfinished":
                 record["outcome"] = "interrupted"
@@ -150,14 +190,19 @@ class HistoryEvidence:
 
     # --- completion gate -------------------------------------------------
 
-    def completion_gate(self, operation) -> Optional[str]:
+    def completion_gate(self, operation, current_task: Optional[Mapping] = None) -> Optional[str]:
         """Why an autonomous ``completed`` must wait for a human, or None.
 
         Applies to any operation that would set a task's status to
         ``completed``. It may apply autonomously only when the task's latest
         attempt -- across all of history, since a pass from an earlier session
-        is still evidence -- finished and was verified as ``pass``. Every
-        other status change is left to the approval policy alone.
+        is still evidence -- finished, was run against the task's spec as it
+        will be *after* the operation (so retitling and completing in one
+        operation does not pass), and was verified as ``pass``. Every other
+        status change is left to the approval policy alone.
+
+        ``current_task`` is the task record as it is now, or None if it does
+        not exist yet.
         """
         arguments = operation.arguments
         if arguments.get("status") != "completed":
@@ -178,6 +223,13 @@ class HistoryEvidence:
             return "latest_attempt_unfinished"
         if latest.outcome == "error":
             return "latest_attempt_errored"
+        if latest.outcome == "timed_out":
+            return "latest_attempt_timed_out"
+        projected = dict(current_task or {})
+        if "title" in arguments:
+            projected["title"] = arguments["title"]
+        if latest.spec_hash is None or latest.spec_hash != spec_hash(projected):
+            return "spec_changed"
         if not latest.verified:
             return "not_verified"
         if latest.verdict is None:
@@ -188,7 +240,8 @@ class HistoryEvidence:
 
     # --- context for Master ---------------------------------------------
 
-    def for_project(self, project_id: str, focus_task_ids: Iterable[str]) -> Mapping:
+    def for_project(self, project_id: str, focus_task_ids: Iterable[str],
+                    task_records: Optional[Mapping[str, Mapping]] = None) -> Mapping:
         """The context keys Master sees about execution in project_id.
 
         Returns ``execution_evidence`` and ``recent_decisions``. Evidence covers
@@ -211,7 +264,14 @@ class HistoryEvidence:
             tasks[task_id] = {
                 "attempts_this_session": len(here),
                 "attempts_total": len(every),
-                "latest_attempt": every[-1].to_context() if every else None,
+                "latest_attempt": (
+                    every[-1].to_context(
+                        spec_hash((task_records or {}).get(task_id))
+                        if task_records is not None and task_id in task_records
+                        else None
+                    )
+                    if every else None
+                ),
             }
 
         recent = []

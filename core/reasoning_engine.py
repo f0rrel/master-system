@@ -267,19 +267,28 @@ express it as an operation, and the system carries it out:
   already in_progress. run_task changes no state, and it is refused for any
   task that is not in_progress. Starting work therefore takes two decisions:
   update_task to in_progress, then run_task.
-- After execution, a verifier inspects the result. PROJECT STATE then shows,
-  under "execution_evidence", each task's attempts in this session, its attempts
-  in total, and its latest attempt: the outcome (success, failed, partial,
-  blocked, needs_human, cancelled, error, or interrupted) and the verification
-  verdict, summary and findings. "recent_decisions" lists your last decisions.
+- Each attempt runs in a fresh copy of the project's repository. After it, a
+  verifier runs the task's acceptance checks, if a human defined them
+  ("has_acceptance"). PROJECT STATE then shows, under "execution_evidence",
+  each task's attempts in this session, its attempts in total, and its latest
+  attempt:
+  - "outcome", observed by the system: finished, timed_out, error,
+    interrupted or unfinished;
+  - "worker_reported_status": what the worker claimed. It is a claim, not a fact;
+  - "changes": files changed, insertions, deletions;
+  - "spec_current": whether the attempt was made against the task's current
+    title and acceptance;
+  - "verification": verdict, summary and findings.
+  "recent_decisions" lists your last decisions.
 - An "interrupted" attempt means the worker started but the system stopped
   before its outcome was recorded; what it did is uncertain. Nothing is retried
   for you: decide whether to run_task again, block the task, or ask for help.
 - Each task may be run at most "attempt_limit" times per session. Beyond that,
   run_task is refused and a human has to look.
 - You can then record the outcome with an operation. Marking a task
-  "completed" applies on its own only when its latest attempt was verified as
-  "pass"; otherwise it waits for a human. You can mark it "blocked" whenever
+  "completed" applies on its own only when its latest attempt finished, was made
+  against the current spec, and was verified as "pass"; otherwise it waits for
+  a human. Changing a task's title makes earlier evidence stale. You can mark it "blocked" whenever
   the evidence supports that.
 So a task's text describing implementation or testing does not mean you must do
 that yourself, and does not mean you cannot advance it. Judge progress by the
@@ -436,6 +445,9 @@ class ReasoningEngine:
                     "readiness": readiness,
                     "blocked_by": blocked_by,
                     "readiness_reason": reason,
+                    # Whether a human has defined "done" for this task. The
+                    # acceptance commands themselves are not shown.
+                    "has_acceptance": bool(task.get("acceptance")),
                 }
             )
 
@@ -466,7 +478,9 @@ class ReasoningEngine:
         if self._evidence_source is not None:
             context.update(
                 self._evidence_source.for_project(
-                    project_id, [t["id"] for t in in_progress_tasks]
+                    project_id,
+                    [t["id"] for t in in_progress_tasks],
+                    {t.get("id"): t for t in status.get("tasks", [])},
                 )
             )
         return context

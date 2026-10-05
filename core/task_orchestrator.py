@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from core.evidence import spec_hash
 from core.execution import ExecutionBackend, ExecutionResult
 from core.execution_runner import ExecutionError, TaskExecutionRunner
 from core.history import EventType, HistoryStore, jsonable, new_event_id
@@ -194,6 +195,7 @@ class TaskOrchestrator:
                     "base_sha": base_sha,
                     "worktree": str(worktree),
                     "branch": branch,
+                    "spec_hash": spec_hash(task),
                     "timeout_s": self._attempt_timeout_s,
                     "deadline_at": deadline_at,
                 },

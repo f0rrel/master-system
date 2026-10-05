@@ -49,7 +49,7 @@ from core.execution import ExecutionBackend
 from core.evidence import DEFAULT_MAX_ATTEMPTS, HistoryEvidence
 from core.execution_runner import ExecutionError
 from core.history import EventType, HistoryStore, InMemoryHistoryStore, jsonable
-from core.master import Master
+from core.master import EXPECTED_ERRORS, Master
 from core.provider import ReasoningProvider
 from core.reasoning import (
     SPECS,
@@ -301,6 +301,17 @@ class AutonomousLoop:
             payload=payload,
         )
 
+    def _current_task(self, operation):
+        """The task an operation names, as it is now; None if there is none."""
+        project_id = operation.arguments.get("project_id")
+        task_id = self._task_of(operation)
+        if not isinstance(project_id, str) or task_id is None:
+            return None
+        try:
+            return self._master.project_state(project_id).get_task(task_id)
+        except EXPECTED_ERRORS:
+            return None
+
     @staticmethod
     def _task_of(operation) -> Optional[str]:
         if operation is None:
@@ -460,7 +471,9 @@ class AutonomousLoop:
                 and decision.operation is not None
                 and not decision.pending_approval
             ):
-                gate_reason = self._evidence.completion_gate(decision.operation)
+                gate_reason = self._evidence.completion_gate(
+                    decision.operation, self._current_task(decision.operation)
+                )
 
             # The decision is the recorded intent: it is written before any
             # state changes or any worker runs.

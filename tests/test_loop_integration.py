@@ -117,6 +117,7 @@ def test_execution_failure_loop(tmp_path):
     evidence = attempt(m, FakeExec(ExecutionResult(status="failed", reason="boom")), FakeVerify("fail"))
     e = ReasoningEngine(Prov({"decision": "wait", "reason": "exec failed", "operation": None}), m, ReasoningInterface(m), evidence_source=evidence)
     ctx = e.context_for("p")
-    assert latest(ctx)["outcome"] == "failed"
+    assert latest(ctx)["outcome"] == "finished"
+    assert latest(ctx)["worker_reported_status"] == "failed"
     dec = e.reason("next", "p")
     assert dec._decision.decision == Decision.WAIT
