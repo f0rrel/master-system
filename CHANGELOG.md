@@ -4,7 +4,18 @@ Notable changes to the Master System, newest first. Each milestone and each fix 
 an entry here (see README, "Documentation rule"). Decisions and their reasons are in the
 README decision log (§13).
 
-## Unreleased (branch `m3-hands-off`)
+## m3-hands-off (2026-10-06): Milestone 3 on `main`
+
+### 2026-10-06: documentation and cleanup
+- README rewritten in two parts: "Using it" (owner) and "How it works" (AI helpers and
+  developers). The full decision log moved to `docs/DECISIONS.md`; new
+  `docs/TROUBLESHOOTING.md` (with known planner bug P1).
+- Fixed: `ms` run inside another checkout of this repo used that checkout's code and project
+  files (the wrapper now runs `python -P`).
+- Early experiments (`bob.py`, `agents/`, `docker/bob`) moved to `archive/`.
+- Merged branches deleted (tags kept); finished attempt worktrees and branches removed from
+  the Match Legends clone.
+- `main` is Milestone 3, tagged `m3-hands-off`.
 
 ### 2026-10-06: planner chat usability
 - A multi-line paste arrives as one message (bracketed paste, lines arriving together, or a
