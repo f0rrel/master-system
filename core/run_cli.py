@@ -137,19 +137,38 @@ def build_verifier(config):
     return AcceptanceVerifier()
 
 
-def build_worker_env(config):
+def build_tiers(config):
+    """The worker ladder from [worker.profiles] and [worker] ladder, or None."""
+    from core.opencode_backend import OpenCodeCliBackend
+    from core.worker_tiers import TierSet
+
+    w = config.worker
+    if not w.ladder:
+        return None
+    backends, envs, models = {}, {}, {}
+    for name in w.ladder:
+        profile = w.profiles[name]
+        backends[name] = OpenCodeCliBackend(opencode_bin=w.opencode_bin, model=profile["model"],
+                                            extra_args=w.extra_args)
+        envs[name] = build_worker_env(config, home=profile["home"] or w.home)
+        models[name] = profile["model"]
+    return TierSet(tuple(w.ladder), backends, envs, models)
+
+
+def build_worker_env(config, home=None):
     from core.worker_env import find_node_bin, worker_environment
 
     w = config.worker
+    home = Path(home) if home is not None else Path(w.home)
     node_bin = find_node_bin(w.node_min_major)
     if node_bin is None:
         raise SetupError(f"no Node >= {w.node_min_major} found in nvm's install directory "
                          "(install it with 'nvm install', or lower [worker] node_min_major)")
-    Path(w.home).mkdir(parents=True, exist_ok=True)
+    home.mkdir(parents=True, exist_ok=True)
     extra = {}
     if w.playwright_browsers_path:
         extra["PLAYWRIGHT_BROWSERS_PATH"] = str(w.playwright_browsers_path)
-    return worker_environment(w.home, path_dirs=[node_bin], extra=extra)
+    return worker_environment(home, path_dirs=[node_bin], extra=extra)
 
 
 def budget_check(ctx, session_id, max_cost_usd):
@@ -195,6 +214,7 @@ def build_runner(ctx, stop_check=None):
         verification_timeout_s=r.verification_timeout_s,
         worker_env=worker_env,
         stop_check=stop_check,
+        tiers=build_tiers(ctx.config),
         auto_integrate=AutoIntegrator(ctx.master, ctx.history, ctx.paths, verifier=verifier,
                                       worker_env=worker_env,
                                       verification_timeout_s=r.verification_timeout_s),

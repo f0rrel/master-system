@@ -128,6 +128,7 @@ def build_daemon(config, config_path):
         notifier=Notifier.from_file(config.daemon.ntfy_server),
         run=subprocess_runner(config_path, env_file, paths.state_dir / "logs" / "runs",
                               paths.state_dir),
+        max_failures=max(3, 2 * len(config.worker.ladder)),
         after_run=[publisher, release_ready_notice(releaser)], is_busy=is_busy,
         preview_url=publisher.preview_url, watchers=[releaser.watch],
     )
@@ -372,6 +373,11 @@ def _command_status(args, out):
             print("  Waiting for you:", file=out)
             for item in view["needs_you"]:
                 print(f"    - {item}", file=out)
+        from core.report import tier_stats
+
+        for t in tier_stats(history, config.prices, project_id=project_id):
+            print(f"  tier {t['tier']} ({t['model']}): {t['passes']}/{t['attempts']} passed, "
+                  f"${t['cost_usd']:.3f}", file=out)
         if view["preview_url"]:
             print(f"  Preview: {view['preview_url']}", file=out)
             print(f"  Live:    {view['live_url']}", file=out)

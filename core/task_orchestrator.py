@@ -112,6 +112,7 @@ class TaskOrchestrator:
         log_root: Optional[Path] = None,
         worker_env: Optional[Mapping[str, str]] = None,
         auto_integrate=None,
+        tiers=None,
     ):
         if attempt_timeout_s <= 0 or verification_timeout_s <= 0:
             raise ValueError("timeouts must be positive")
@@ -130,6 +131,9 @@ class TaskOrchestrator:
         #: Integrates a passing attempt into the base branch right after its
         #: verification, for projects that opt in (core.auto_integrate).
         self._auto_integrate = auto_integrate
+        #: Worker tiers (core.worker_tiers.TierSet): the orchestrator, never
+        #: Master, picks each attempt's worker profile from history.
+        self._tiers = tiers
         #: Process logs live in the state dir, never in the worktree.
         self._log_root = (
             Path(log_root) if log_root is not None
@@ -203,7 +207,23 @@ class TaskOrchestrator:
         except IsolationError as error:
             raise WorkspaceRefusal("workspace_refused", str(error)) from error
         branch = GitWorktrees.branch_for(attempt_id)
-        worker = describe_worker(self._execution_backend)
+        runner, worker_env, tier_facts = self._runner, self._worker_env, {}
+        if self._tiers is not None and self._tiers.ladder:
+            from core.worker_tiers import choose_tier
+            from core.history import InMemoryHistoryStore
+
+            choice = choose_tier(self._history or InMemoryHistoryStore(), project_id, task,
+                                 self._tiers.ladder)
+            backend = self._tiers.backends[choice.profile]
+            runner = TaskExecutionRunner(self._master, backend)
+            worker_env = dict(self._tiers.envs[choice.profile])
+            tier_facts = {"worker_profile": choice.profile, "worker_tier": choice.tier,
+                          "worker_model": self._tiers.models.get(choice.profile)}
+            if choice.escalated_from is not None:
+                tier_facts["escalated_from"] = choice.escalated_from
+            worker = describe_worker(backend)
+        else:
+            worker = describe_worker(self._execution_backend)
         deadline, deadline_at = _deadline(self._attempt_timeout_s)
         ids = {
             "run_id": run_id,
@@ -245,6 +265,7 @@ class TaskOrchestrator:
                     "manual_check": task.get("manual_check"),
                     "timeout_s": self._attempt_timeout_s,
                     "deadline_at": deadline_at,
+                    **tier_facts,
                 },
                 **ids,
             )
@@ -270,7 +291,7 @@ class TaskOrchestrator:
             deadline_at=deadline_at,
             log_dir=log_dir,
             phase="worker",
-            env=self._worker_env,
+            env=worker_env,
             lock_fd=lock_fd,
             on_spawn=recorder("worker", deadline_at),
         )
@@ -278,7 +299,7 @@ class TaskOrchestrator:
         exec_res = None
         raised = None
         try:
-            exec_res = self._runner.invoke(task, context, workspace)
+            exec_res = runner.invoke(task, context, workspace)
         except BaseException as error:
             raised = error
 

@@ -176,6 +176,7 @@ class AutonomousLoop:
         worker_env: Optional[Mapping] = None,
         stop_check=None,
         auto_integrate=None,
+        tiers=None,
     ):
         if not isinstance(master, Master):
             raise TypeError(f"expected a Master, got {type(master).__name__}")
@@ -222,6 +223,7 @@ class AutonomousLoop:
             log_root=(paths if paths is not None else RuntimePaths.default()).state_dir / "logs",
             worker_env=worker_env,
             auto_integrate=auto_integrate,
+            tiers=tiers,
         )
 
     @property

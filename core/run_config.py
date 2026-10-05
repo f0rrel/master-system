@@ -20,6 +20,17 @@ extra_args = []
 node_min_major = 22
 playwright_browsers_path = "~/.cache/ms-playwright"
 
+# Worker tiers (optional): cheapest first; a task moves up after 2 failed attempts.
+# [worker]  ladder = ["tier0", "tier1", "tier2"]
+# [worker.profiles.tier0]          # OpenCode's free default model
+# home = "~/.local/share/master-system-worker"
+# [worker.profiles.tier1]          # DeepSeek V4 Flash (a spend-limited key in this home)
+# model = "deepseek/deepseek-v4-flash"
+# home = "~/.local/share/master-system-worker-paid"
+# [worker.profiles.tier2]
+# model = "deepseek/deepseek-v4-pro"
+# home = "~/.local/share/master-system-worker-paid"
+
 [run]
 max_steps = 20
 max_retries = 1
@@ -99,6 +110,10 @@ class WorkerConfig:
     node_min_major: int = 22
     playwright_browsers_path: Optional[Path] = field(
         default_factory=lambda: _path("~/.cache/ms-playwright"))
+    #: Worker tiers: name -> {"model": str|None, "home": Path}; empty = no tiers.
+    profiles: Mapping[str, Mapping] = field(default_factory=dict)
+    #: The escalation ladder, cheapest first (profile names).
+    ladder: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -207,7 +222,18 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
         raise ConfigError("[master] model must be a non-empty string")
 
     w = _section(data, "worker", ("opencode_bin", "model", "home", "extra_args",
-                                  "node_min_major", "playwright_browsers_path"))
+                                  "node_min_major", "playwright_browsers_path", "profiles",
+                                  "ladder"))
+    profiles = {}
+    for name, value in (w.get("profiles") or {}).items():
+        if not isinstance(value, dict) or set(value) - {"model", "home"}:
+            raise ConfigError(f"[worker.profiles.{name}] takes only model and home")
+        profiles[name] = {"model": value.get("model") or None,
+                          "home": _path(value["home"]) if value.get("home") else None}
+    ladder = tuple(w.get("ladder") or ())
+    unknown_profiles = [name for name in ladder if name not in profiles]
+    if unknown_profiles:
+        raise ConfigError(f"[worker] ladder names unknown profiles {unknown_profiles}")
     defaults = WorkerConfig()
     extra_args = w.get("extra_args", [])
     if not isinstance(extra_args, list) or not all(isinstance(a, str) for a in extra_args):
@@ -222,6 +248,8 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
             _path(w["playwright_browsers_path"]) if "playwright_browsers_path" in w
             else defaults.playwright_browsers_path
         ),
+        profiles=profiles,
+        ladder=ladder,
     )
 
     r = _section(data, "run", ("max_steps", "max_retries", "max_attempts_per_task",

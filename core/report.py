@@ -28,7 +28,7 @@ from core.evidence import spec_hash
 from core.history import EventType, HistoryStore
 from core.usage import add_usage
 
-__all__ = ["build_report", "master_cost_usd", "render_report", "spend_since"]
+__all__ = ["build_report", "master_cost_usd", "render_report", "spend_since", "tier_stats"]
 
 _RUN_ENDS = {EventType.RUN_STOPPED: "stopped", EventType.RUN_ERROR: "error",
              EventType.RUN_INTERRUPTED: "interrupted"}
@@ -282,7 +282,40 @@ def build_report(history: HistoryStore, session_id: str,
         "human_touches": human,
         "unexplained_spec_changes": unexplained,
         "completions": traces,
+        "tiers": tier_stats(history, prices, session_id=session_id),
     }
+
+
+def tier_stats(history, prices: Mapping, project_id=None, session_id=None) -> list:
+    """Per worker tier: attempts, passes, success rate, worker cost, cost per pass."""
+    rows: dict = {}
+    for e in history.events(project_id=project_id, session_id=session_id,
+                            types=[EventType.ATTEMPT_STARTED]):
+        if "worker_profile" not in e.payload:
+            continue
+        events = history.events(project_id=e.project_id, attempt_id=e.attempt_id)
+        finished = next((x for x in events if x.type is EventType.ATTEMPT_FINISHED), None)
+        verdicts = [x for x in events if x.type is EventType.VERIFICATION
+                    and "rebased_from" not in x.payload]
+        key = (e.payload.get("worker_tier"), e.payload["worker_profile"])
+        row = rows.setdefault(key, {"tier": key[0], "profile": key[1],
+                                    "model": e.payload.get("worker_model") or "worker default model",
+                                    "attempts": 0, "passes": 0, "cost_usd": 0.0})
+        row["attempts"] += 1
+        if verdicts and verdicts[-1].payload.get("verdict") == "pass":
+            row["passes"] += 1
+        usage = (finished.payload.get("worker_reported_usage") if finished else None) or {}
+        model = e.payload.get("worker_model")
+        cost = _price(usage, model, prices) if model and usage else None
+        row["cost_usd"] += cost if cost is not None else float(usage.get("reported_cost_usd") or 0)
+    out = []
+    for row in sorted(rows.values(), key=lambda r: (r["tier"] is None, r["tier"])):
+        row["cost_usd"] = round(row["cost_usd"], 6)
+        row["success_rate"] = round(row["passes"] / row["attempts"], 3) if row["attempts"] else None
+        row["cost_per_pass_usd"] = (round(row["cost_usd"] / row["passes"], 6)
+                                    if row["passes"] else None)
+        out.append(row)
+    return out
 
 
 def build_attempts_any(history, project_id, attempt_id):
@@ -324,6 +357,12 @@ def render_report(report: dict) -> str:
     lines.append(f"  total priced: ${report['cost_usd']}   reported by services: "
                  f"${report['reported_cost_usd']}"
                  + (f"   unpriced: {', '.join(report['unpriced'])}" if report["unpriced"] else ""))
+    if report.get("tiers"):
+        lines += ["", "Worker tiers"]
+        for t in report["tiers"]:
+            lines.append(f"  tier {t['tier']} {t['profile']:<8} {t['model']:<28} "
+                         f"attempts {t['attempts']}  passed {t['passes']} "
+                         f"({t['success_rate']:.0%})  cost ${t['cost_usd']}")
     lines += ["", f"Human touches: {len(report['human_touches'])}"]
     for h in report["human_touches"]:
         lines.append(f"  {h['at'][:19]}  {h['type']:<13} {h['task_id'] or '':<14} "

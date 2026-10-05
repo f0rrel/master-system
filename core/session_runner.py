@@ -96,6 +96,7 @@ class SessionRunner:
         worker_env=None,
         stop_check=None,
         auto_integrate=None,
+        tiers=None,
     ):
         self._master = master
         self._provider = provider
@@ -119,6 +120,7 @@ class SessionRunner:
         self._worker_env = worker_env
         self._stop_check = stop_check
         self._auto_integrate = auto_integrate
+        self._tiers = tiers
 
     @property
     def store(self):
@@ -207,6 +209,7 @@ class SessionRunner:
             worker_env=self._worker_env,
             stop_check=self._stop_check,
             auto_integrate=self._auto_integrate,
+            tiers=self._tiers,
         )
         try:
             result = loop.run(session.project_id)
