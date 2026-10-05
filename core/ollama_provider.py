@@ -2,9 +2,9 @@
 
 This is one concrete implementation of :class:`core.provider.ReasoningProvider`.
 It exists because this repository already talks to a local Ollama runtime
-elsewhere (``bob.py`` and ``agents/sergei`` both POST to ``localhost:11434``),
+elsewhere (``archive/bob.py`` and ``archive/agents/sergei`` both POST to ``localhost:11434``),
 so demonstrating the reasoning loop needs no new service, no account, and no
-secret. ``qwen2.5-coder:7b`` is the model ``bob.py`` already used; the default
+secret. ``qwen2.5-coder:7b`` is the model ``archive/bob.py`` already used; the default
 here is the other small model present on this machine, and both the address and
 the model name are constructor arguments rather than constants the rest of the
 code depends on.
@@ -13,7 +13,7 @@ Two choices are deliberate.
 
 Standard library only
 ---------------------
-``bob.py`` uses ``requests``, which is installed in the agents' own virtual
+``archive/bob.py`` uses ``requests``, which is installed in the agents' own virtual
 environments but is not a declared dependency of this project. The declared
 dependencies are PyYAML and pytest, so this adapter uses ``urllib.request`` and
 adds no dependency to install, pin, or audit. Swapping in a provider that needs
