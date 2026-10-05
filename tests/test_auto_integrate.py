@@ -102,17 +102,23 @@ def test_a_moved_develop_is_rebased_and_reverified(dev, monkeypatch):
     assert task_status(dev) == "completed"
 
 
-def test_a_conflict_is_not_integrated_and_the_task_cannot_complete(dev, monkeypatch):
+def test_a_conflict_is_retried_from_the_new_develop(dev, monkeypatch):
     fake_worker(dev, also_on_develop=("greet.py", "def greet(name):\\n    return 'Yo ' + name\\n"))
     start, run_task, done = ops()
-    out, history = run(dev, monkeypatch, [start, run_task, done])
+    out, history = run(dev, monkeypatch, [start, run_task, done, run_task, done])
 
-    assert history.events(types=[EventType.INTEGRATION]) == ()
     [refused] = history.events(types=[EventType.INTEGRATION_REFUSED])
     assert refused.payload["reason"] == "rebase_conflict"
     assert refused.payload["actor"] == "system"
-    assert "not_integrated" in out  # the completion gate holds the task
-    assert task_status(dev) != "completed"
+    results = [e.payload for e in history.events(types=[EventType.OPERATION_RESULT])]
+    assert any(r.get("reason") == "not_integrated" and r["status"] == "refused"
+               for r in results)
+    # The second attempt started from the new develop and landed on it.
+    [integration] = history.events(types=[EventType.INTEGRATION])
+    started = history.events(types=[EventType.ATTEMPT_STARTED])
+    assert len(started) == 2
+    assert git(dev["repo"], "rev-parse", "develop") == integration.payload["result_sha"]
+    assert task_status(dev) == "completed"
     assert git(dev["repo"], "rev-parse", "main") == dev["main"]
 
 

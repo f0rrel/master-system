@@ -534,6 +534,18 @@ class AutonomousLoop:
             if decision.pending_approval:
                 return stop(STOP_APPROVAL, decision, approval_reason="policy")
 
+            # H-D3: in a project the system integrates itself, a passing
+            # attempt that could not be integrated (a conflict with newer
+            # work) is not a question for a human: the task runs again from
+            # the new base. Refused, and Master decides again.
+            if gate_reason == "not_integrated":
+                self._record_refusal(
+                    run_id, project_id, steps, decision.operation, gate_reason,
+                    "the latest attempt passed but is not in the development branch (it "
+                    "conflicted with newer work); run the task again: the next attempt "
+                    "starts from the current base")
+                continue
+
             # Completing without passing evidence is not refused, it is held
             # for a human: they may know something the evidence does not.
             if gate_reason is not None:
