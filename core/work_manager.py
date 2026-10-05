@@ -304,18 +304,25 @@ class WorkManager:
 
     def set_task_description(self, task_id, description):
         """Set or, with ``None``, remove a task's description. Human-only."""
-        if description is not None:
-            problems = description_problems(description)
+        return self._set_text_field(task_id, "description", description)
+
+    def set_task_manual_check(self, task_id, manual_check):
+        """Set or remove how a human checks the task's result by hand. Human-only."""
+        return self._set_text_field(task_id, "manual_check", manual_check)
+
+    def _set_text_field(self, task_id, field, value):
+        if value is not None:
+            problems = description_problems(value, field)
             if problems:
                 raise InvalidFieldError("; ".join(problems))
 
         tasks = deepcopy(self._state.snapshot().tasks_doc)
         record = _find(tasks.get("tasks", []), task_id, "Task")
 
-        if description is None:
-            record.pop("description", None)
+        if value is None:
+            record.pop(field, None)
         else:
-            record["description"] = description
+            record[field] = value
 
         write_yaml_atomically(self._tasks_path, tasks)
 

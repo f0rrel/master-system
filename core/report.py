@@ -215,8 +215,12 @@ def build_report(history: HistoryStore, session_id: str,
             attempt = next((a for a in build_attempts_any(history, project_id, attempt_id)), None)
         integrations = [e for e in project_events if e.type is EventType.INTEGRATION
                         and e.attempt_id == attempt_id]
+        started = next((e for e in history.events(project_id=project_id, attempt_id=attempt_id,
+                                                  types=[EventType.ATTEMPT_STARTED])), None) \
+            if attempt_id else None
         traces.append({
             "task_id": decision.task_id,
+            "manual_check": started.payload.get("manual_check") if started else None,
             "decision_seq": decision.seq,
             "attempt_id": attempt_id,
             "base_sha": attempt and attempt["base_sha"],
@@ -302,4 +306,7 @@ def render_report(report: dict) -> str:
                      f"{(c['attempt_id'] or '-')[:12]} -> {str(c['base_sha'])[:10]}.."
                      f"{str(c['result_sha'])[:10]} -> {c['verdict']} -> integrated "
                      f"{str(c['integrated_sha'])[:10] if c['integrated_sha'] else 'not yet'}")
+        if c.get("manual_check"):
+            lines.append("      how to check by hand:")
+            lines.extend(f"        {line}" for line in c["manual_check"].splitlines())
     return "\n".join(lines) + "\n"

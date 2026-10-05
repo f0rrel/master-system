@@ -565,6 +565,7 @@ python -m core.run_cli report <session> [--json] # from history alone
 python -m core.run_cli integrate <project> <attempt_id> [--rebase]     # human only
 python -m core.run_cli task describe <project> <task> --text "..."      # human edit, recorded
 python -m core.run_cli task set-acceptance <project> <task> --command "..." --protect "tests/*"
+python -m core.run_cli task manual-check <project> <task> --text "..."  # how to check by hand
 ```
 
 Configuration: `~/.config/master-system/config.toml` (see `core/run_config.py`; defaults:
@@ -803,6 +804,9 @@ Add a row whenever an architectural decision is made or reversed.
 | M2: the report counts a spec change as explained by a `human_action` or by Master's own recorded `update_task`/`create_task` result | A model retitle is recorded; only edits outside run_cli are "unexplained" | Taken without the owner |
 | M2: a failed re-verification during `integrate --rebase` is recorded on the attempt (and so becomes its latest verdict) | The record must show what was checked, including failures | Taken without the owner |
 | Match Legends requires Node 22; Playwright unpinned (`^1.63.0`); tests use globs for Node 22's runner | The owner upgraded the user's Node to 22 via nvm (2026-10-05) | **Approved (2026-10-05)**, done in Match Legends `main` (`f89b357`) |
+| Tasks gain a human-only `manual_check` (how to check the result by hand); it is **not** part of `spec_hash`, is copied into `attempt_started`, and the report prints it under each completion | The report must show it from history alone; rewording a manual check should not invalidate verified evidence | Requested by the owner; exclusion from `spec_hash` taken without the owner |
+| Attempt commits are named `<task id>: <task title>` when the attempt is snapshotted, not at integration | Integration must land exactly the verified SHA (D1); renaming at integration would change it | Requested by the owner; placement taken without the owner |
+| `integrate` accepts a unique attempt-id prefix of 8+ characters | The report prints 12 | Requested by the owner |
 | Merged Milestone 1 to main (2026-10-05) | Milestone 1 complete and reviewed; `main` fast-forwarded to `m1-contain-verify`, tagged `m1-contain-verify` | **Approved (2026-10-05)** |
 
 ---

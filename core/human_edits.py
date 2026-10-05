@@ -26,7 +26,7 @@ from core.run_lock import ProjectLock
 from core.session_store import FileSessionStore
 from core.task_orchestrator import default_worktrees
 
-__all__ = ["ACTOR", "set_acceptance", "set_description"]
+__all__ = ["ACTOR", "set_acceptance", "set_description", "set_manual_check"]
 
 ACTOR = "human-cli"
 
@@ -63,6 +63,14 @@ def set_description(master, history, project_id, task_id, description,
     action = "clear_description" if description is None else "set_description"
     return _edit(master, history, project_id, task_id, action,
                  lambda: master.set_task_description(project_id, task_id, description), paths)
+
+
+def set_manual_check(master, history, project_id, task_id, manual_check,
+                     paths: Optional[RuntimePaths] = None) -> dict:
+    action = "clear_manual_check" if manual_check is None else "set_manual_check"
+    return _edit(master, history, project_id, task_id, action,
+                 lambda: master.set_task_manual_check(project_id, task_id, manual_check),
+                 paths)
 
 
 def set_acceptance(master, history, project_id, task_id, acceptance,

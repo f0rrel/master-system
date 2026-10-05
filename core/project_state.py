@@ -28,12 +28,12 @@ ACCEPTANCE_KEYS = frozenset({"commands", "protected_paths"})
 MAX_DESCRIPTION_CHARS = 4000
 
 
-def description_problems(description):
-    """Why a task's ``description`` is malformed, as a list of messages."""
+def description_problems(description, field="description"):
+    """Why a task's ``description`` (or ``manual_check``) is malformed."""
     if not isinstance(description, str) or not description.strip():
-        return ["description must be a non-empty string"]
+        return [f"{field} must be a non-empty string"]
     if len(description) > MAX_DESCRIPTION_CHARS:
-        return [f"description must be at most {MAX_DESCRIPTION_CHARS} characters"]
+        return [f"{field} must be at most {MAX_DESCRIPTION_CHARS} characters"]
     return []
 
 
@@ -366,6 +366,12 @@ class ProjectState:
                 problems.extend(
                     f"task {task_id}: {problem}"
                     for problem in description_problems(task["description"])
+                )
+
+            if "manual_check" in task:
+                problems.extend(
+                    f"task {task_id}: {problem}"
+                    for problem in description_problems(task["manual_check"], "manual_check")
                 )
 
             if "acceptance" in task:

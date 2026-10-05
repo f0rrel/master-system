@@ -235,6 +235,9 @@ class TaskOrchestrator:
                     "worktree": str(worktree),
                     "branch": branch,
                     "spec_hash": spec_hash(task),
+                    # Human-written; copied so the report can show it from
+                    # history alone. Not part of the spec hash.
+                    "manual_check": task.get("manual_check"),
                     "timeout_s": self._attempt_timeout_s,
                     "deadline_at": deadline_at,
                 },

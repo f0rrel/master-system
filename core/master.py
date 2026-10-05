@@ -180,6 +180,11 @@ class Master:
         deliberately not in the operation allowlist."""
         return self._work(project_id).set_task_description(task_id, description)
 
+    def set_task_manual_check(self, project_id, task_id, manual_check):
+        """Set or (with None) clear how a human checks the result by hand.
+        For humans only: deliberately not in the operation allowlist."""
+        return self._work(project_id).set_task_manual_check(task_id, manual_check)
+
     def _resolve(self, project_id):
         """Return the ProjectState for project_id.
 

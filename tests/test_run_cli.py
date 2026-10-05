@@ -436,3 +436,38 @@ def test_without_a_cap_nothing_is_checked(setup, wired):
 
     assert code == 0
     assert sessions(setup).load("s1").last_stop_reason == "master_stop"
+
+
+# --- manual_check: how to check by hand, shown with each completion -------------------
+
+
+def test_manual_check_is_human_only_recorded_and_shown_in_the_report(setup, wired):
+    wired([START, RUN, DONE])
+    before = spec_hash(ProjectState(setup["project"]).get_task("t1"))
+    assert cli(setup, "task", "manual-check", "alpha", "t1", "--text",
+               "Open the game.\nPlay one move and check the score.")[0] == 0
+    assert spec_hash(ProjectState(setup["project"]).get_task("t1")) == before
+    cli(setup, "start", "alpha", "--objective", "o", "--session", "s1")
+
+    report = json.loads(cli(setup, "report", "s1", "--json")[1])
+    text = cli(setup, "report", "s1")[1]
+
+    assert report["completions"][0]["manual_check"].startswith("Open the game.")
+    assert "how to check by hand:" in text and "Play one move" in text
+    assert [h["action"] for h in report["human_touches"]] == ["set_manual_check"]
+
+
+def test_models_cannot_set_manual_check(setup):
+    from core.master import Master
+    from core.reasoning import Operation, ReasoningInterface, ResultStatus
+
+    outcome = ReasoningInterface(Master(setup["root"])).execute(Operation.propose(
+        {"operation": "update_task", "project_id": "alpha", "task_id": "t1",
+         "manual_check": "anything"}))
+
+    assert outcome.status is ResultStatus.DOMAIN_ERROR
+
+
+def test_a_malformed_manual_check_is_refused(setup):
+    assert cli(setup, "task", "manual-check", "alpha", "t1", "--text", "   ")[0] == 1
+    assert human_actions(setup) == []

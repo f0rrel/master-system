@@ -15,6 +15,7 @@ Commands:
     report <session> [--json]                                    from history alone
     integrate <project> <attempt> [--rebase]                     human only
     task describe <project> <task> (--text TEXT | --clear)      human edit, recorded
+    task manual-check <project> <task> (--text TEXT | --clear)  human edit, recorded
     task set-acceptance <project> <task> (--command C ... [--protect GLOB ...] | --clear)
 
 ``--max-cost-usd X`` stops the run, before the next paid Master call, once the
@@ -342,6 +343,18 @@ def _command_task_describe(ctx, args, out):
     return EXIT_OK
 
 
+def _command_task_manual_check(ctx, args, out):
+    if args.clear == bool(args.text):
+        print("error: pass exactly one of --text or --clear", file=sys.stderr)
+        return EXIT_USAGE
+    record = human_edits.set_manual_check(ctx.master, ctx.history, args.project_id,
+                                          args.task_id, None if args.clear else args.text,
+                                          paths=ctx.paths)
+    print(f"task {record['id']}: manual check {'cleared' if args.clear else 'set'} "
+          f"(recorded)", file=out)
+    return EXIT_OK
+
+
 def _command_task_acceptance(ctx, args, out):
     if args.clear:
         if args.command or args.protect:
@@ -420,6 +433,14 @@ def build_parser():
     describe.add_argument("--text", default=None)
     describe.add_argument("--clear", action="store_true")
     describe.set_defaults(handler=_command_task_describe)
+
+    manual = task_commands.add_parser("manual-check",
+                                      help="Set or clear how to check the result by hand.")
+    manual.add_argument("project_id")
+    manual.add_argument("task_id")
+    manual.add_argument("--text", default=None)
+    manual.add_argument("--clear", action="store_true")
+    manual.set_defaults(handler=_command_task_manual_check)
 
     acceptance = task_commands.add_parser("set-acceptance",
                                           help="Set or clear a task's acceptance.")
