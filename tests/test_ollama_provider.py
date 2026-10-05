@@ -414,3 +414,16 @@ def test_the_adapter_has_no_bare_except():
             assert not (
                 node.type is None or getattr(node.type, "id", None) == "Exception"
             )
+
+# --- token usage (accounting) -------------------------------------------------
+
+
+def test_usage_is_read_from_the_eval_counts(sent):
+    reply = dict(chat_reply("ok"), prompt_eval_count=812, eval_count=64)
+    sent(reply=reply)
+    provider = OllamaProvider()
+
+    provider.complete("prompt")
+
+    assert provider.last_usage["input_tokens"] == 812
+    assert provider.last_usage["output_tokens"] == 64

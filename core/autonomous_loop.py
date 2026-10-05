@@ -49,6 +49,7 @@ from core.execution import ExecutionBackend
 from core.evidence import DEFAULT_MAX_ATTEMPTS, HistoryEvidence
 from core.execution_runner import ExecutionError
 from core.history import EventType, HistoryStore, InMemoryHistoryStore, jsonable
+from core.usage import add_usage
 from core.master import EXPECTED_ERRORS, Master
 from core.provider import ReasoningProvider
 from core.reasoning import (
@@ -265,12 +266,17 @@ class AutonomousLoop:
         authority this system refuses to take for itself.
         """
         detail = None
+        # Unusable replies were still paid for: their usage is recorded with
+        # the next decision, or with run_stopped if the loop gives up.
+        self._failed_usage = []
 
         for attempt in range(self._max_retries + 1):
             try:
                 proposal = self._engine.reason(self._request, project_id)
             except ReasoningError as error:
                 detail = str(error)
+                if getattr(error, "usage", None):
+                    self._failed_usage.append(error.usage)
                 continue
             return proposal, proposal._decision, None
 
@@ -321,7 +327,12 @@ class AutonomousLoop:
         task_id = operation.arguments.get("task_id")
         return task_id if isinstance(task_id, str) and task_id.strip() else None
 
-    def _record_decision(self, run_id, project_id, step, decision, gate_reason=None):
+    def _failed_call_usage(self):
+        failed = getattr(self, "_failed_usage", None)
+        return add_usage(failed) if failed else None
+
+    def _record_decision(self, run_id, project_id, step, decision, gate_reason=None,
+                         proposal=None):
         operation = decision.operation if decision is not None else None
         self._record(
             EventType.DECISION,
@@ -338,7 +349,11 @@ class AutonomousLoop:
             ),
             pending_approval=bool(decision is not None and decision.pending_approval),
             gate_reason=gate_reason,
+            usage=getattr(proposal, "usage", None),
+            reasoner=getattr(proposal, "reasoner", None),
+            failed_call_usage=self._failed_call_usage(),
         )
+        self._failed_usage = []
 
     def _record_result(self, run_id, project_id, step, task_id, outcome):
         self._record(
@@ -438,7 +453,9 @@ class AutonomousLoop:
             stop_reason=result.stop_reason,
             steps=result.steps,
             detail=result.detail,
+            failed_call_usage=self._failed_call_usage(),
         )
+        self._failed_usage = []
         return result
 
     def _run(self, project_id: str, run_id: str) -> LoopResult:
@@ -483,7 +500,7 @@ class AutonomousLoop:
 
             # The decision is the recorded intent: it is written before any
             # state changes or any worker runs.
-            self._record_decision(run_id, project_id, steps, decision, gate_reason)
+            self._record_decision(run_id, project_id, steps, decision, gate_reason, proposal)
 
             # Anything but an explicit ACT stops the loop. This covers WAIT,
             # BLOCKED, NEEDS_INFORMATION, REQUEST_APPROVAL, and a reply that

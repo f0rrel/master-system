@@ -97,7 +97,12 @@ class ReasoningError(RuntimeError):
     from an invalid individual operation, which is recorded in the proposal and
     displayed rather than raised, because one bad entry should not hide the rest
     of a human's answer from review.
+
+    ``usage`` carries the provider's token usage when a call was made, so an
+    unusable reply is still counted.
     """
+
+    usage = None
 
 
 # --- prompt and schema, both derived from the allowlist ------------------
@@ -345,6 +350,10 @@ class Proposal:
     entries: tuple = ()
     state: ApprovalState = ApprovalState.PROPOSED
     _decision: "MasterDecision | None" = None
+    #: Token usage of the provider call that produced this proposal, and the
+    #: provider's own name: provenance for accounting, never interpreted.
+    usage: "dict | None" = None
+    reasoner: "str | None" = None
 
     @property
     def valid_entries(self):
@@ -511,8 +520,16 @@ class ReasoningEngine:
         try:
             reply = self._provider.complete(prompt, schema=build_operation_schema())
         except ProviderError as error:
-            raise ReasoningError(str(error)) from error
-        return self.parse(reply, request)
+            failure = ReasoningError(str(error))
+            failure.usage = _provider_usage(self._provider)
+            raise failure from error
+        usage = _provider_usage(self._provider)
+        try:
+            proposal = self.parse(reply, request)
+        except ReasoningError as error:
+            error.usage = usage
+            raise
+        return replace(proposal, usage=usage, reasoner=_provider_name(self._provider))
 
     def parse(self, reply, request=""):
         """Turn raw model text into a Proposal/decision structure.
@@ -604,6 +621,21 @@ class ReasoningEngine:
         except InvalidOperationError as error:
             return ProposalEntry(raw=raw, error=error)
         return ProposalEntry(raw=raw, operation=operation)
+
+
+def _provider_usage(provider):
+    """The provider's last token usage, if it reports any (accounting only)."""
+    try:
+        return provider.last_usage
+    except AttributeError:
+        return None
+
+
+def _provider_name(provider):
+    try:
+        return str(provider.name)
+    except AttributeError:
+        return None
 
 
 def _loads_strictly(reply):

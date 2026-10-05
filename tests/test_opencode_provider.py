@@ -809,3 +809,20 @@ def test_a_schema_hint_is_accepted_and_changes_nothing(server):
 
     assert with_schema == without
     assert "format" not in sent_to(server, SUBMIT_PATH)[0]["body"]
+
+# --- token usage (accounting) -------------------------------------------------
+
+
+def test_usage_is_summed_from_the_assistant_messages(server):
+    answer = assistant_message("the answer")
+    answer["info"]["tokens"] = {"input": 900, "output": 40, "reasoning": 10,
+                                "cache": {"read": 2048, "write": 0}}
+    answer["info"]["cost"] = 0.0021
+    server["messages"] = [[user_message(), answer]]
+    adapter = provider()
+
+    adapter.complete("a prompt")
+
+    assert adapter.last_usage == {"input_tokens": 900, "cached_input_tokens": 2048,
+                                  "cache_write_tokens": 0, "output_tokens": 40,
+                                  "reasoning_tokens": 10, "reported_cost_usd": 0.0021}

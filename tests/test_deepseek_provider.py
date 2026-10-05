@@ -214,3 +214,37 @@ def test_empty_content_raises(monkeypatch):
     with mock.patch("urllib.request.urlopen", return_value=make_no_content_response()):
         with pytest.raises(ProviderError):
             provider.complete("test")
+
+
+# --- token usage (accounting) -------------------------------------------------
+
+
+def test_usage_is_read_from_the_response(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    payload = {
+        "choices": [{"message": {"role": "assistant", "content": "ok"}, "index": 0}],
+        "usage": {"prompt_tokens": 5000, "completion_tokens": 300,
+                  "prompt_cache_hit_tokens": 4096, "prompt_cache_miss_tokens": 904,
+                  "completion_tokens_details": {"reasoning_tokens": 120}},
+    }
+    provider = DeepSeekProvider()
+    with mock.patch("urllib.request.urlopen",
+                    return_value=DummyResponse(json.dumps(payload).encode("utf-8"))):
+        provider.complete("prompt")
+
+    assert provider.last_usage == {"input_tokens": 904, "cached_input_tokens": 4096,
+                                   "cache_write_tokens": 0, "output_tokens": 300,
+                                   "reasoning_tokens": 120, "reported_cost_usd": 0.0}
+
+
+def test_usage_is_kept_even_when_the_reply_has_no_text(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    payload = {"choices": [{"message": {"role": "assistant", "content": ""}}],
+               "usage": {"prompt_tokens": 100, "completion_tokens": 0}}
+    provider = DeepSeekProvider()
+    with mock.patch("urllib.request.urlopen",
+                    return_value=DummyResponse(json.dumps(payload).encode("utf-8"))):
+        with pytest.raises(ProviderError):
+            provider.complete("prompt")
+
+    assert provider.last_usage["input_tokens"] == 100

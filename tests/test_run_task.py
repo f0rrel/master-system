@@ -388,3 +388,43 @@ def test_a_transport_retry_inside_the_worker_is_one_attempt(tmp_path):
     assert backend.transport_calls == 3
     assert len(history.events(types=[EventType.ATTEMPT_STARTED])) == 1
     assert len(history.events(types=[EventType.ATTEMPT_FINISHED])) == 1
+
+
+# --- token usage is recorded with each decision -----------------------------------
+
+
+class Metered(ScriptedProvider):
+    """A provider that reports usage for every call, usable or not."""
+
+    def complete(self, prompt, schema=None):
+        self.last_usage = {"input_tokens": 1000, "output_tokens": 50}
+        return super().complete(prompt, schema)
+
+
+def test_decisions_record_usage_and_the_reasoner(tmp_path):
+    write_project(tmp_path, [task(status="in_progress")])
+    history = InMemoryHistoryStore()
+    loop = AutonomousLoop(Master(tmp_path), Metered(["not json at all", wait()]), Backend(),
+                          Verifier(), history=history)
+
+    loop.run("alpha")
+
+    decision = history.events(types=[EventType.DECISION])[0].payload
+    assert decision["usage"] == {"input_tokens": 1000, "output_tokens": 50}
+    assert decision["reasoner"] == "scripted"
+    # The unusable first reply was paid for too.
+    assert decision["failed_call_usage"]["input_tokens"] == 1000
+
+
+def test_usage_of_replies_the_loop_gave_up_on_is_recorded_at_the_end(tmp_path):
+    write_project(tmp_path, [task(status="in_progress")])
+    history = InMemoryHistoryStore()
+    loop = AutonomousLoop(Master(tmp_path), Metered(["nope", "still nope"]), Backend(),
+                          Verifier(), history=history)
+
+    result = loop.run("alpha")
+
+    assert result.stop_reason == STOP_UNUSABLE_REPLY
+    stopped = history.events(types=[EventType.RUN_STOPPED])[0].payload
+    assert stopped["failed_call_usage"]["input_tokens"] == 2000
+    assert stopped["failed_call_usage"]["output_tokens"] == 100
