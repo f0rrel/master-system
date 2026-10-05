@@ -30,7 +30,8 @@ What is deliberately absent
   belongs to whatever durable runtime eventually exists, not to a model that
   only counts.
 * No event log. The session is current state plus a small amount of history
-  (created/started/updated), not a replayable sequence.
+  (created/started/updated), not a replayable sequence. What each run decided
+  and attempted is recorded step by step in :mod:`core.history`.
 
 Lifecycle
 ---------

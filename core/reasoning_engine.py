@@ -45,7 +45,10 @@ Project context
 ---------------
 The model is told what it needs to reason and nothing more. Context comes from
 Master's inspection methods and is reduced to plain project facts: identity,
-status, progress, milestones, tasks.
+status, progress, milestones, tasks. With an evidence source, it also carries
+execution evidence read from history -- attempt counts and each in-progress
+task's latest outcome and verification -- and the session's recent decisions.
+Worker output and worker identity are never part of it.
 
 One field is deliberately dropped. ``Master.status()`` includes an absolute
 filesystem ``path``, which is reasonable for a human reading a terminal and

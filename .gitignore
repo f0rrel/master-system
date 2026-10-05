@@ -28,3 +28,6 @@ __pycache__/
 # Local agent/runtime state
 agents/*/workspace/
 agents/*/memory/
+sessions/
+var/
+.run.lock

@@ -29,6 +29,12 @@ an unapproved proposal cannot execute anything.
 
 ``--dry-run`` stops after the proposal, which is also what runs when there is no
 terminal available to approve anything.
+
+Approved operations are applied while holding the project's
+:class:`core.run_lock.ProjectLock`, only for the writes themselves. While an
+autonomous run holds the project, execution is refused with ``EXIT_BUSY`` and
+nothing changes. A ``run_task`` in a proposal is never executed here: it is a
+dispatch operation, and only the autonomous loop dispatches.
 """
 
 import argparse

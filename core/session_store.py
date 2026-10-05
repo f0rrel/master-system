@@ -4,9 +4,10 @@ One YAML document per session, written through the same atomic writer the
 project state uses, so a session file is never observed half-written. This is
 infrastructure: nothing in the orchestration layer knows sessions are files.
 It satisfies :class:`core.work_session.SessionStore` and nothing more, and it
-deliberately holds no scheduling, no retry, no locking and no indexing. A
-concurrent writer is the first thing a real store must answer, and guessing at
-it here would be worse than not pretending.
+deliberately holds no scheduling, no retry, no locking and no indexing.
+Concurrent writers are kept out one level up: :class:`core.session_runner.SessionRunner`
+only writes a session while holding its project's
+:class:`core.run_lock.ProjectLock`.
 
 Broken sessions
 ---------------
