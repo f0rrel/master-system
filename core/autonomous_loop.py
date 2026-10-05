@@ -59,6 +59,7 @@ from core.reasoning import (
     ReasoningInterface,
 )
 from core.reasoning_engine import ReasoningEngine, ReasoningError
+from core.run_lock import ProjectLock
 from core.task_orchestrator import TaskOrchestrator
 from core.verification import VerificationBackend
 from core.work_manager import calculate_readiness
@@ -155,6 +156,7 @@ class AutonomousLoop:
         history: Optional[HistoryStore] = None,
         session_id: Optional[str] = None,
         max_attempts_per_task: int = DEFAULT_MAX_ATTEMPTS,
+        lock: Optional[ProjectLock] = None,
     ):
         if not isinstance(master, Master):
             raise TypeError(f"expected a Master, got {type(master).__name__}")
@@ -171,6 +173,9 @@ class AutonomousLoop:
         self._max_retries = max_retries
         self._history = history if history is not None else InMemoryHistoryStore()
         self._session_id = session_id
+        #: The project lock, when the caller already holds it. Without one,
+        #: run() takes the lock itself for the duration of the run.
+        self._lock = lock
         self._evidence = HistoryEvidence(
             self._history, session_id=session_id, max_attempts=max_attempts_per_task
         )
@@ -350,6 +355,25 @@ class AutonomousLoop:
         if not isinstance(project_id, str) or not project_id.strip():
             raise ValueError("project_id must be a non-empty string")
 
+        if self._lock is not None:
+            return self._run_locked(project_id)
+
+        # Every autonomous run holds the project lock; take it if the caller
+        # did not. ProjectBusyError propagates before anything is recorded.
+        project_path = self._master.project_state(project_id).project_path
+        with ProjectLock(project_path, holder="autonomous loop") as lock:
+            self._lock = lock
+            try:
+                return self._run_locked(project_id)
+            finally:
+                self._lock = None
+
+    @property
+    def lock(self) -> Optional[ProjectLock]:
+        """The lock held for the current run, if any."""
+        return self._lock
+
+    def _run_locked(self, project_id: str) -> LoopResult:
         run_id = uuid.uuid4().hex
         self._evidence.run_id = run_id
         self._record(

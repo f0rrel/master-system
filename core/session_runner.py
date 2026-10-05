@@ -128,9 +128,9 @@ class SessionRunner:
         new = WorkSession.create(
             session_id=session_id, project_id=project_id, objective=objective
         )
-        with self._lock(project_id, session_id):
+        with self._lock(project_id, session_id) as lock:
             self._store.create(new)
-            return self._run(session_id)
+            return self._run(session_id, lock)
 
     def resume(self, session_id: str) -> WorkSession:
         """Load a persisted session, run one bounded pass, save, return it.
@@ -145,8 +145,8 @@ class SessionRunner:
         """
         session = self._store.load(session_id)
         self._require_resumable(session)
-        with self._lock(session.project_id, session_id):
-            return self._run(session_id)
+        with self._lock(session.project_id, session_id) as lock:
+            return self._run(session_id, lock)
 
     # --- one locked run --------------------------------------------------
 
@@ -162,8 +162,8 @@ class SessionRunner:
                 "and cannot be resumed"
             )
 
-    def _run(self, session_id: str) -> WorkSession:
-        """Run once. The caller holds the project lock."""
+    def _run(self, session_id: str, lock: ProjectLock) -> WorkSession:
+        """Run once. The caller holds the project lock and passes it on."""
         # Re-read under the lock: whatever was loaded before acquiring it may
         # already be out of date.
         session = self._store.load(session_id)
@@ -186,6 +186,7 @@ class SessionRunner:
             history=self._history,
             session_id=session.session_id,
             max_attempts_per_task=self._max_attempts_per_task,
+            lock=lock,
         )
         try:
             result = loop.run(session.project_id)

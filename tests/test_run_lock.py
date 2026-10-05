@@ -157,3 +157,47 @@ def test_an_approved_proposal_is_refused_while_the_project_is_locked(
     assert code == reason_cli.EXIT_BUSY
     assert "in use by another process" in err.getvalue()
     assert data_of(project) == before
+
+
+# --- the autonomous loop always holds the lock ----------------------------
+
+
+def test_a_loop_without_a_lock_takes_it_for_its_run(project):
+    from core.autonomous_loop import STOP_MASTER, AutonomousLoop
+    from core.master import Master
+
+    seen = []
+
+    class Peek(ReasoningProvider):
+        name = "peek"
+
+        def complete(self, prompt, schema=None):
+            try:
+                ProjectLock(project).acquire().release()
+                seen.append("free")
+            except ProjectBusyError:
+                seen.append("held")
+            return json.dumps({"decision": "wait", "reason": "r", "operation": None})
+
+    loop = AutonomousLoop(Master(project.parent), Peek(), object(), object())
+
+    assert loop.run("alpha").stop_reason == STOP_MASTER
+    assert seen == ["held"]
+    with ProjectLock(project):
+        pass
+
+
+def test_a_loop_refuses_to_start_while_the_project_is_locked(project):
+    from core.autonomous_loop import AutonomousLoop
+    from core.history import InMemoryHistoryStore
+    from core.master import Master
+
+    history = InMemoryHistoryStore()
+    loop = AutonomousLoop(Master(project.parent), Stub(), object(), object(),
+                          history=history)
+
+    with ProjectLock(project, holder="someone else"):
+        with pytest.raises(ProjectBusyError):
+            loop.run("alpha")
+
+    assert history.events() == ()
