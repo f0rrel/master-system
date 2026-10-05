@@ -95,23 +95,23 @@ leave room for it without implementing it early.
 
 *Update this section at the end of every milestone.*
 
-| Item | State (2026-10-05) |
+| Item | State (2026-10-06) |
 | --- | --- |
-| Current milestone | **Milestone 2, "Run it for real"**, on branch `m2-run-for-real`: implemented and tested offline (an end-to-end dry run through `run_cli` on a toy repo). **Next: the supervised one-task run on Match Legends with the owner, then the overnight run.** The §12 criteria are ticked only by real runs. Milestone 1 is done and merged to `main` (tag `m1-contain-verify`). |
-| Tests | 1219 passed, 1 skipped, 5 integration tests deselected (`uv run python -m pytest -q -m "not integration"`, about 45 s; scenario tests start real processes and git worktrees) |
-| Can the autonomous loop be run from a CLI? | **Yes:** `python -m core.run_cli start/resume/status/report/integrate` (see [§10](#10-how-to-run-things)). Not yet run against a real model and worker. |
-| Production verifier in `core/`? | **Yes:** `AcceptanceVerifier` (`core/acceptance_verifier.py`) checks a task's human-written `acceptance` in the attempt's worktree. |
-| Workers (execution backends) | `OpenCodeCliBackend` (runs `opencode run` through the attempt workspace) and `OllamaExecutionBackend` (a homemade tool loop, to be frozen). Both work only in the worktree the orchestrator gives them. |
-| Reasoning providers (for Master) | Ollama, OpenCode server, DeepSeek API |
-| Branches | `main` = Milestone 1 (fast-forwarded to `m1-contain-verify`, tag `m1-contain-verify`), which includes the `claude-week` work. Milestone 2 is planned on `m2-run-for-real`. |
-| Managed project | `projects/ai-system` is the system's own project. Its tasks are stale: `foundation-001` and `-002` are `in_progress`, although that work was done by hand. **Self-hosting is stopped until Milestone 3** (approved 2026-10-05): no worker runs against this repository. |
+| Current milestone | **Milestone 3, "Hands-off"** (`docs/plans/m3-hands-off.md`), on branch `m3-hands-off`: all six parts implemented and tested (service, auto-integration + Pages + GitHub App, `ms`, planner chat, release, worker tiers). The service runs on this PC. **Waiting on the owner:** GitHub App setup (`docs/github-setup.md`), ntfy on the phone, and, for paid tiers, a spend-limited worker key. Milestone 2 is done and merged to `main` (tag `m2-run-for-real`); Milestone 1 tag `m1-contain-verify`. |
+| Tests | 1312 passed, 6 skipped (`uv run python -m pytest -q`, about 65 s) |
+| How the owner uses it | `ms chat match-legends` (plan), the preview link (play-test), `ms release` / merge on GitHub (release), `ms status` (look). See [§10](#10-how-to-run-things). |
+| Production verifier in `core/`? | **Yes:** `AcceptanceVerifier` (`core/acceptance_verifier.py`). |
+| Workers (execution backends) | `OpenCodeCliBackend`, optionally as a ladder of tiers (`core/worker_tiers.py`); `OllamaExecutionBackend` (frozen, not on the ladder). |
+| Reasoning providers (for Master and the planner) | DeepSeek API (default, V4 Flash), Ollama, OpenCode server |
+| Branches | `main` = Milestone 2 (tag `m2-run-for-real`); `m3-hands-off` = Milestone 3 (the service runs from it). |
+| Managed projects | `projects/match-legends` (hands-off: `auto_integrate: true`, base `develop`). `projects/ai-system` is the system's own project; the service never runs it (no `auto_integrate`). |
 
 ### Next actions
 
-1. Supervised one-task run on Match Legends with the owner: dedicated clone, worker home
-   and credential, `run_cli start`, `integrate`, `report`. Fix what breaks.
-2. The owner starts the overnight run (5 tasks) and reads the report in the morning.
-3. Tick the §12 Milestone 2 criteria that the real runs satisfy.
+1. Owner: GitHub App (`docs/github-setup.md`), then `ms github check`; ntfy on the phone
+   (`ms notify setup`, `ms notify test`).
+2. The service retries ml-7 from `develop`; the first publish creates the preview site.
+3. Owner: first release (`ms release match-legends`, merge on GitHub) when the preview is good.
 
 ---
 
