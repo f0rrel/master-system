@@ -97,9 +97,9 @@ leave room for it without implementing it early.
 
 | Item | State (2026-10-05) |
 | --- | --- |
-| Current milestone | **Milestone 1, "Contain and verify": done and merged to `main`** (two review fixes included); all five acceptance criteria pass (see [§12](#12-roadmap)). It also closes the earlier "Trustworthy loop" milestone. **Next: Milestone 2, "Run it for real"**: plan in `docs/plans/m2-run-for-real.md`, waiting for owner approval. |
-| Tests | 1140 passed, 1 skipped, 5 integration tests deselected (`uv run python -m pytest -q -m "not integration"`, about 45 s; scenario tests start real processes and git worktrees) |
-| Can the autonomous loop be run from a CLI? | **No.** It runs only inside tests. No composition root exists yet (gap H5, Milestone 2). |
+| Current milestone | **Milestone 2, "Run it for real"**, on branch `m2-run-for-real`: implemented and tested offline (an end-to-end dry run through `run_cli` on a toy repo). **Next: the supervised one-task run on Match Legends with the owner, then the overnight run.** The §12 criteria are ticked only by real runs. Milestone 1 is done and merged to `main` (tag `m1-contain-verify`). |
+| Tests | 1219 passed, 1 skipped, 5 integration tests deselected (`uv run python -m pytest -q -m "not integration"`, about 45 s; scenario tests start real processes and git worktrees) |
+| Can the autonomous loop be run from a CLI? | **Yes:** `python -m core.run_cli start/resume/status/report/integrate` (see [§10](#10-how-to-run-things)). Not yet run against a real model and worker. |
 | Production verifier in `core/`? | **Yes:** `AcceptanceVerifier` (`core/acceptance_verifier.py`) checks a task's human-written `acceptance` in the attempt's worktree. |
 | Workers (execution backends) | `OpenCodeCliBackend` (runs `opencode run` through the attempt workspace) and `OllamaExecutionBackend` (a homemade tool loop, to be frozen). Both work only in the worktree the orchestrator gives them. |
 | Reasoning providers (for Master) | Ollama, OpenCode server, DeepSeek API |
@@ -108,9 +108,10 @@ leave room for it without implementing it early.
 
 ### Next actions
 
-1. Owner reviews and approves the Milestone 2 plan (`docs/plans/m2-run-for-real.md`).
-2. Prepare Match Legends with the owner, in that repository, on its own branch (plan §3).
-3. Implement Milestone 2.
+1. Supervised one-task run on Match Legends with the owner: dedicated clone, worker home
+   and credential, `run_cli start`, `integrate`, `report`. Fix what breaks.
+2. The owner starts the overnight run (5 tasks) and reads the report in the morning.
+3. Tick the §12 Milestone 2 criteria that the real runs satisfy.
 
 ---
 
@@ -236,7 +237,17 @@ core/
                          new process group, inherited lock fd).
   paths.py               RuntimePaths: state dir and worktrees root, outside the repo (XDG).
   recovery.py            recover_project: close out a project's dead runs/attempts/sessions. No replay.
-  attempts.py            Human CLI: `integrate` a verified attempt (fast-forward only).
+  attempts.py            Human CLI: `integrate` a verified attempt (fast-forward; --rebase replays
+                         onto a moved base and re-verifies).
+  run_cli.py             The composition root for real runs: start / resume / status / report /
+                         integrate / task describe|set-acceptance (human edits, recorded).
+  run_config.py          ~/.config/master-system/config.toml (tomllib): Master provider, worker,
+                         run limits, price table. No secrets.
+  report.py              The per-session report, from history alone.
+  human_edits.py         Human spec edits through run_cli, recorded as human_action events.
+  worker_env.py          The allowlisted environment of worker/verification processes (Node 22
+                         PATH from nvm, a dedicated worker home, no secrets).
+  usage.py               One neutral token/cost usage shape (accounting only).
 
   autonomous_loop.py     The loop: inspect -> ask Master -> act (one operation) -> repeat until a stop reason.
   evidence.py            Reads history into neutral evidence: latest attempt, attempt counts,
@@ -543,15 +554,34 @@ python -m core.reason_cli "..." --provider deepseek --dry-run      # show only, 
 
 The approval prompt defaults to **no**. A `run_task` in a proposal is never executed here.
 
-### Run the autonomous loop
+### Run the autonomous loop (`core/run_cli.py`)
 
-There is **no CLI yet** (gap H5). For reference wiring, see:
+```bash
+export DEEPSEEK_API_KEY=...                      # the Master's key: run_cli's environment only
+python -m core.run_cli start <project> --objective "..." [--session ID] [--until-stopped]
+python -m core.run_cli resume <session> [--until-stopped] [--max-runs 10] [--max-hours 8]
+python -m core.run_cli status [<project>]        # tasks, sessions, open attempts, lock holder, events
+python -m core.run_cli report <session> [--json] # from history alone
+python -m core.run_cli integrate <project> <attempt_id> [--rebase]     # human only
+python -m core.run_cli task describe <project> <task> --text "..."      # human edit, recorded
+python -m core.run_cli task set-acceptance <project> <task> --command "..." --protect "tests/*"
+```
+
+Configuration: `~/.config/master-system/config.toml` (see `core/run_config.py`; defaults:
+DeepSeek V4 Flash for the Master, OpenCode at `~/.opencode/bin/opencode` for the worker,
+worker home `~/.local/share/master-system-worker`). Workers get only the allowlisted
+environment of `core/worker_env.py`: Node >= 22 from nvm on `PATH`, the worker home as
+`HOME`, no secrets. The worker's own OpenCode credential lives in the worker home
+(`HOME=~/.local/share/master-system-worker opencode auth login`).
+
+Reference wiring in tests:
 
 - `tests/test_ollama_backend.py::test_the_full_loop_runs_through_ollama_without_touching_the_loop`
   (loop, Ollama worker and a real pytest verifier);
 - `tests/test_session_runner.py` and `tests/test_recovery.py` (sessions, lock, recovery);
 - `tests/test_acceptance_verifier.py` and `tests/test_attempt_workspace.py` (worktrees,
-  acceptance, deadlines).
+  acceptance, deadlines);
+- `tests/test_m2_dry_run.py` (one task end to end through `run_cli` on a toy repo).
 
 ---
 
@@ -568,11 +598,11 @@ C1, C2, H1, M2, L5.
 | H2 | HIGH | Policy is keyed on operation names. The model can autonomously rewrite titles, cancel, reopen, or complete milestones, and any status can go to any status. A retitle does invalidate earlier evidence (`spec_changed`), but a reopen does not (P7). | A task transition table; `requires_approval(operation, state)` by transition and field. Milestone 3. |
 | H3 | HIGH | Approvals can be requested but never granted (`pending_approval` lacks the arguments; there is no approve command or event). | `approval_requested`/`granted`/`denied` events bound to the operation hash and state revision; CLI approve/reject; resume applies a granted operation without a model call. Milestone 3. |
 | H4 | HIGH | The attempt budget resets every session, and infrastructure failures (including a failed `git worktree add`) spend it. | Count per task since the last human action; classify failures; add time and cost budgets. Milestone 3. |
-| H5 | HIGH | Nothing runs the loop outside tests. | `core/run_cli.py` (start/resume/status/approve) and an end-to-end run on a toy repo. Milestone 2. (`AcceptanceVerifier` now exists.) |
+| H5 | HIGH | **Mostly closed.** `core/run_cli.py` runs the loop for real (start/resume/status/report/integrate), tested end to end offline. It has not yet run against a real model and worker. | The supervised run and the overnight run on Match Legends (Milestone 2). Approve is Milestone 3. |
 | H6 | HIGH | The project is at the reinvention line for durable execution. | Keep the existing code; spike DBOS for timeouts, cancellation, waits and scheduling. Milestone 4. |
 | M1 | MEDIUM | **Partly closed.** Deadlines, group kill and `timed_out` are done. There is no `cancel` command (deferred: killing a recorded PID risks PID reuse). | Cancel with DBOS (Milestone 4) or a PID-reuse-safe design. |
 | M3 | MEDIUM | **Mostly closed.** Master sees the orchestrator's outcome, files changed, diff stats, `spec_current` and the verifier's findings; the worker's status is labelled a claim. Process exit codes are recorded in history but not shown to Master. | Add exit codes / failing test names to the context if Milestone 2 shows they are needed. |
-| M4 | MEDIUM | YAML state has no revision, and human CLI edits (including `set-acceptance`) leave no history. | A `revision` counter; record every Master write, with `actor`. Milestone 3. |
+| M4 | MEDIUM | **Partly closed.** Human spec edits made through `run_cli task ...` are recorded (`human_action`), and the report flags spec changes no recorded event explains. Edits made with `core.master` or in YAML are still not recorded, and YAML has no revision. | A `revision` counter; record every Master write, with `actor`. Milestone 3. |
 | M5 | MEDIUM | WorkSession duplicates history (counters stored twice). | Keep a session identity row in the history DB; derive the rest from events. |
 | M6 | MEDIUM | The Ollama backend is a homemade coding agent. | Freeze it as a fixture; build the next worker via ACP or the OpenHands SDK. |
 | L1 | LOW | Events lack `actor` and `caused_by` (only `integration` records an actor). | Add both columns. |
@@ -580,7 +610,7 @@ C1, C2, H1, M2, L5.
 | L3 | LOW | A model call is spent on every forced move. | Deterministic rules for single-legal-move steps, recorded as actor=system. |
 | L4 | LOW | Legacy parser path, `proposal._decision`, experiments in the repo root. | Delete or move; keep docstrings short; write ADRs. |
 | L6 | LOW | Attempt worktrees and `attempt/*` branches are never cleaned up. Acceptance commands leave their by-products (for example `__pycache__`) in the worktree. | A cleanup command for integrated or abandoned attempts. |
-| L7 | LOW | Integration is fast-forward only; a base that moved on means re-running the task. | Decide in Milestone 2 whether rebasing or merging is worth the judgement it needs. |
+| L7 | LOW | **Closed by `integrate --rebase`** (M2, D1): the attempt is replayed onto the moved base, re-verified there, and integrated exactly at the verified SHA. A conflict still means re-running the task. | — |
 | N2 | MEDIUM | A task whose dependency is completed but not integrated can start against a base that lacks it: attempts start from `base_branch`, and readiness counts a dependency as satisfied once it is `completed`. | **Milestone 3:** dependencies count as satisfied only when integrated. Until then, tasks run in one unattended session must be independent. |
 
 ---
@@ -632,8 +662,9 @@ C1, C2, H1, M2, L5.
 
 **2. Run it for real**
 
-- Objective: `run_cli` (start/resume/status), a `CommandVerifier`, one real worker
-  (the OpenCode CLI or an ACP client), and a throwaway repo with 5 tasks, run overnight.
+- Objective: `run_cli` (start/resume/status), a verifier (the existing `AcceptanceVerifier`),
+  one real worker (the OpenCode CLI; owner decision), and a real repo (Match Legends, in a
+  dedicated clone) with 5 independent tasks, run overnight. Plan: `docs/plans/m2-run-for-real.md`.
 - Not yet: a dashboard, multiple projects, self-hosting.
 - Acceptance:
   - [ ] 5 tasks completed and integrated, with every human touch recorded in history.
@@ -766,6 +797,12 @@ Add a row whenever an architectural decision is made or reversed.
 | Worker output goes to log files under the state dir (path + sha256 in history); the helper waits on the process, not its pipes | A finished worker with a background child was reported `timed_out` (independent review) | **Approved (2026-10-05)**, implemented |
 | `ProjectLock.release` closes its descriptor and never calls `LOCK_UN` | Unlocking would release the lock for a worker that escaped its group (independent review) | **Approved (2026-10-05)**, implemented |
 | Worker and verification processes get an allowlisted environment (`core/worker_env.py`): `PATH` = the newest Node >= 22 from nvm's install directory (found by directory name, no shell startup files) + `/usr/local/bin:/usr/bin:/bin`; `HOME` and `XDG_*` = a dedicated worker home; `LANG`/`LC_ALL`/`TERM`/`TZ`; `CI=1`; no secrets (secret-looking extras are refused) | Workers must not see the Master's keys; the managed project needs Node 22 (owner upgraded the user's Node to 22 via nvm, 2026-10-05; system Node 18 untouched) | **Approved (2026-10-05)**, implemented (M2) |
+| M2: the human-only task `description` is part of `spec_hash` only when present | Adding the field must not invalidate evidence for tasks without one | Taken without the owner (plan said "included"); conservative |
+| M2: `run_cli` refuses to start without `DEEPSEEK_API_KEY` (for the DeepSeek provider), an OpenCode binary, or a Node >= 22 | Fail before any history is written, with a clear message | Taken without the owner |
+| M2: the usage of unusable model replies is recorded as `failed_call_usage` (on the next decision, or on `run_stopped`) | Every paid call is counted | Approved in the plan; implemented |
+| M2: the report counts a spec change as explained by a `human_action` or by Master's own recorded `update_task`/`create_task` result | A model retitle is recorded; only edits outside run_cli are "unexplained" | Taken without the owner |
+| M2: a failed re-verification during `integrate --rebase` is recorded on the attempt (and so becomes its latest verdict) | The record must show what was checked, including failures | Taken without the owner |
+| Match Legends requires Node 22; Playwright unpinned (`^1.63.0`); tests use globs for Node 22's runner | The owner upgraded the user's Node to 22 via nvm (2026-10-05) | **Approved (2026-10-05)**, done in Match Legends `main` (`f89b357`) |
 | Merged Milestone 1 to main (2026-10-05) | Milestone 1 complete and reviewed; `main` fast-forwarded to `m1-contain-verify`, tagged `m1-contain-verify` | **Approved (2026-10-05)** |
 
 ---
