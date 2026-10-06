@@ -79,6 +79,9 @@ run `uv sync`, `ms install` and `ms service install` again from the new location
 
 Project definitions are private configuration and never live in this repository. A
 complete, fictional example is in [`examples/projects/example-app/`](../examples/projects/example-app/).
+To try the system first, [`examples/quickstart/`](../examples/quickstart/) has a tiny
+Node project and its definition; `examples/quickstart/init.sh <target-dir>` creates its
+repository and prints the remaining steps (it never writes to `~/.config`).
 
 1. **Create a dedicated clone** for the system to work in, separate from any checkout you
    edit by hand, with a `develop` branch:

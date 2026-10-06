@@ -1,0 +1,21 @@
+# The quickstart's project definition. init.sh prints how to copy it to your projects
+# root and point `repository` at the repository it created.
+id: quickstart
+name: Quickstart
+description: >
+  A tiny zero-dependency Node project for trying Master System locally.
+status: active
+repository: ~/managed/quickstart       # replaced with the path init.sh created
+base_branch: develop
+auto_integrate: true                   # the service may run it and integrate into develop
+planner:
+  test_dir: tests/tasks
+  test_suffixes: [".test.js"]
+  syntax_check: "node --check {path}"
+  test_command_examples: ["node --test {path}"]
+  setup: []                            # no dependencies to install
+  base_checks:
+    - node --test tests/unit/*.test.js
+  protected_paths:
+    - tests/*
+    - package.json

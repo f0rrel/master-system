@@ -186,20 +186,33 @@ chmod 600 ~/.config/master-system/master.env
 HOME=~/.local/share/master-system-worker ~/.opencode/bin/opencode auth login
 ```
 
-Make a dedicated clone of a small repository with a `develop` branch and a test command
-that works on the worker `PATH`, for example `~/managed/demo`. Then describe it:
+**The quickstart** ([examples/quickstart](examples/quickstart)) is a tiny Node project
+with no dependencies (`node --test`), and a project definition for it. Create its
+dedicated repository, then run the commands the script prints:
 
 ```bash
-mkdir -p ~/.config/master-system/projects/demo
-cp "$MS_HOME"/examples/projects/example-app/*.yaml ~/.config/master-system/projects/demo/
+sh "$MS_HOME"/examples/quickstart/init.sh ~/managed/quickstart
+# it prints, for this target:
+mkdir -p ~/.config/master-system/projects/quickstart
+cp "$MS_HOME"/examples/quickstart/project/*.yaml ~/.config/master-system/projects/quickstart/
+sed -i "s#^repository:.*#repository: $HOME/managed/quickstart#" \
+    ~/.config/master-system/projects/quickstart/project.yaml
+ms backlog quickstart add "Add a farewell function"
+ms chat quickstart    # "plan epic 1 from the backlog", then `check`, then `approve`
+ms daemon --once      # one service cycle in the foreground
+ms report             # attempts, verdicts, tokens and cost
+git -C ~/managed/quickstart log --oneline develop
+ls ~/.local/share/master-system-worktrees/quickstart/
 ```
 
-Edit the three files: `tasks: []` and `milestones: []`; in `project.yaml` set `id: demo`,
-`repository: ~/managed/demo`, remove the `github` section, and set the planner's test
-conventions:
+The script writes only the target directory. **Your own project** works the same way:
+a dedicated clone with a `develop` branch and a test command that works on the worker
+`PATH`, and a definition copied from the quickstart's (or from
+[examples/projects/example-app](examples/projects/example-app)) with your `id`,
+`repository` and the planner's test conventions:
 
 ```yaml
-planner:                                     # a Node project
+planner:                                     # a Node project with dependencies
   test_dir: tests/tasks
   test_suffixes: [".test.js"]
   syntax_check: "node --check {path}"
@@ -216,20 +229,11 @@ planner:                                     # a Python project: pytest in a pro
   base_checks: [".venv/bin/python -m pytest -q tests/unit"]
 ```
 
-The setup commands are also the first acceptance commands of every planned task. The
-repository's `.gitignore` should cover what they create (`node_modules/`, `.venv/`):
-the orchestrator commits everything a worker leaves in its worktree.
-
-Then plan, approve and run one cycle:
-
-```bash
-ms backlog demo add "A first small change"
-ms chat demo          # "plan epic 1 from the backlog", then `check`, then `approve`
-ms daemon --once      # one service cycle in the foreground
-ms report             # attempts, verdicts, tokens and cost
-git -C ~/managed/demo log --oneline develop
-ls ~/.local/share/master-system-worktrees/demo/
-```
+The setup commands are also the first acceptance commands of every planned task, and
+verification runs in a fresh worktree, so acceptance must build what it needs from
+committed files. The repository's `.gitignore` should cover what setup creates
+(`node_modules/`, `.venv/`): the orchestrator commits everything a worker leaves in its
+worktree.
 
 Without a `github` section nothing is pushed; with one but no GitHub App, publishing is
 skipped with a message. **Clean up:** remove `~/.config/master-system`,

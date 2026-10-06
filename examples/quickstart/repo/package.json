@@ -1,0 +1,9 @@
+{
+  "name": "quickstart",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A tiny project for trying Master System.",
+  "scripts": {
+    "test": "node --test tests/unit/*.test.js"
+  }
+}

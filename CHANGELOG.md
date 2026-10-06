@@ -16,6 +16,9 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
   `ms doctor` says so.
 - New `[worker] path_dirs`: extra directories (for example where uv is installed) on the
   worker and verification `PATH`.
+- `examples/quickstart/`: a tiny zero-dependency Node project (`node --test`), its
+  project definition, and `init.sh <target-dir>`, which creates the dedicated repository
+  on `develop` and prints the next commands. The README's "Try it" uses it.
 - Fixed: `ms doctor` printed "(no report: 'Namespace' object has no attribute 'summary')"
   instead of the last run report (or "No sessions yet.").
 
