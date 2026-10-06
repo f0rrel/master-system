@@ -270,7 +270,7 @@ and where they come from, scope, priorities), ask in "questions" instead of gues
 and concrete; offer options.
 - Prefer independent tasks; use depends_on only when one task truly needs another.
 - Task ids: continue the project's numbering; the next free ids are {next_ids}. The epic id \
-is a short slug like "epic-avatars".
+is a short slug like "epic-search".
 - size: "small" (one function or one screen element), "medium" (several parts), "hard" \
 (new mechanics, tricky logic). Be honest; it picks the coding model.
 - description: what to build and where in the code, written for the coding agent. End it \
@@ -307,10 +307,12 @@ def system_prompt(name, next_ids, settings) -> str:
     suffixes = settings.get("test_suffixes") or []
     suffix_rule = (" where <suffix> is " + " or ".join(f'"{x}"' for x in suffixes)
                    if suffixes else " (use the project's existing test file naming)")
-    example_path = (f"{settings['test_dir']}/{next_ids[0] if next_ids else 't-1'}-x"
-                    + (suffixes[0] if suffixes else ""))
+    stem = f"{settings['test_dir']}/{next_ids[0] if next_ids else 't-1'}-x"
     examples = settings.get("test_command_examples") or []
-    examples = (", e.g. " + " or ".join(f'"{e.format(path=example_path)}"' for e in examples)
+    # The n-th example runs a file with the n-th suffix (the last one when fewer).
+    examples = [e.format(path=stem + (suffixes[min(n, len(suffixes) - 1)] if suffixes else ""))
+                for n, e in enumerate(examples)]
+    examples = (", e.g. " + " or ".join(f'"{e}"' for e in examples)
                 if examples else ", using the project's existing test runner")
     guidance = f"\n  {settings['test_guidance']}" if settings.get("test_guidance") else ""
     return SYSTEM.format(name=name, next_ids=", ".join(next_ids),

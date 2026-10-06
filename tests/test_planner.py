@@ -280,6 +280,12 @@ def test_the_prompt_follows_the_projects_test_conventions():
     assert "Use pytest fixtures from tests/conftest.py." in prompt
     for js_only in ("node", "Playwright", ".js", "phone"):
         assert js_only not in prompt
+    web = planner_settings({"planner": {
+        "test_suffixes": [".test.js", ".spec.js"],
+        "test_command_examples": ["node --test {path}", "npx playwright test {path}"]}})
+    prompt = system_prompt("Example App", ["app-3"], web)
+    assert ('"node --test tests/tasks/app-3-x.test.js" or '
+            '"npx playwright test tests/tasks/app-3-x.spec.js"') in prompt
     generic = system_prompt("Example App", ["app-3"], planner_settings({}))
     assert "the project's existing test runner" in generic
     assert "{" not in generic.split("Answer with ONE JSON")[0]
