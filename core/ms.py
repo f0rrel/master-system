@@ -864,6 +864,8 @@ def build_planner(config, project_id, chat_id=None):
     p = config.planner
     provider = build_provider(SimpleNamespace(master=MasterConfig(
         provider=p.provider, model=p.model, base_url=p.base_url, timeout_s=p.timeout_s)))
+    if hasattr(provider, "max_completion_tokens"):
+        provider.max_completion_tokens = p.max_output_tokens
     paths = _paths()
     master = Master(config.run.projects_root)
     history = SQLiteHistoryStore(paths.history_path)

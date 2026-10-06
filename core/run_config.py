@@ -160,6 +160,8 @@ class PlannerSettings:
     timeout_s: float = 300
     #: Priced spend allowed per planner chat.
     chat_usd: float = 0.30
+    #: Output tokens per planner reply (a whole epic with its tests is long).
+    max_output_tokens: int = 16000
 
 
 @dataclass(frozen=True)
@@ -353,13 +355,16 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
     github = GitHubSettings(app_id=str(g.get("app_id", "")).strip(),
                             key_path=str(g.get("key_path", "")).strip())
 
-    pl = _section(data, "planner", ("provider", "model", "base_url", "timeout_s", "chat_usd"))
+    pl = _section(data, "planner", ("provider", "model", "base_url", "timeout_s", "chat_usd",
+                                    "max_output_tokens"))
     planner = PlannerSettings(
         provider=str(pl.get("provider", PlannerSettings.provider)),
         model=str(pl.get("model", PlannerSettings.model)),
         base_url=pl.get("base_url"),
         timeout_s=_positive(pl, "planner", "timeout_s", PlannerSettings.timeout_s),
         chat_usd=_positive(pl, "planner", "chat_usd", PlannerSettings.chat_usd),
+        max_output_tokens=_positive(pl, "planner", "max_output_tokens",
+                                    PlannerSettings.max_output_tokens, int),
     )
 
     return RunConfig(master=master, worker=worker, run=run, prices=prices,
