@@ -40,7 +40,7 @@ Paths used throughout the documentation:
 | --- | --- |
 | `$MS_HOME` | Where this repository is cloned, e.g. `~/src/master-system` |
 | `~/.config/master-system/` | Configuration and secrets, outside the repository |
-| `~/.config/master-system/projects/` | Project definitions (private; `[run] projects_root` overrides) |
+| `~/.config/master-system/projects/` | Project definitions (private; `[run] projects_root` overrides). Created by `ms install`. While it is missing, `ms status` and `ms doctor` say so and the service idles instead of exiting |
 | `~/.local/share/master-system/` | Runtime state: history, sessions, logs, planner chats |
 
 ```bash
@@ -48,9 +48,9 @@ export MS_HOME=~/src/master-system
 git clone https://github.com/f0rrel/master-system.git "$MS_HOME"
 cd "$MS_HOME"
 uv sync                                   # creates .venv
-uv run python -m core.ms install          # installs the `ms` wrapper to ~/.local/bin/ms
+uv run python -m core.ms install          # installs ~/.local/bin/ms; creates the projects root (mode 700)
 
-mkdir -p ~/.config/master-system/projects && chmod 700 ~/.config/master-system
+chmod 700 ~/.config/master-system
 printf 'DEEPSEEK_API_KEY=%s\n' '<your key>' > ~/.config/master-system/master.env
 chmod 600 ~/.config/master-system/master.env
 

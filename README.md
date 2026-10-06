@@ -176,8 +176,8 @@ A minimal local trial, without the GitHub App, systemd or Telegram:
 export MS_HOME=~/src/master-system
 git clone https://github.com/f0rrel/master-system.git "$MS_HOME" && cd "$MS_HOME"
 uv sync
-uv run python -m core.ms install                 # puts `ms` in ~/.local/bin
-mkdir -p ~/.config/master-system/projects && chmod 700 ~/.config/master-system
+uv run python -m core.ms install                 # puts `ms` in ~/.local/bin, creates the projects root
+chmod 700 ~/.config/master-system
 printf 'DEEPSEEK_API_KEY=%s\n' '<key>' > ~/.config/master-system/master.env
 chmod 600 ~/.config/master-system/master.env
 HOME=~/.local/share/master-system-worker ~/.opencode/bin/opencode auth login

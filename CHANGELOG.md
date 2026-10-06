@@ -5,6 +5,12 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### The first ten minutes
+- Without a projects root, `ms status` and `ms doctor` print a one-line hint instead of a
+  traceback, and the service idles and logs the hint instead of exiting (systemd no
+  longer restarts it every minute). `ms install` creates
+  `~/.config/master-system/projects` (mode 700).
+
 ### Orchestrator scope
 - The orchestrating model can no longer cancel a task: a proposal to set `cancelled` is
   held for the owner (`cancellation_requires_human`), like a completion without evidence.

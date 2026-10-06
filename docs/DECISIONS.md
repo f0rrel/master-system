@@ -194,3 +194,10 @@ choice* — made during implementation and recorded here for review.
 | `ms cancel <project> <task> --reason` cancels an open task as a recorded human action and names the tasks that depend on it (unchanged); `ms reopen` keeps a task | The owner needs a recorded way to accept a held cancellation; a recorded human action also clears the wait | Approved |
 | A held cancellation makes its task wait for the owner in the service (other tasks keep running); held completions are unchanged | Running the task again would stop on the same proposal and stall the whole project | Approved |
 | Split approval still cancels the replaced task | It is the owner's action, not the model's | Approved |
+
+## The first ten minutes
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| Without a projects root, `ms status` and `ms doctor` print a one-line hint, and the service idles (logging the hint once) until the root exists | A traceback is no help to a new user, and an exiting service is restarted by systemd every minute with "service stopped" notifications | Approved |
+| `ms install` creates the projects root (mode 700) | One step fewer, and the right permissions by default | Approved |

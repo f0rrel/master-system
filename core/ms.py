@@ -102,7 +102,42 @@ def wrapper_script(repo: Path) -> str:
             f'PYTHONPATH="{repo}" exec "{repo}/.venv/bin/python" -P -m core.ms "$@"\n')
 
 
+def projects_root(config) -> Path:
+    from core.paths import default_projects_root
+
+    return Path(config.run.projects_root or default_projects_root()).expanduser()
+
+
+def missing_projects_root(config) -> Optional[str]:
+    """A one-line hint when the projects root does not exist yet, else None."""
+    root = projects_root(config)
+    if root.is_dir():
+        return None
+    return (f"No projects yet: {root} does not exist. Run `ms install` to create it, then "
+            "add a project (README, \"Try it\").")
+
+
+def wait_for_projects_root(config, sleep, should_stop, out) -> bool:
+    """The service without a projects root: say so once and idle until it exists.
+
+    Exiting would make systemd restart the service every minute (and notify each time).
+    Returns False if asked to stop first."""
+    hint = missing_projects_root(config)
+    if hint is None:
+        return True
+    print(f"master-system service: {hint} Waiting for it.", file=out, flush=True)
+    while not should_stop():
+        sleep(config.daemon.interval_s)
+        if missing_projects_root(config) is None:
+            return True
+    return False
+
+
 def _command_install(args, out):
+    root = projects_root(_config(args))
+    if not root.is_dir():
+        root.mkdir(parents=True, mode=0o700)
+        print(f"Created {root} for your project definitions.", file=out)
     target = Path.home() / ".local" / "bin" / "ms"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(wrapper_script(REPO))
@@ -281,10 +316,23 @@ def start_telegram_bot(config_path, out):
 
 def _command_daemon(args, out):
     config = _config(args)
-    daemon = build_daemon(config, args.config)
-    telegram = start_telegram_bot(args.config, out)
     stopping = []
     signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
+
+    def sleep(seconds):
+        import time
+
+        end = time.monotonic() + seconds
+        while not stopping and time.monotonic() < end:
+            time.sleep(min(5, end - time.monotonic()))
+
+    if args.once and missing_projects_root(config):
+        print(missing_projects_root(config), file=out)
+        return 0
+    if not wait_for_projects_root(config, sleep, lambda: bool(stopping), out):
+        return 0
+    daemon = build_daemon(config, args.config)
+    telegram = start_telegram_bot(args.config, out)
     print(f"master-system service: every {config.daemon.interval_s:.0f}s, "
           f"daily cap ${config.budget.daily_usd:.2f}, run cap ${config.budget.run_usd:.2f}, "
           f"notifications {'on' if daemon.notifier.enabled else 'off'}, "
@@ -293,13 +341,6 @@ def _command_daemon(args, out):
         for line in daemon.cycle():
             print(line, file=out)
         return 0
-
-    def sleep(seconds):
-        import time
-
-        end = time.monotonic() + seconds
-        while not stopping and time.monotonic() < end:
-            time.sleep(min(5, end - time.monotonic()))
 
     daemon.serve(sleep=sleep, should_stop=lambda: bool(stopping), out=out)
     if telegram is not None:
@@ -696,6 +737,10 @@ def friendly_status(master, history, config, *, paused, last_looked, is_busy, sp
 
 
 def _command_status(args, out):
+    hint = missing_projects_root(_config(args))
+    if hint:
+        print(hint, file=out)
+        return 0
     if args.details:
         return _status_details(args, out)
     from datetime import datetime, timedelta, timezone
@@ -857,6 +902,15 @@ def doctor_report(args) -> str:
         f"branch: {capture([*control_git_argv(), '-C', str(REPO), 'branch', '--show-current'])}",
         f"commit: {capture([*control_git_argv(), '-C', str(REPO), 'log', '-1', '--format=%h %s (%cr)'])}",
         "changes: " + (capture([*control_git_argv(), '-C', str(REPO), 'status', '--short']) or "none")]))
+    try:
+        config = _config(args)
+        hint = missing_projects_root(config)
+        section("Projects", f"projects: none yet. {hint}" if hint else
+                f"root: {projects_root(config)}\nprojects: "
+                + (", ".join(sorted(p.name for p in projects_root(config).iterdir()
+                                    if p.is_dir())) or "none"))
+    except Exception as error:
+        section("Projects", f"(could not read: {error})")
     pid_file = paths.state_dir / "run.pid"
     section("Service", "\n".join([
         f"systemd: {capture(['systemctl', '--user', 'is-active', UNIT_NAME])}, "

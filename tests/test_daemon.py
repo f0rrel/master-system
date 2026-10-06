@@ -608,3 +608,57 @@ def test_a_run_does_not_stop_again_on_the_same_held_cancellation(env):
     env.history.add(EventType.HUMAN_ACTION, task_id="t1", payload={"action": "reopen"})
     env.daemon.cycle()
     assert len(env.runs) == 2
+
+
+# --- a missing projects root (the first ten minutes) ---
+
+
+def test_status_without_a_projects_root_prints_a_hint(home):
+    code, out = run_ms("status")
+    assert code == 0
+    assert out.count("\n") == 1 and "ms install" in out
+    assert str(home / "config" / "master-system" / "projects") in out
+    assert run_ms("status", "--details")[1] == out
+
+
+def test_doctor_without_a_projects_root_says_so(home):
+    code, out = run_ms("doctor")
+    assert code == 0
+    assert "projects: none yet" in out and "ms install" in out
+
+
+def test_the_service_idles_until_the_projects_root_exists(home):
+    from core.run_config import load_config
+
+    root = home / "config" / "master-system" / "projects"
+    out, slept = io.StringIO(), []
+
+    def sleep(seconds):
+        slept.append(seconds)
+        if len(slept) == 3:
+            root.mkdir(parents=True)
+
+    assert ms.wait_for_projects_root(load_config("/nonexistent"), sleep, lambda: False, out)
+    assert len(slept) == 3
+    assert out.getvalue().count("ms install") == 1  # logged once, not every minute
+
+
+def test_the_service_stops_cleanly_while_waiting_for_a_projects_root(home):
+    from core.run_config import load_config
+
+    assert not ms.wait_for_projects_root(load_config("/nonexistent"), lambda s: None,
+                                         lambda: True, io.StringIO())
+
+
+def test_daemon_once_without_a_projects_root_is_not_an_error(home):
+    code, out = run_ms("daemon", "--once")
+    assert code == 0 and "ms install" in out
+
+
+def test_install_creates_a_private_projects_root(home, monkeypatch):
+    monkeypatch.setenv("HOME", str(home))
+    assert run_ms("install")[0] == 0
+    root = home / "config" / "master-system" / "projects"
+    assert root.is_dir()
+    assert root.stat().st_mode & 0o777 == 0o700
+    assert "ms install" not in run_ms("status")[1]

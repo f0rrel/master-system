@@ -20,7 +20,8 @@ Paths: `$MS_HOME` is the repository; `<clone>` is a managed project's dedicated 
 | `check` fails: "passes already on the current code" | The drafted test does not test anything new | Ask the planner for a test that fails until the feature exists |
 | `check` fails: "the test itself is broken", or a syntax check fails | Syntax error or missing helper in the drafted test | Paste the failure to the planner and ask it to fix the test |
 | The planner drafts tests in the wrong language or location | The project's planner conventions are not configured | Set `planner.test_suffixes`, `test_command_examples` and, optionally, `syntax_check` and `test_guidance` in `project.yaml` |
-| `Projects root not found` | No project definitions at the configured root | Create `~/.config/master-system/projects/<id>/`, or set `[run] projects_root` |
+| "No projects yet: … does not exist" (`ms status`, `ms doctor`, the service log) | The projects root is missing; the service idles until it exists | `ms install` creates it; then add a project (`~/.config/master-system/projects/<id>/`), or set `[run] projects_root` |
+| `Projects root not found` (a traceback, older versions) | The same, before this hint existed; the service exited and systemd restarted it every minute | Update, or create the directory |
 | No preview link in `ms status` | The project has no `github.site_dir` | Add `site_dir` if the project has a static site to preview |
 | A task "waits for images" and nothing generates them | No image provider key | Add `POLLINATIONS_API_KEY` (free key from enter.pollinations.ai) or `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` to `master.env`, then restart the service |
 | "pick an image for …" in `ms status` | A visual task asked for several candidates | Open the contact sheet link, then `ms pick <project> <task> <asset> <n>` |
