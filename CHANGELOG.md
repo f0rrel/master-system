@@ -107,6 +107,8 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
   morning summary show limits, waits, pending choices and attempts per worker with cost.
 - A weekly check confirms the free worker models are still offered and free.
 
+## m4-direction-to-overnight — 2026-10-06
+
 ### Milestone 4: From direction to overnight work
 - **Direction:** a project's `docs/DIRECTION.md` (configurable path and size budget) is
   read by the planner, the Master, workers and the visual reviewer, who judge proposals
