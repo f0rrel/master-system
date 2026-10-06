@@ -509,8 +509,10 @@ class TelegramBot:
         needs_confirm = op in ("approve", "release", "limit") or (
             op == "split" and action.get("decision") in ("approve", "escalate"))
         if needs_confirm and not action.get("confirmed"):
-            label = {"wait": "Keep waiting for the reset", "free": "Switch to the next free worker",
-                     "paid": "Use the paid worker (counts toward the daily cap)"}.get(
+            label = {"wait": "Keep waiting for the reset",
+                     "free": "Switch to the next free worker after a test request",
+                     "paid": "Use the paid worker after a test request (both count toward "
+                             "the daily cap)"}.get(
                 action.get("choice"), op)
             if op == "split":
                 label = {"approve": f"Replace {action['task']} with the drafted split",

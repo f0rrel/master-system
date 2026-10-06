@@ -90,6 +90,10 @@ acceptance:
   - package-lock.json
 ```
 
+- **must not:** the draft also states what must not happen, in the owner's terms, and
+  its test checks it; for this task, for example, "the start page still shows the
+  greeting when no name is entered". Approval stores it in the description as a
+  "Must not:" section (illustration: the example definition predates the field).
 - **check:** in a fresh worktree, `node --test tests/tasks/app-1-greeting.test.js` must
   fail on today's code (the planner drafted that file), and `tests/unit` must pass.
 - **approve:** the test file is committed to `develop`, and the task is queued with the

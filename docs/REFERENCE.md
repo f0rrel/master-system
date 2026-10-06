@@ -217,13 +217,13 @@ ever run as a command.
 | `ms report [<session>]` | A run's report: steps, attempts, verdicts, tokens and cost. Defaults to the latest run. |
 | `ms report --summary` | The latest morning summary, with a link to its HTML page (screenshot thumbnails). |
 | `ms backlog <project> [add "<title>" [--summary …] [--priority N] [--id …] \| priority <epic> <N>]` | List the backlog in priority order; add a proposed epic; change an epic's priority (lower runs first). |
-| `ms lessons <project> [--approve all\|IDS] [--reject IDS\|rest]` | Review lessons workers proposed; only approved lessons are used. |
+| `ms lessons <project> [--approve all\|IDS] [--reject IDS\|rest]` | Review lessons workers proposed; only approved lessons are used. Lists each approved lesson with whether it fits in the worker prompt for its type (the 2,000-character budget is fixed, not configurable), in how many attempts it was used and how many of those passed, and "never in a passing attempt" after 5 without a pass. `--reject` also takes approved ids (to retire a lesson); `rest` means the other pending ones. |
 | `ms pick <project> <task> <asset> <n>` | Choose one of a task's generated image candidates; it is committed and the task can run. |
 | `ms split <project> <task> draft ["guidance"] \| recheck \| approve [anyway] \| reject \| escalate` | Ask the planner to split a too-big task (again: it continues the pending split), re-run its checks without the model, or decide it (also offered in Telegram). Approving replaces the task in place; its dependents wait for all new tasks. |
 | `ms reopen <project> <task> [--reason …]` | Put a blocked or open task back in the queue (spec unchanged, recorded); its attempt budget starts over. Also keeps a task whose cancellation the orchestrating model proposed. |
 | `ms cancel <project> <task> --reason …` | Cancel an open task (recorded as a human action). Lists tasks that depend on it; they are not changed and cannot start while it is cancelled. The orchestrating model can only propose a cancellation; this is how you accept one. |
 | `ms telegram pair\|status\|test\|unpair` | Pair the Telegram bot with your account (one-time code), check it, send a test message, or forget the owner. |
-| `ms limit <project> [wait\|free\|paid]` | Show or answer a worker limit: wait for the reset, switch to the next free worker profile, or use the paid one (counts toward the daily cap). |
+| `ms limit <project> [wait\|free\|paid]` | Show or answer a worker limit: wait for the reset, switch to the next free worker profile, or use the paid one (counts toward the daily cap). `free` and `paid` first send the target profile one small test request (90 s at most); only if it answers correctly does the switch happen. If it fails, the project stays paused and the command says why (`rate_limited`, `model_unavailable`, `not_configured`, `provider_error`, or no usable answer) and what to choose next. A paid profile's test request counts toward the daily cap. Telegram's limit buttons do the same. |
 | `ms publish <project> [--accept-tip]` | Push `develop` and the preview site now (the service also does this after every run). `develop` is pushed only at a tip the system set; `--accept-tip` accepts a change you made outside Master System (recorded as a human action). |
 | `ms pause` / `ms resume` | Start no new work (a running task finishes) / allow new work. |
 | `ms stop` | Stop the current run now, keeping its work, and pause. |
@@ -318,7 +318,8 @@ failure, no cost. The reset time is read from the provider's answer when it give
 A known reset within `max_auto_wait_minutes` pauses the project until then (plus two
 minutes) and the same worker continues; an unknown reset is waited for once
 (`unknown_limit_wait_minutes`). Anything longer, and any model that is gone or not set
-up, pauses the project and asks: `ms limit <project> wait | free | paid`. Waits and
+up, pauses the project and asks: `ms limit <project> wait | free | paid` (`free` and `paid`
+switch only after the target profile answers a test request). Waits and
 pending choices appear in `ms status` and the morning summary; other projects keep
 working. Example worker order:
 

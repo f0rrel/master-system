@@ -207,6 +207,35 @@ choice* — made during implementation and recorded here for review.
 | A Node binary's version is read by running `node --version` from `core/host.py`; the lookup in `core/worker_env.py` starts no process | Keeps the process-starting modules as they are (boundary test) | Implementation choice |
 | A quickstart project in `examples/quickstart/` with zero dependencies, whose `init.sh` writes only the target repository and prints the remaining steps | A new user can try the whole loop with nothing to install beyond Node; never touching `~/.config` keeps the script safe to run | Approved |
 
+## Lessons: visibility and evidence
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| Lessons the prompt budget leaves out are reported (`ms lessons` per lesson, `ms status` under "Needs you"); the 2,000-character budget stays fixed | Silent drops hid approved lessons from workers; making the budget configurable is a separate change | Approved |
+| `attempt_started` records `lessons_used_ids`; `lessons_used` stays the count | Evidence per lesson needs ids; older readers keep working | Approved |
+| Usefulness is computed from history only (attempts including a lesson, passes among them); provider-limited attempts and attempts without ids do not count | No new state to keep in sync; a limited attempt never ran the worker | Implementation choice |
+| Eviction is suggest-only: "never in a passing attempt" after 5 attempts without a pass; the owner rejects or keeps | Correlation is weak evidence (hard tasks fail with good lessons); memory changes stay the owner's decision, like approval | Approved (decided by the owner) |
+| `ms lessons --reject` also accepts approved ids | Without it, acting on the suggestion meant editing YAML | Implementation choice |
+
+## Planner: what must not happen
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| Every drafted task has 1–3 `must_not` conditions in the owner's terms; a draft without them is a draft problem; at least one test command must check one (an instruction, not machine-checked) | Test quality is the weakest point: a test can fail first for the right reason and later pass for a trivial one; the owner can judge "what must not break" in their own words | Approved |
+| They are stored in the task description as a `Must not:` section, not as a new field | The description is already in the spec hash and in the worker's prompt; old tasks keep their hashes | Approved |
+| Their meaning is not verified automatically | A model cannot reliably judge a test against a condition; the human approval covers it | Approved |
+| `task_records` tolerates a draft task without `must_not` (description unchanged); `draft_problems` is what enforces it | Validation lives in one place; record building stays total | Implementation choice |
+
+## Worker probes
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| An owner-chosen switch (`ms limit free\|paid`, Telegram buttons) takes effect only after the target profile answers one probe; on failure nothing changes and the project stays paused | A listed model can still fail (no login, quota gone, wrong route); switching to it would only produce another limit, possibly overnight | Approved |
+| The probe runs like an attempt (same binary, model, home and environment) but in an empty temporary directory with a fixed prompt and a 90 s timeout | It tests the real route; there is nothing in the directory to read or change | Approved |
+| The probe keeps `bash` and disables every other tool | Disabling `bash` makes OpenCode's free tier answer HTTP 403, which would fail every free probe; this is the same rule as task types | Implementation choice |
+| The probe passes on a successful run with the expected answer and, if OpenCode reports a model, the profile's model; a different model counts as `model_unavailable` | A wrong route can answer correctly with another model | Implementation choice |
+| Probes are recorded as `human_action` `worker_probe` (the owner started them), and `spend_since` prices them like worker attempts | One history, and a paid probe counts toward the daily cap like any paid call | Implementation choice |
+
 ## Project hygiene
 
 | Decision | Rationale | Status |

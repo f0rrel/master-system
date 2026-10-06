@@ -15,7 +15,7 @@ from core.master import Master
 from core.ms import chat_loop
 from core.paths import RuntimePaths
 from core.planner import (DraftProblem, PlannerChat, draft_problems, planner_settings,
-                          system_prompt)
+                          render_draft, system_prompt)
 from core.planner_checks import make_approver, make_checker
 from core.project_state import ProjectState
 
@@ -32,6 +32,7 @@ def draft(content=FAILING, **task_extra):
     task = {"id": "t-2", "title": "Say hi", "size": "small", "type": "logic", "depends_on": [],
             "estimate_lines": 20,
             "description": "greet() must say Hi.", "manual_check": "1. Open the page.",
+            "must_not": ["greet still takes one name"],
             "tests": [{"path": "tests/tasks/t-2-greet.test.js", "content": content}],
             "test_commands": ["node --test tests/tasks/t-2-greet.test.js"]}
     task.update(task_extra)
@@ -465,3 +466,55 @@ def test_a_reply_split_into_several_json_objects_is_merged():
     assert value["draft"]["replaces"] == "ml-15"
     assert _parse("no json at all")["reply"] == "no json at all"
     assert _parse('{"reply": "x", "draft": null}') == {"reply": "x", "draft": None}
+
+
+MUST_NOT = ["greet('') still returns a string", "no other export of greet.js changes"]
+
+
+def test_a_task_needs_one_to_three_short_must_not_conditions():
+    settings = planner_settings({"planner": {"test_dir": "tests/tasks"}})
+
+    def problems(**extra):
+        return [p for p in draft_problems(draft(**extra), {"t-1"}, {"m1"}, settings)
+                if "must_not" in p]
+
+    assert problems(must_not=MUST_NOT) == []
+    without = draft()
+    del without["tasks"][0]["must_not"]
+    assert any("must_not" in p for p in draft_problems(without, {"t-1"}, {"m1"}, settings))
+    assert problems(must_not=[]) and problems(must_not=["a", "b", "c", "d"])
+    assert problems(must_not=[""]) and problems(must_not=["x" * 201])
+    assert problems(must_not="the levels still load")  # a list, not a string
+
+
+def test_the_prompt_asks_for_must_not_conditions_checked_by_a_test():
+    text = system_prompt("Toy", ["t-2"], planner_settings({}))
+    assert '"must_not": ["..."]' in text
+    assert "at least one of the task's test commands must check" in text.lower()
+
+
+def test_show_lists_each_tasks_must_not_conditions():
+    text = render_draft(draft(must_not=MUST_NOT))
+    assert "Must not" in text
+    assert "greet('') still returns a string" in text
+    assert "no other export of greet.js changes" in text
+
+
+def test_approve_writes_must_not_into_the_description(env):
+    chat = env["chat"]([answer(draft(must_not=MUST_NOT))])
+    chat.turn("go")
+    chat.check()
+    assert chat.approve() == ["t-2"]
+    task = ProjectState(env["project"]).get_task("t-2")
+    assert task["description"] == ("greet() must say Hi.\n\nMust not:\n"
+                                   "- greet('') still returns a string\n"
+                                   "- no other export of greet.js changes")
+    assert "must_not" not in task  # no new spec field
+
+
+def test_an_approved_task_without_must_not_keeps_its_spec_hash():
+    from core.evidence import spec_hash
+
+    old = {"id": "t-9", "title": "Old", "status": "planned", "description": "Make it blue.",
+           "acceptance": {"commands": ["true"]}}
+    assert spec_hash(old) == "edd101fed022fcea28deb346ab7c4e657386d2bbcc411d2222eeb7507f5136fc"

@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Optional
 
 __all__ = ["classify_failure", "parse_reset", "LimitState", "KINDS", "ASK_KINDS",
-           "RESET_MARGIN", "describe", "choice_profile"]
+           "RESET_MARGIN", "describe", "choice_profile", "probe_profile", "PROBE_ANSWER"]
 
 KINDS = ("rate_limited", "model_unavailable", "not_configured", "provider_error")
 #: Kinds that always wait for the owner: waiting would not help.
@@ -164,6 +164,9 @@ class LimitState:
     instead of the limited one until ``override_until``.
     """
 
+    #: Phases in which the owner may choose.
+    CHOICE_PHASES = ("needs_choice", "chosen_wait", "auto_wait")
+
     def __init__(self, state_dir: Path, now=lambda: datetime.now(timezone.utc)):
         self._dir = Path(state_dir) / "limits"
         self._now = now
@@ -240,7 +243,7 @@ class LimitState:
     def choose(self, project_id: str, choice: str, profile: Optional[str] = None) -> dict:
         """The owner's choice: ``wait``, or ``free``/``paid`` with the profile to use."""
         state = self.get(project_id)
-        if state.get("phase") not in ("needs_choice", "chosen_wait", "auto_wait"):
+        if state.get("phase") not in self.CHOICE_PHASES:
             raise ValueError("no worker limit waits for a choice in this project")
         now = self._now()
         reset = None if state.get("reset_at") in (None, "unknown") else \
@@ -327,3 +330,85 @@ def choice_profile(choice: str, order, profiles: dict, limited: Optional[str]) -
         return next((n for n in list(order) + list(profiles)
                      if profiles.get(n, {}).get("paid") and n != limited), None)
     return None
+
+
+#: The probe: a fixed prompt with a known short answer.
+PROBE_ANSWER = "master-system-probe-ok"
+PROBE_PROMPT = (f"This is a connection test. Do not use any tools. Reply with exactly this "
+                f"text and nothing else: {PROBE_ANSWER}")
+PROBE_TIMEOUT_S = 90
+
+
+def _reported_model(stdout: str) -> Optional[str]:
+    """``provider/model`` from the first event that names one (``providerID``/``modelID``)."""
+    def find(value):
+        if isinstance(value, dict):
+            if isinstance(value.get("modelID"), str):
+                provider = value.get("providerID")
+                return f"{provider}/{value['modelID']}" if provider else value["modelID"]
+            value = list(value.values())
+        if isinstance(value, list):
+            for item in value:
+                found = find(item)
+                if found:
+                    return found
+        return None
+
+    for line in (stdout or "").splitlines():
+        try:
+            found = find(json.loads(line))
+        except ValueError:
+            continue
+        if found:
+            return found
+    return None
+
+
+def probe_profile(profile: dict, *, opencode_bin, extra_args, env: dict, log_dir,
+                  run=None, timeout_s: float = PROBE_TIMEOUT_S) -> dict:
+    """Ask a worker profile for :data:`PROBE_ANSWER`, the way an attempt would run it.
+
+    Same OpenCode binary, the profile's model, its worker environment (``env``); an
+    empty temporary directory outside every worktree and repository; every tool but
+    ``bash`` disabled through the inline config (OpenCode's free tier refuses requests
+    without ``bash``). Passes only if the run succeeds, the reply contains the answer
+    and the model OpenCode reports, when it reports one, is the profile's.
+    Returns ``{ok, kind, reason, model, reported_model, usage}``.
+    """
+    import tempfile
+    import time
+
+    from core.opencode_backend import OpenCodeCliBackend, parse_events
+    from core.task_types import REQUIRED_TOOLS, opencode_config
+
+    if run is None:
+        from core.worker_process import run_process as run
+    model = profile.get("model")
+    backend = OpenCodeCliBackend(opencode_bin=opencode_bin, model=model, extra_args=extra_args)
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="ms-probe-") as empty:
+        outcome = run(backend.command(empty, PROBE_PROMPT), cwd=empty, log_dir=log_dir,
+                      log_name="probe", deadline=time.monotonic() + timeout_s,
+                      env={**env, "OPENCODE_CONFIG_CONTENT": opencode_config(REQUIRED_TOOLS)})
+    text, usage, _ = parse_events(outcome.stdout)
+    reported = _reported_model(outcome.stdout)
+    result = {"ok": False, "kind": None, "reason": None, "model": model,
+              "reported_model": reported, "usage": usage}
+    limit = None if outcome.timed_out else classify_failure(
+        outcome.stdout, outcome.stderr, outcome.returncode, usage.get("steps", 0))
+    if outcome.timed_out:
+        result["reason"] = f"it did not answer within {timeout_s:g} s"
+    elif limit:
+        result.update(kind=limit["kind"], reason=f"{limit['kind']}: {limit['detail']}")
+    elif outcome.returncode != 0:
+        result["reason"] = (f"OpenCode exited with code {outcome.returncode}: "
+                            + " ".join((outcome.stderr or "")[-300:].split()))
+    elif model and reported and reported != model and reported != model.split("/", 1)[-1]:
+        result.update(kind="model_unavailable",
+                      reason=f"OpenCode answered with {reported}, not {model}")
+    elif PROBE_ANSWER not in (text or ""):
+        result["reason"] = ("it did not give the expected answer; it replied: "
+                            + " ".join((text or "(nothing)").split())[:200])
+    else:
+        result["ok"] = True
+    return result

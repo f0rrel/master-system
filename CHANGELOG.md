@@ -5,6 +5,36 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Worker probes before switching
+- `ms limit <project> free|paid` (and Telegram's limit buttons) first sends the target
+  worker profile one small test request: same OpenCode binary, model, home and
+  environment, in an empty temporary directory, with tools except `bash` disabled and a
+  90-second timeout. The switch happens only if it answers correctly with the profile's
+  model. Otherwise the project stays paused and you are told why (`rate_limited`,
+  `model_unavailable`, `not_configured`, `provider_error`, timeout or a wrong answer) and
+  what to choose next.
+- Probes are recorded in history (`human_action` `worker_probe`). A paid profile's probe
+  counts toward the daily cap; the confirmation says so.
+
+### Planner: what must not happen
+- Every drafted task states 1–3 short "must not" conditions in the owner's terms, and the
+  planner is told that at least one test command must check one of them. A draft task
+  without them is a draft problem the planner is asked to fix (also in split drafts).
+- `show` lists them per task; `approve` appends them to the task description as a
+  "Must not:" section. No new spec field: tasks approved earlier keep their spec hashes
+  and run unchanged. A draft saved before upgrading needs them before it can be approved.
+
+### Lessons: no silent drops, and evidence per lesson
+- `ms lessons` lists approved lessons with whether each fits in the worker prompt for its
+  type, how many attempts used it and how many of those passed, and marks "never in a
+  passing attempt" after 5 attempts without a pass (a suggestion; nothing changes
+  automatically). It ends with "N approved lessons don't fit in the 2,000-character budget
+  and aren't used; reject or shorten some" when lessons are dropped; the budget is fixed.
+- `ms status` shows that line under "Needs you" only while lessons are dropped.
+- `attempt_started` records `lessons_used_ids` next to the `lessons_used` count. Older
+  attempts have no ids and are not counted.
+- `ms lessons --reject` accepts approved lesson ids, to retire a lesson.
+
 ### Upgrading an existing installation
 - No migration: the history schema stays v4, and events from before the upgrade read as
   before (no held cancellations, no tampering findings).

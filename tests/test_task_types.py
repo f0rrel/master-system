@@ -77,6 +77,7 @@ def test_the_verifier_fails_changes_outside_the_allowed_paths(tmp_path):
 def draft(**extra):
     task = {"id": "t-1", "title": "T", "size": "small", "type": "visual",
             "description": "d", "manual_check": "1. x", "files": ["www/css/a.css"],
+            "must_not": ["no other tile changes colour"],
             "tests": [{"path": "tests/tasks/t-1.spec.js", "content": "x"}],
             "test_commands": ["npx playwright test tests/tasks/t-1.spec.js"], **extra}
     return {"epic": {"id": "epic-e", "title": "E"}, "tasks": [task]}
