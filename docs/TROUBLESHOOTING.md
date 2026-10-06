@@ -48,6 +48,7 @@ Paths: `$MS_HOME` is the repository; `<clone>` is a managed project's dedicated 
 | A task is blocked although the worker never changed anything | Attempts before stall detection counted as failures | `ms reopen <project> <task> --reason "…"` |
 | Worker error 403 "free tier can only be used from within OpenCode" | A profile's tool configuration disabled `bash` | Keep `bash` in `task_types.<type>.tools` (it is added automatically) |
 | `ms lessons` shows nothing | No verified attempt has proposed lessons yet | Nothing to do |
+| Acceptance passes in the worker's worktree but fails in verification (missing `node_modules`, build output, generated files) | Verification runs in a fresh worktree of the committed result; nothing the worker left uncommitted or ignored is there | Acceptance must build what it needs from committed files: put installs and builds in `planner.setup` (approved plans run them before the checks), or in the task's `acceptance.commands` |
 | `check` fails during a `setup` command | Dependency installation or network failure | Run the setup command manually in `<clone>`; check connectivity |
 | The preview did not update after "batch done" | GitHub Pages builds take 1–2 minutes, or publishing failed | Wait and reload; `ms publish <project>` shows any error; `ms github check` |
 | "Publishing is not set up yet (GitHub App)" | App id or private key missing | `ms github check`; [GITHUB-SETUP.md](GITHUB-SETUP.md) |

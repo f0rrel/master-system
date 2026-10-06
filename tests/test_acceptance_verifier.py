@@ -3,6 +3,7 @@
 import json
 import sys
 import time
+from pathlib import Path
 
 import pytest
 import yaml
@@ -173,7 +174,8 @@ class Cheats:
         return ExecutionResult(status="success", reason="all tests pass now")
 
 
-def test_a_worker_that_rewrites_a_protected_test_gets_fail_and_cannot_complete(tmp_path):
+def run_with_acceptance(tmp_path, worker):
+    """One run_task then a completion attempt, with the real AcceptanceVerifier."""
     project = tmp_path / "projects" / "alpha-project"
     project.mkdir(parents=True)
     (project / "project.yaml").write_text(
@@ -193,8 +195,13 @@ def test_a_worker_that_rewrites_a_protected_test_gets_fail_and_cannot_complete(t
     history = InMemoryHistoryStore()
     master = Master(tmp_path / "projects")
 
-    result = AutonomousLoop(master, provider, Cheats(), AcceptanceVerifier(),
+    result = AutonomousLoop(master, provider, worker, AcceptanceVerifier(),
                             history=history).run("alpha")
+    return result, history, master
+
+
+def test_a_worker_that_rewrites_a_protected_test_gets_fail_and_cannot_complete(tmp_path):
+    result, history, master = run_with_acceptance(tmp_path, Cheats())
 
     verification = history.events(types=[EventType.VERIFICATION])[-1].payload
     assert verification["verdict"] == "fail"
@@ -202,3 +209,42 @@ def test_a_worker_that_rewrites_a_protected_test_gets_fail_and_cannot_complete(t
                                            "path": "tests/test_app.py"}
     assert result.approval_reason == "verification_fail"
     assert master.status("alpha")["tasks"][0]["status"] == "in_progress"
+
+
+# --- V1: verification runs in a fresh worktree of the result commit ---------------
+
+
+class PlantsIgnoredConftest:
+    """Leaves an ignored, uncommitted conftest.py that patches the code under test."""
+
+    def execute(self, task, context, *, workspace):
+        (workspace.path / "conftest.py").write_text(
+            "import app\napp.greet = lambda name: 'Hi ' + name\n")
+        common = git(workspace.path, "rev-parse", "--path-format=absolute",
+                     "--git-common-dir")
+        with open(f"{common}/info/exclude", "a") as exclude:
+            exclude.write("conftest.py\n")
+        return ExecutionResult(status="success", reason="all tests pass now")
+
+
+def test_an_ignored_file_left_in_the_worktree_does_not_reach_verification(tmp_path):
+    result, history, master = run_with_acceptance(tmp_path, PlantsIgnoredConftest())
+
+    finished = history.events(types=[EventType.ATTEMPT_FINISHED])[-1].payload
+    verification = history.events(types=[EventType.VERIFICATION])[-1].payload
+    assert finished["files_changed"] == []
+    assert verification["verdict"] == "fail"
+    assert verification["findings"][0]["kind"] == "command_failed"
+    assert master.status("alpha")["tasks"][0]["status"] == "in_progress"
+
+
+def test_the_verification_event_names_its_own_fresh_worktree(tmp_path):
+    result, history, master = run_with_acceptance(tmp_path, Cheats())
+
+    started = history.events(types=[EventType.ATTEMPT_STARTED])[-1].payload
+    finished = history.events(types=[EventType.ATTEMPT_FINISHED])[-1].payload
+    verification = history.events(types=[EventType.VERIFICATION])[-1].payload
+    verify_path = Path(verification["worktree"])
+    assert verify_path != Path(started["worktree"])
+    assert verify_path.name.endswith("-verify")
+    assert git(verify_path, "rev-parse", "HEAD") == finished["result_sha"]

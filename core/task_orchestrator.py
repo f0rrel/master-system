@@ -492,9 +492,19 @@ class TaskOrchestrator:
         if outcome != "finished" or not facts.get("result_sha"):
             return result
 
+        # Verification gets its own worktree of the committed result: anything the
+        # worker left uncommitted (ignored files included) is not there.
+        try:
+            verify_path = self._worktrees.free_path(project_id, f"{attempt_id}-verify")
+            self._worktrees.create(prepared["repository"], verify_path, attempt_id,
+                                   facts["result_sha"], branch=f"attempt/{verify_path.name}")
+        except WorkspaceError as error:
+            record(EventType.VERIFICATION, verdict=None, error_type=type(error).__name__,
+                   message=str(error))
+            raise
         verify_deadline, verify_deadline_at = _deadline(self._verification_timeout_s)
         verification_workspace = AttemptWorkspace(
-            path=worktree,
+            path=verify_path,
             base_sha=base_sha,
             result_sha=facts["result_sha"],
             deadline=verify_deadline,
@@ -531,6 +541,7 @@ class TaskOrchestrator:
                 verdict=None,
                 error_type=type(error).__name__,
                 message=str(error),
+                worktree=str(verify_path),
                 deadline_at=verify_deadline_at,
                 processes=process_records(verification_workspace),
             )
@@ -542,6 +553,7 @@ class TaskOrchestrator:
             summary=ver_res.summary,
             findings=jsonable(list(ver_res.findings)),
             evidence=jsonable(ver_res.evidence),
+            worktree=str(verify_path),
             deadline_at=verify_deadline_at,
             processes=process_records(verification_workspace),
         )

@@ -1,6 +1,7 @@
 """A verifier for a task's human-written acceptance criteria.
 
-It checks the attempt's committed result in the orchestrator's worktree, using
+It checks the attempt's committed result in a worktree the orchestrator made for
+verification (a fresh checkout of ``result_sha``, never the worker's), using
 only what the orchestrator provides (``workspace.path``, ``base_sha``,
 ``result_sha``) and what the human wrote (``task["acceptance"]``). Nothing
 comes from the worker.

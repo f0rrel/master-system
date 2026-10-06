@@ -178,7 +178,7 @@ def test_after_a_raise_the_partial_work_is_recorded(tmp_path):
 # --- A6: the verifier never takes a location from the worker -------------------
 
 
-def test_the_verifier_works_in_the_orchestrators_worktree_not_the_workers_claim(tmp_path):
+def test_the_verifier_works_in_a_fresh_worktree_of_the_result_not_the_workers_claim(tmp_path):
     elsewhere = tmp_path / "somewhere-else"
     elsewhere.mkdir()
     worker = Writes(artifacts={"workdir": str(elsewhere), "summary": "trust me"})
@@ -189,7 +189,9 @@ def test_the_verifier_works_in_the_orchestrators_worktree_not_the_workers_claim(
     started = payload(history, EventType.ATTEMPT_STARTED)
     finished = payload(history, EventType.ATTEMPT_FINISHED)
     call = verifier.calls[0]
-    assert call["path"] == Path(started["worktree"])
+    verification = payload(history, EventType.VERIFICATION)
+    assert call["path"] == Path(verification["worktree"]) != Path(started["worktree"])
+    assert git(call["path"], "rev-parse", "HEAD") == finished["result_sha"]
     assert call["base"] == started["base_sha"] and call["result"] == finished["result_sha"]
     assert set(call["evidence"]) == {"base_sha", "result_sha", "files_changed",
                                      "files_changed_count", "diffstat", "outcome"}
