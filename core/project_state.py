@@ -1,6 +1,7 @@
 import contextlib
 import os
 import stat
+import sys
 import tempfile
 from pathlib import Path
 from typing import NamedTuple
@@ -430,9 +431,12 @@ class ProjectState:
 
 
 if __name__ == "__main__":
-    state = ProjectState(
-        Path(__file__).parent.parent / "projects" / "ai-system"
-    )
+    # Usage: python core/project_state.py PROJECT_DIR
+    # (a directory holding project.yaml, milestones.yaml and tasks.yaml).
+    if len(sys.argv) != 2:
+        print("usage: python core/project_state.py PROJECT_DIR", file=sys.stderr)
+        sys.exit(2)
+    state = ProjectState(Path(sys.argv[1]))
 
     print("PROJECT")
     print(state.project())
@@ -445,9 +449,10 @@ if __name__ == "__main__":
     for milestone in state.milestones():
         print(milestone)
 
-    print("\nTASKS IN MILESTONE 'foundation'")
-    for task in state.tasks_in_milestone("foundation"):
-        print(task)
+    for milestone in state.milestones()[:1]:
+        print(f"\nTASKS IN MILESTONE '{milestone['id']}'")
+        for task in state.tasks_in_milestone(milestone["id"]):
+            print(task)
 
     print("\nTASKS WITH STATUS 'in_progress'")
     for task in state.tasks_with_status("in_progress"):

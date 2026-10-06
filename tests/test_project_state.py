@@ -14,7 +14,7 @@ from core.project_state import (
 )
 
 
-PROJECT_PATH = Path(__file__).parent.parent / "projects" / "ai-system"
+PROJECT_PATH = Path(__file__).parent / "fixtures" / "projects" / "sample-project"
 MODULE_PATH = Path(__file__).parent.parent / "core" / "project_state.py"
 
 
@@ -98,8 +98,8 @@ def sandbox(make_project):
 def test_load_project(state):
     project = state.project()
 
-    assert project["id"] == "ai-system"
-    assert project["name"] == "Personal AI Work System"
+    assert project["id"] == "sample-project"
+    assert project["name"] == "Sample Project"
     assert project["status"] == "active"
 
 
@@ -213,8 +213,8 @@ def test_tasks_with_status_rejects_unknown_status(state):
 def test_progress(state):
     summary = state.progress()
 
-    assert summary["project_id"] == "ai-system"
-    assert summary["project_name"] == "Personal AI Work System"
+    assert summary["project_id"] == "sample-project"
+    assert summary["project_name"] == "Sample Project"
     assert summary["total_tasks"] == 4
     assert summary["task_status_counts"] == {
         "planned": 2,
@@ -455,7 +455,7 @@ def test_demo_does_not_modify_tasks_yaml():
     before = (PROJECT_PATH / "tasks.yaml").read_bytes()
 
     result = subprocess.run(
-        [sys.executable, str(MODULE_PATH)],
+        [sys.executable, str(MODULE_PATH), str(PROJECT_PATH)],
         capture_output=True,
         text=True,
         check=False,
@@ -467,8 +467,8 @@ def test_demo_does_not_modify_tasks_yaml():
     for section in ("PROJECT", "VALIDATION", "MILESTONES", "PROGRESS"):
         assert section in result.stdout
 
-    assert "ai-system" in result.stdout
-    assert "Personal AI Work System" in result.stdout
+    assert "sample-project" in result.stdout
+    assert "Sample Project" in result.stdout
 
 
 def test_demo_does_not_modify_any_project_file():
@@ -479,7 +479,7 @@ def test_demo_does_not_modify_any_project_file():
     }
 
     subprocess.run(
-        [sys.executable, str(MODULE_PATH)],
+        [sys.executable, str(MODULE_PATH), str(PROJECT_PATH)],
         capture_output=True,
         text=True,
         check=True,

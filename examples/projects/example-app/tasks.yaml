@@ -1,0 +1,42 @@
+tasks:
+- id: app-1
+  milestone: epic-greeting
+  title: Greet the visitor by name
+  status: planned
+  size: small
+  description: >
+    Add greet(name) to src/greeting.js returning "Hello, <name>!" and show it on the
+    start page. Replace old code; don't leave the previous implementation behind as a
+    fallback.
+  acceptance:
+    commands:
+    - npm ci --no-audit --no-fund
+    - node --test tests/tasks/app-1-greeting.test.js
+    - node --test tests/unit/*.test.js
+    protected_paths:
+    - tests/*
+    - package.json
+    - package-lock.json
+  manual_check: |-
+    1. Open the preview.
+    2. Enter a name and confirm the greeting shows it.
+- id: app-2
+  milestone: epic-greeting
+  title: Remember the last name entered
+  status: planned
+  size: small
+  depends_on: [app-1]
+  description: >
+    Store the last entered name in localStorage and prefill the input on load.
+  acceptance:
+    commands:
+    - npm ci --no-audit --no-fund
+    - node --test tests/tasks/app-2-remember.test.js
+    - node --test tests/unit/*.test.js
+    protected_paths:
+    - tests/*
+    - package.json
+    - package-lock.json
+  manual_check: |-
+    1. Open the preview and enter a name.
+    2. Reload the page and confirm the name is prefilled.

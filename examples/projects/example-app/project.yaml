@@ -1,0 +1,27 @@
+# A fictional project definition, for reference. Copy it to your projects root
+# (~/.config/master-system/projects/<id>/ by default) and adapt it.
+id: example-app
+name: Example App
+description: >
+  A small static web app, used to illustrate a hands-off project definition.
+status: active
+repository: ~/managed/example-app      # the dedicated clone the system works in
+base_branch: develop
+auto_integrate: true                   # the service may run it and integrate into develop
+github:
+  repo: example-user/example-app
+  release_branch: main
+  site_dir: public                     # optional: publish this directory as the preview site
+planner:
+  test_dir: tests/tasks
+  test_suffixes: [".test.js"]
+  syntax_check: "node --check {path}"
+  test_command_examples: ["node --test {path}"]
+  setup:
+    - npm ci --no-audit --no-fund
+  base_checks:
+    - node --test tests/unit/*.test.js
+  protected_paths:
+    - tests/*
+    - package.json
+    - package-lock.json

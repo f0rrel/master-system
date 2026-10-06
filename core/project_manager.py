@@ -33,10 +33,9 @@ if __package__ in (None, ""):
 
 import yaml
 
+from core.paths import default_projects_root
 from core.project_state import ProjectState
 
-
-DEFAULT_PROJECTS_ROOT = Path(__file__).resolve().parent.parent / "projects"
 
 PROJECT_FILENAME = "project.yaml"
 
@@ -84,7 +83,7 @@ def _declared_id(state):
 
 class ProjectManager:
     def __init__(self, root=None):
-        self.root = Path(root) if root is not None else DEFAULT_PROJECTS_ROOT
+        self.root = Path(root).expanduser() if root is not None else default_projects_root()
 
         if not self.root.is_dir():
             raise FileNotFoundError(f"Projects root not found: {self.root}")

@@ -1,0 +1,5 @@
+id: sample-project
+name: Sample Project
+description: >
+  A fictional project used by the test suite.
+status: active

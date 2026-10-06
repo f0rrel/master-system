@@ -26,13 +26,13 @@ class FakeProvider:
 
 def make_engine(reply, master=None):
     if master is None:
-        master = Master("projects")
+        master = Master()
     p = FakeProvider(reply=reply)
     return ReasoningEngine(p, master, ReasoningInterface(master)), p
 
 
 def test_decision_act():
-    reply = '{"decision":"act","reason":"do it","operation":{"operation":"create_task","project_id":"ai-system","task_id":"t1","milestone":"ai-system","title":"T"}}'
+    reply = '{"decision":"act","reason":"do it","operation":{"operation":"create_task","project_id":"sample-project","task_id":"t1","milestone":"sample-project","title":"T"}}'
     e, p = make_engine(reply)
     prop = e.parse(reply)
     assert prop.reasoning == "do it"
@@ -65,7 +65,7 @@ def test_decision_needs_information():
 
 
 def test_decision_request_approval():
-    reply = '{"decision":"request_approval","reason":"needs approval","operation":{"operation":"create_task","project_id":"ai-system","task_id":"t2","milestone":"ai-system","title":"T2"}}'
+    reply = '{"decision":"request_approval","reason":"needs approval","operation":{"operation":"create_task","project_id":"sample-project","task_id":"t2","milestone":"sample-project","title":"T2"}}'
     e, _ = make_engine(reply)
     prop = e.parse(reply)
     assert len(prop.entries) == 1
@@ -86,14 +86,14 @@ def test_act_without_operation_invalid():
 
 
 def test_wait_with_operation_invalid():
-    reply = '{"decision":"wait","reason":"x","operation":{"operation":"create_task","project_id":"ai-system","task_id":"t3","milestone":"ai-system","title":"T3"}}'
+    reply = '{"decision":"wait","reason":"x","operation":{"operation":"create_task","project_id":"sample-project","task_id":"t3","milestone":"sample-project","title":"T3"}}'
     e, _ = make_engine(reply)
     with pytest.raises(ReasoningError):
         e.parse(reply)
 
 
 def test_blocked_with_operation_invalid():
-    reply = '{"decision":"blocked","reason":"x","operation":{"operation":"create_task","project_id":"ai-system","task_id":"t3","milestone":"ai-system","title":"T3"}}'
+    reply = '{"decision":"blocked","reason":"x","operation":{"operation":"create_task","project_id":"sample-project","task_id":"t3","milestone":"sample-project","title":"T3"}}'
     e, _ = make_engine(reply)
     with pytest.raises(ReasoningError):
         e.parse(reply)
@@ -108,17 +108,17 @@ def test_request_approval_without_operation_invalid():
 
 def test_provider_called_at_most_once():
     reply = '{"decision":"wait","reason":"ok","operation":null}'
-    master = Master("projects")
+    master = Master()
     p = FakeProvider(reply=reply)
     e = ReasoningEngine(p, master, ReasoningInterface(master))
-    prop = e.reason("do nothing", "ai-system")
+    prop = e.reason("do nothing", "sample-project")
     assert p.calls == 1
 
 
 def test_no_automatic_retry():
-    master = Master("projects")
+    master = Master()
     p = FakeProvider(error=ProviderError("fail"))
     e = ReasoningEngine(p, master, ReasoningInterface(master))
     with pytest.raises(ReasoningError):
-        e.reason("test", "ai-system")
+        e.reason("test", "sample-project")
     assert p.calls == 1

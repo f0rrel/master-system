@@ -79,7 +79,7 @@ def build_parser():
         "--root",
         type=Path,
         default=None,
-        help="Projects root. Defaults to the repository's projects directory.",
+        help="Projects root (default: ~/.config/master-system/projects).",
     )
     parser.add_argument(
         "--project",

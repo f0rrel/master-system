@@ -595,7 +595,7 @@ def test_root_flag_isolates_the_cli_from_the_real_projects(projects_root):
     code, out, _ = run_cli("projects", root=projects_root)
 
     assert code == 0
-    assert "ai-system" not in out
+    assert "sample-project" not in out
 
 
 def test_output_is_deterministic(projects_root):

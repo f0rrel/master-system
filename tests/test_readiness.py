@@ -165,15 +165,15 @@ def test_duplicate_dependencies_handled(tmp_path):
 def test_existing_projects_without_depends_on_remain_valid(tmp_path):
     from core.master import Master
     # use existing
-    m = Master('projects')
-    m.status('ai-system')  # should work
+    m = Master()
+    m.status('sample-project')  # should work
 
 
 def test_master_context_contains_readiness(tmp_path):
     from core.master import Master
     from core.work_manager import calculate_readiness
-    m = Master('projects')
-    st = m.status('ai-system')
+    m = Master()
+    st = m.status('sample-project')
     # basic check
     assert 'tasks' in st
 

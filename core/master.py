@@ -499,8 +499,8 @@ def build_parser():
         default=None,
         metavar="PATH",
         help=(
-            "Projects root to operate on. Defaults to the projects directory "
-            "shipped with this repository. Place it before the command."
+            "Projects root to operate on. Defaults to "
+            "~/.config/master-system/projects. Place it before the command."
         ),
     )
 

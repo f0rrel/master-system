@@ -289,7 +289,7 @@ def build_parser():
     parser = argparse.ArgumentParser(prog="python -m core.attempts",
                                      description="Human commands for task attempts.")
     parser.add_argument("--root", default=None, metavar="PATH",
-                        help="Projects root (default: the repository's projects/).")
+                        help="Projects root (default: ~/.config/master-system/projects).")
     parser.add_argument("--state-dir", default=None, metavar="PATH",
                         help="State directory holding history.sqlite and sessions/.")
     commands = parser.add_subparsers(dest="command", metavar="<command>", required=True)

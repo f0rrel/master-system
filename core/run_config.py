@@ -37,7 +37,7 @@ max_retries = 1
 max_attempts_per_task = 3
 attempt_timeout_s = 1800
 verification_timeout_s = 1800
-# projects_root = "/path/to/projects"
+# projects_root = "~/.config/master-system/projects"   # the default
 
 [budget]                          # priced spend caps (USD)
 daily_usd = 0.50

@@ -1,5 +1,6 @@
 """Shared fixtures: isolated runtime state, isolated git, throwaway repositories."""
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -7,12 +8,21 @@ import pytest
 
 from core.paths import RuntimePaths
 
+FIXTURE_PROJECTS = Path(__file__).parent / "fixtures" / "projects"
+
 
 @pytest.fixture(autouse=True)
 def _isolate_runtime_and_git(tmp_path_factory, monkeypatch):
-    """No test may touch the owner's real state directory or git configuration."""
+    """No test may touch the owner's real state, configuration, projects or git settings.
+
+    The default projects root ($XDG_CONFIG_HOME/master-system/projects) holds a copy
+    of the fictional fixture projects.
+    """
     data_home = tmp_path_factory.mktemp("xdg-data")
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    config_home = tmp_path_factory.mktemp("xdg-config")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    shutil.copytree(FIXTURE_PROJECTS, config_home / "master-system" / "projects")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     for key, value in {

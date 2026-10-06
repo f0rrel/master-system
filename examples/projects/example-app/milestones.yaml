@@ -1,0 +1,4 @@
+milestones:
+- id: epic-greeting
+  name: Personal greeting
+  status: in_progress

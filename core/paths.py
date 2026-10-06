@@ -5,6 +5,11 @@ state directory, ``$XDG_DATA_HOME/master-system/`` (``~/.local/share/master-syst
 when XDG_DATA_HOME is unset or not absolute). Attempt worktrees live in a
 sibling, ``master-system-worktrees/``, so a worktree is never inside the state
 directory. Both are configurable; these are only the defaults.
+
+Project definitions (``project.yaml``, ``milestones.yaml``, ``tasks.yaml`` per
+project) are private configuration, kept outside this repository: by default in
+``$XDG_CONFIG_HOME/master-system/projects/`` (``~/.config/master-system/projects/``),
+or wherever ``[run] projects_root`` points.
 """
 
 from __future__ import annotations
@@ -14,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
 
-__all__ = ["RuntimePaths", "STATE_DIR_NAME", "WORKTREES_DIR_NAME"]
+__all__ = ["RuntimePaths", "STATE_DIR_NAME", "WORKTREES_DIR_NAME", "default_projects_root"]
 
 STATE_DIR_NAME = "master-system"
 WORKTREES_DIR_NAME = "master-system-worktrees"
@@ -26,6 +31,18 @@ def _data_home(env: Mapping[str, str]) -> Path:
     if configured and Path(configured).is_absolute():
         return Path(configured)
     return Path.home() / ".local" / "share"
+
+
+def _config_home(env: Mapping[str, str]) -> Path:
+    configured = env.get("XDG_CONFIG_HOME")
+    if configured and Path(configured).is_absolute():
+        return Path(configured)
+    return Path.home() / ".config"
+
+
+def default_projects_root(env: Optional[Mapping[str, str]] = None) -> Path:
+    """Where project definitions live when no root is configured."""
+    return _config_home(os.environ if env is None else env) / STATE_DIR_NAME / "projects"
 
 
 @dataclass(frozen=True)

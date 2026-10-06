@@ -113,7 +113,7 @@ def test_master_defaults_to_the_repository_projects_root():
     master = Master()
 
     assert master.root.is_dir()
-    assert "ai-system" in master.list_projects()
+    assert "sample-project" in master.list_projects()
 
 
 def test_status_reports_identity_and_progress(master):
@@ -677,11 +677,11 @@ def test_real_ai_system_project_is_not_modified_by_master(root):
 
     real = Master()
 
-    assert "ai-system" in real.list_projects()
+    assert "sample-project" in real.list_projects()
 
-    before = real.status("ai-system")
+    before = real.status("sample-project")
 
     for project_id in master.list_projects():
         master.status(project_id)
 
-    assert real.status("ai-system") == before
+    assert real.status("sample-project") == before

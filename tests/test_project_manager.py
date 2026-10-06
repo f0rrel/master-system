@@ -7,11 +7,11 @@ import pytest
 import yaml
 
 from core.project_manager import (
-    DEFAULT_PROJECTS_ROOT,
     ProjectManager,
     UnknownProjectError,
 )
 from core.project_state import ProjectState
+from core.paths import default_projects_root
 
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -106,9 +106,17 @@ def test_lists_every_discovered_project(two_projects):
     assert ProjectManager(two_projects).list_projects() == ["alpha", "beta"]
 
 
-def test_default_root_is_the_repository_projects_directory():
-    assert DEFAULT_PROJECTS_ROOT == REPO_ROOT / "projects"
-    assert ProjectManager().list_projects() == ["ai-system", "match-legends"]
+def test_default_root_is_private_configuration_outside_the_repository(monkeypatch, tmp_path):
+    assert ProjectManager().root == default_projects_root()
+    assert REPO_ROOT not in ProjectManager().root.parents
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    assert default_projects_root() == tmp_path / "cfg" / "master-system" / "projects"
+    monkeypatch.setenv("XDG_CONFIG_HOME", "relative/ignored")
+    assert default_projects_root() == Path.home() / ".config" / "master-system" / "projects"
+
+
+def test_the_repository_holds_no_project_definitions():
+    assert not (REPO_ROOT / "projects").exists()
 
 
 def test_root_is_configurable(tmp_path):
@@ -820,15 +828,15 @@ def test_three_way_malformed_duplicate_is_reported_once_per_directory(
     }
 
 
-def test_overview_of_repository_project():
+def test_overview_of_the_default_root():
     overview = ProjectManager().overview()
 
-    assert overview["project_count"] == 2
+    assert overview["project_count"] == 1
     assert overview["problem_count"] == 0
-    assert [p["project_id"] for p in overview["projects"]] == ["ai-system", "match-legends"]
+    assert [p["project_id"] for p in overview["projects"]] == ["sample-project"]
     assert all(p["project_status"] == "active" for p in overview["projects"])
-    assert overview["totals"]["tasks"] == 4 + 8
-    assert overview["totals"]["milestones"] == 8 + 2
+    assert overview["totals"]["tasks"] == 4
+    assert overview["totals"]["milestones"] == 8
 
 
 def test_manager_reads_without_writing(projects_root):
@@ -848,19 +856,19 @@ def test_manager_reads_without_writing(projects_root):
     assert snapshot_tree(projects_root) == before
 
 
-def test_reads_repository_projects_without_writing():
-    before = snapshot_tree(DEFAULT_PROJECTS_ROOT)
+def test_reads_default_projects_without_writing():
+    before = snapshot_tree(default_projects_root())
 
     manager = ProjectManager()
     manager.list_projects()
     manager.problems()
     manager.overview()
 
-    assert snapshot_tree(DEFAULT_PROJECTS_ROOT) == before
+    assert snapshot_tree(default_projects_root()) == before
 
 
 def test_demo_does_not_modify_project_files():
-    before = snapshot_tree(DEFAULT_PROJECTS_ROOT)
+    before = snapshot_tree(default_projects_root())
 
     result = subprocess.run(
         [sys.executable, str(MODULE_PATH)],
@@ -871,10 +879,10 @@ def test_demo_does_not_modify_project_files():
 
     assert result.returncode == 0, result.stderr
     assert "PROJECTS ROOT" in result.stdout
-    assert "ai-system" in result.stdout
+    assert "sample-project" in result.stdout
     assert "OVERVIEW" in result.stdout
     assert "PROBLEMS" in result.stdout
-    assert snapshot_tree(DEFAULT_PROJECTS_ROOT) == before
+    assert snapshot_tree(default_projects_root()) == before
 
 
 def test_demo_runs_as_a_module():
@@ -887,4 +895,4 @@ def test_demo_runs_as_a_module():
     )
 
     assert result.returncode == 0, result.stderr
-    assert "ai-system" in result.stdout
+    assert "sample-project" in result.stdout
