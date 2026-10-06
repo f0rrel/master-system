@@ -21,6 +21,27 @@ from core.workspace import AttemptWorkspace, branch_tip, fast_forward
 
 __all__ = ["make_approver", "make_checker"]
 
+#: Markers meaning "a module is missing"; not a broken test when the module is one
+#: the task itself will create.
+MISSING_MODULE = ("Cannot find module", "ERR_MODULE_NOT_FOUND", "ModuleNotFoundError",
+                  "No module named")
+
+
+def _names_new_file(output: str, new_files) -> bool:
+    """Whether a missing-module error is about one of the files the task will create."""
+    import re
+    from pathlib import PurePosixPath
+
+    for line in output.splitlines():
+        if not any(marker in line for marker in MISSING_MODULE):
+            continue
+        for name in new_files:
+            path = PurePosixPath(name)
+            if re.search(rf"(^|[/'\"\s.]){re.escape(path.stem)}({re.escape(path.suffix)})?"
+                         r"(['\"\s]|$)", line):
+                return True
+    return False
+
 IDENTITY = {"GIT_AUTHOR_NAME": "Master System planner",
             "GIT_AUTHOR_EMAIL": "master-system@localhost",
             "GIT_COMMITTER_NAME": "Master System planner",
@@ -74,9 +95,13 @@ def make_checker(master, paths, worker_env, timeout_s: float = 1800):
                         path=shlex.quote(test["path"])))
                     item(f"{task['id']}: {test['path']} passes the syntax check",
                          outcome.returncode == 0, output.strip()[-300:])
+            # Files the task will create: a test may fail because they do not exist yet.
+            new_files = [f for f in task.get("files") or []
+                         if isinstance(f, str) and not (path / f).exists()]
             for command in task["test_commands"]:
                 outcome, output = run(command)
-                broken = [m for m in settings["broken_test_markers"] if m in output]
+                broken = [m for m in settings["broken_test_markers"] if m in output
+                          and not (m in MISSING_MODULE and _names_new_file(output, new_files))]
                 if outcome.timed_out:
                     item(f"{task['id']}: {command}", False, "timed out")
                 elif outcome.returncode == 0:

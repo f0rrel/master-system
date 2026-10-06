@@ -432,3 +432,23 @@ def test_a_draft_never_re_adds_epics_that_already_exist(env):
     chat.turn("plan epic 1 from the backlog")
     assert chat.state.draft["backlog"] == [{"id": "epic-new", "title": "New one"}]
     assert chat.problems() == []
+
+
+NEW_MODULE = ("const test = require('node:test');\nconst assert = require('node:assert');\n"
+              "const { wave } = require('../../wave.js');\n"
+              "test('waves', () => assert.strictEqual(wave(), 'o/'));\n")
+
+
+def test_a_test_of_a_module_the_task_creates_may_fail_because_it_is_missing(env):
+    chat = env["chat"]([answer(draft(NEW_MODULE, files=["wave.js"]))])
+    chat.turn("go")
+    result = chat.check()
+    assert result["ok"], result["items"]
+
+
+def test_a_missing_module_the_task_does_not_create_is_still_broken(env):
+    chat = env["chat"]([answer(draft(NEW_MODULE, files=["greet.js"]))])
+    chat.turn("go")
+    result = chat.check()
+    assert not result["ok"]
+    assert any("Cannot find module" in i["note"] for i in result["items"] if not i["ok"])
