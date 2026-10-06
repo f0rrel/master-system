@@ -146,13 +146,13 @@ def test_the_prompt_carries_the_human_spec():
     from core.opencode_backend import build_prompt
 
     prompt = build_prompt({
-        "id": "ml-1", "title": "Seeded rng", "description": "Add createRng(seed).",
-        "acceptance": {"commands": ["npm ci", "node --test tests/tasks/ml-1.test.js"],
+        "id": "app-1", "title": "Seeded rng", "description": "Add createRng(seed).",
+        "acceptance": {"commands": ["npm ci", "node --test tests/tasks/app-1.test.js"],
                        "protected_paths": ["tests/*", "package.json"]},
     })
 
     assert "Add createRng(seed)." in prompt
-    assert "node --test tests/tasks/ml-1.test.js" in prompt
+    assert "node --test tests/tasks/app-1.test.js" in prompt
     assert "tests/*" in prompt and "package.json" in prompt
     assert "Do not push" in prompt
 

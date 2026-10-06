@@ -188,7 +188,7 @@ class Releaser:
         app = self._app_factory(repo_name)
         if app is None:
             return {"opened": False, "notes": notes["markdown"],
-                    "message": "The GitHub App is not set up yet (docs/github-setup.md); "
+                    "message": "The GitHub App is not set up yet (docs/GITHUB-SETUP.md); "
                     "here are the notes."}
         self.add_changelog(project_id, repo, develop, version, notes["tasks"])
         self._push(app, repo, [develop], self._askpass_dir)

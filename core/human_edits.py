@@ -8,8 +8,8 @@ made through ``run_cli task ...`` go through here: under the project lock
 and after. YAML stays authoritative: if the process died between the two,
 the report shows the spec change as unexplained, not hidden.
 
-Edits made directly in YAML or with ``core.master`` are not recorded (README
-gap M4); the report flags them as unexplained spec changes.
+Edits made directly in YAML or with ``core.master`` are not recorded
+(docs/ARCHITECTURE.md, gap M4); the report flags them as unexplained spec changes.
 """
 
 from __future__ import annotations

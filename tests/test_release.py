@@ -35,10 +35,10 @@ def env(tmp_path):
     (project / "milestones.yaml").write_text(yaml.safe_dump(
         {"milestones": [{"id": "m", "name": "M", "status": "in_progress"}]}))
     (project / "tasks.yaml").write_text(yaml.safe_dump({"tasks": [
-        {"id": "ml-9", "milestone": "m", "title": "First thing", "status": "completed"},
-        {"id": "ml-10", "milestone": "m", "title": "Second thing", "status": "completed"}]}))
+        {"id": "app-9", "milestone": "m", "title": "First thing", "status": "completed"},
+        {"id": "app-10", "milestone": "m", "title": "Second thing", "status": "completed"}]}))
     history = InMemoryHistoryStore()
-    for task_id, attempt, sha in (("ml-9", A1, shas[0]), ("ml-10", A2, shas[1])):
+    for task_id, attempt, sha in (("app-9", A1, shas[0]), ("app-10", A2, shas[1])):
         common = dict(run_id="r", project_id="ml", task_id=task_id, attempt_id=attempt)
         history.append(type=EventType.ATTEMPT_STARTED, event_id=attempt, run_id="r",
                        project_id="ml", task_id=task_id,
@@ -89,13 +89,13 @@ def test_prepare_opens_a_pr_with_notes_from_history(env):
     result = env["releaser"].prepare("ml")
 
     assert result["opened"] and result["version"] == "v0.1"
-    assert result["tasks"] == ["ml-9", "ml-10"]
+    assert result["tasks"] == ["app-9", "app-10"]
     [(method, path, body)] = env["app"].calls
     assert (method, path) == ("POST", "/repos/o/r/pulls")
     assert body["head"] == "develop" and body["base"] == "main"
     notes = body["body"]
-    assert "## ml-9: First thing" in notes and "## ml-10: Second thing" in notes
-    assert "2. See ml-10." in notes and "Verified: pass (1 acceptance command(s))" in notes
+    assert "## app-9: First thing" in notes and "## app-10: Second thing" in notes
+    assert "2. See app-10." in notes and "Verified: pass (1 acceptance command(s))" in notes
     assert env["pushes"] == [["develop"]]
     [event] = env["history"].events(types=[EventType.RELEASE])
     assert event.payload["stage"] == "pr_opened" and event.payload["pr_number"] == 7
@@ -152,7 +152,7 @@ def test_a_local_main_ahead_of_github_does_not_count_as_released(env):
     repo = env["repo"]
     git(repo, "merge", "-q", "--ff-only", "develop")  # integrated locally, never pushed
     result = env["releaser"].prepare("ml")
-    assert result["opened"] and result["tasks"] == ["ml-9", "ml-10"]
+    assert result["opened"] and result["tasks"] == ["app-9", "app-10"]
 
 
 def test_prepare_commits_a_changelog_entry_to_develop(env):
@@ -162,7 +162,7 @@ def test_prepare_commits_a_changelog_entry_to_develop(env):
     changelog = git(repo, "show", "develop:CHANGELOG.md")
     assert changelog.startswith("# Changelog")
     assert "## v0.1 (" in changelog
-    assert "- ml-9: First thing" in changelog and "- ml-10: Second thing" in changelog
+    assert "- app-9: First thing" in changelog and "- app-10: Second thing" in changelog
     assert git(repo, "rev-parse", "develop^") == before
     env["releaser"].prepare("ml")  # updating the PR does not duplicate the entry
     assert git(repo, "show", "develop:CHANGELOG.md").count("## v0.1 (") == 1

@@ -52,7 +52,7 @@ provider = "deepseek"
 model = "deepseek-v4-flash"
 chat_usd = 0.30                   # cap per chat
 
-[github]                          # the GitHub App (docs/github-setup.md)
+[github]                          # the GitHub App (docs/GITHUB-SETUP.md)
 app_id = ""                       # its private key: ~/.config/master-system/github-app.pem
 
 [prices]                          # USD per million tokens, by model name

@@ -18,7 +18,8 @@ hold for all of them:
   only if the deadline actually passed.
 * **Nothing is left behind.** The process starts in a new session (its own
   process group). When it finishes, any member of that group still running is
-  killed. A process that calls ``setsid`` itself escapes this (README gap N1).
+  killed. A process that calls ``setsid`` itself escapes this
+  (docs/ARCHITECTURE.md, gap N1).
 
 ``on_spawn(pid, pgid)`` is called right after launch, so the caller can record
 the process before waiting on it.

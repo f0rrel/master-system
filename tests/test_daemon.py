@@ -226,10 +226,10 @@ def test_notifier_posts_title_and_message():
         return Response()
 
     notifier = Notifier("https://ntfy.example/", "topic-1", opener=opener)
-    assert notifier.send("Batch done", "Done: ml-6", tags="tada", click="https://x/develop/")
+    assert notifier.send("Batch done", "Done: app-6", tags="tada", click="https://x/develop/")
     [request] = seen
     assert request.full_url == "https://ntfy.example/topic-1"
-    assert request.data == b"Done: ml-6"
+    assert request.data == b"Done: app-6"
     assert request.get_header("Title") == "Batch done"
     assert request.get_header("Click") == "https://x/develop/"
 

@@ -15,7 +15,7 @@
     ms notify setup            create the phone-notification topic, show how to subscribe
     ms notify test             send a test notification
     ms notify send "text"      send your own short message (optional --link URL)
-    ms github setup --app-id N save the GitHub App's id (docs/github-setup.md)
+    ms github setup --app-id N save the GitHub App's id (docs/GITHUB-SETUP.md)
     ms github check            check the GitHub App, rulesets and Pages, in plain words
 
 Lower-level tools stay in ``core.run_cli``.
@@ -1037,8 +1037,8 @@ def _command_github(args, out):
         else default_key_path()
     print("GitHub setup check:", file=out)
     line(bool(config.github.app_id), f"App ID configured ({config.github.app_id or 'missing'})",
-         "ms github setup --app-id <the App ID>  (docs/github-setup.md, step 3)")
-    line(key.exists(), f"private key at {key}", "docs/github-setup.md, step 4")
+         "ms github setup --app-id <the App ID>  (docs/GITHUB-SETUP.md, step 3)")
+    line(key.exists(), f"private key at {key}", "docs/GITHUB-SETUP.md, step 4")
     if key.exists():
         line(oct(key.stat().st_mode)[-3:] == "600", "private key readable only by you",
              f"chmod 600 {key}")
@@ -1058,7 +1058,7 @@ def _command_github(args, out):
             app.token()
             line(True, "the app is installed on the repository and can sign in")
         except (GitHubError, RuntimeError) as error:
-            line(False, f"the app cannot sign in: {error}", "docs/github-setup.md, step 5")
+            line(False, f"the app cannot sign in: {error}", "docs/GITHUB-SETUP.md, step 5")
             continue
         try:
             installations = app.request("GET", "/installation/repositories")

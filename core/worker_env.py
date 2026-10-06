@@ -1,8 +1,8 @@
 """The environment every worker and verification process gets: an allowlist.
 
-Workers run as the owner's user (README gap N1), so the least the orchestrator
-can do is not hand them secrets. A worker or verification process never
-inherits the control plane's environment. It gets exactly:
+Workers run as the owner's user (docs/ARCHITECTURE.md, gap N1), so the least
+the orchestrator can do is not hand them secrets. A worker or verification
+process never inherits the control plane's environment. It gets exactly:
 
 * ``PATH``: the toolchain directories given (for example a Node 22 ``bin``
   directory), then ``/usr/local/bin:/usr/bin:/bin``. It is built here, so it never

@@ -22,7 +22,7 @@ engine should be able to emit something like::
 
     {
         "operation": "create_task",
-        "project_id": "ai-system",
+        "project_id": "example-app",
         "task_id": "foundation-005",
         "milestone": "foundation",
         "title": "Build reasoning interface",
