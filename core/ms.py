@@ -10,6 +10,7 @@
     ms backlog <project>       epics in priority order; `add "Title"`, `priority <epic> <N>`
     ms lessons <project>       lessons workers proposed; --approve all|IDS, --reject IDS|rest
     ms pick <project> <task> <asset> <n>   choose one of a task's generated images
+    ms limit <project> [wait|free|paid]    answer a worker limit (see ms status)
     ms pause | resume          stop or allow new work (a running task finishes)
     ms stop                    stop the current run now, and pause
     ms daemon                  the background service loop (run by systemd)
@@ -113,6 +114,8 @@ def _command_install(args, out):
 def build_daemon(config, config_path):
     from core.daemon import Daemon
     from core.host import subprocess_runner
+    from core.worker_limits import LimitState
+    from core.worker_models import FreeModelCheck, opencode_lister
     from core.images import waiting_tasks
     from core.master import Master
     from core.publish import Publisher
@@ -132,9 +135,10 @@ def build_daemon(config, config_path):
                           paths.state_dir)
     releaser = Releaser(master, history, lambda repo: github_app(config, repo),
                         askpass_dir=paths.state_dir, prices=config.prices, publisher=publisher)
+    notifier = Notifier.from_file(config.daemon.ntfy_server)
     return Daemon(
         master=master, history=history, config=config, state_dir=paths.state_dir,
-        notifier=Notifier.from_file(config.daemon.ntfy_server),
+        notifier=notifier,
         run=subprocess_runner(config_path, env_file, paths.state_dir / "logs" / "runs",
                               paths.state_dir),
         max_failures=max(3, 2 * len(config.worker.ladder)),
@@ -143,6 +147,9 @@ def build_daemon(config, config_path):
         prepare=[asset_step(config, master, paths, env_file)],
         waiting=lambda project_id: waiting_tasks(master, project_id),
         summarize=morning_summary(config, master, history, paths, releaser, publisher),
+        limits=LimitState(paths.state_dir),
+        checks=[FreeModelCheck(config, paths.state_dir, opencode_lister(config.worker.opencode_bin),
+                               notifier)],
     )
 
 
@@ -159,7 +166,8 @@ def morning_summary(config, master, history, paths, releaser, publisher):
                 master, history, config, project_id, stalled=stalled,
                 pending_release=releaser.open_pending(project_id)),
             max_failures=max(3, 2 * len(config.worker.ladder)), reason=reason,
-            project_ids=projects)
+            project_ids=projects,
+            labels={n: p.get("label", n) for n, p in config.worker.profiles.items()})
         written = write_summary(summary, paths.state_dir / "reports")
         message = (f"{headline(summary)}\nThe service stopped: {reason}.\n"
                    f"Details: ms report --summary ({written['html'].as_uri()})")
@@ -512,6 +520,12 @@ def owner_needs(master, history, config, project_id, *, stalled=(), pending_rele
         needs.append(f"Release {pending_release['version']} waits for your merge: "
                      f"{pending_release.get('pr_url')}")
     needs += image_picks(master, project_id, _paths().state_dir)
+    from core.worker_limits import LimitState, describe
+
+    limit = describe(project_id, LimitState(_paths().state_dir).get(project_id),
+                     {n: p.get("label", n) for n, p in config.worker.profiles.items()})
+    if limit:
+        needs.append(limit)
     pending_lessons = LessonStore(master.project_state(project_id).project_path).pending()
     if pending_lessons:
         needs.append(f"{len(pending_lessons)} lesson(s) from workers wait for your review: "
@@ -1235,6 +1249,48 @@ def _command_pick(args, out):
     return 0
 
 
+def _command_limit(args, out):
+    from core.history import EventType
+    from core.master import EXPECTED_ERRORS, Master
+    from core.sqlite_history import SQLiteHistoryStore
+    from core.worker_limits import LimitState, _local_time, choice_profile, describe
+
+    config, paths = _config(args), _paths()
+    limits = LimitState(paths.state_dir)
+    labels = {n: p.get("label", n) for n, p in config.worker.profiles.items()}
+    state = limits.get(args.project)
+    if args.choice is None:
+        print(describe(args.project, state, labels) or
+              f"No worker limit in {args.project}.", file=out)
+        return 0
+    try:
+        project = Master(config.run.projects_root).project_state(args.project).project()
+    except EXPECTED_ERRORS as error:
+        print(f"error: {error}", file=out)
+        return 1
+    order = project.get("workers") or config.worker.workers
+    profile = choice_profile(args.choice, order, config.worker.profiles, state.get("profile"))
+    try:
+        state = limits.choose(args.project, args.choice, profile)
+    except ValueError as error:
+        print(f"error: {error}", file=out)
+        return 1
+    SQLiteHistoryStore(paths.history_path).append(
+        type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex, project_id=args.project,
+        payload={"actor": "owner", "action": "worker_limit_choice", "choice": args.choice,
+                 "profile": profile, "limited": state.get("override_for")
+                 or state.get("profile")})
+    if args.choice == "wait":
+        print(f"The project waits until {_local_time(state['until'])}, then continues with "
+              f"{labels.get(state.get('profile'), state.get('profile'))}.", file=out)
+    else:
+        paid = " It is paid: its cost counts toward the daily cap." if args.choice == "paid" \
+            else ""
+        print(f"The project continues with {labels.get(profile, profile)} until "
+              f"{_local_time(state['override_until'])}.{paid}", file=out)
+    return 0
+
+
 def _command_release(args, out):
     result = build_releaser(_config(args)).prepare(args.project)
     print(result["message"], file=out)
@@ -1401,6 +1457,10 @@ def build_parser():
     backlog.add_argument("--priority", type=int, default=None)
     backlog.add_argument("--id", default=None)
     backlog.set_defaults(handler=_command_backlog)
+    limit = commands.add_parser("limit", help="Answer a worker limit: wait, free or paid.")
+    limit.add_argument("project")
+    limit.add_argument("choice", nargs="?", choices=["wait", "free", "paid"])
+    limit.set_defaults(handler=_command_limit)
     pick = commands.add_parser("pick", help="Choose a generated image for a task.")
     pick.add_argument("project")
     pick.add_argument("task")

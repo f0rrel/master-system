@@ -159,6 +159,10 @@ class OpenCodeCliBackend(ExecutionBackend):
             raise OpenCodeBackendError(f"Failed to invoke OpenCode: {e}") from e
 
         summary, usage, counts = parse_events(outcome.stdout)
+        from core.worker_limits import classify_failure
+
+        limit = None if outcome.timed_out else classify_failure(
+            outcome.stdout, outcome.stderr, outcome.returncode, usage.get("steps", 0))
         artifacts: dict[str, object] = {
             "command": cmd[:-1] + ["<prompt>"],
             "project_id": project_id,
@@ -169,6 +173,12 @@ class OpenCodeCliBackend(ExecutionBackend):
             "event_counts": counts,
             "stderr_tail": outcome.stderr[-4000:],
         }
+        if limit is not None:
+            # A provider limit, not a failure of the task (core.worker_limits).
+            artifacts["limit"] = limit
+            return ExecutionResult(status="failed",
+                                   reason=f"the worker's provider is limited ({limit['kind']})",
+                                   artifacts=artifacts, usage=usage)
         if outcome.timed_out:
             artifacts["timeout"] = True
             return ExecutionResult(status="failed", reason="the attempt deadline passed",

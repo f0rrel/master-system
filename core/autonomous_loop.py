@@ -179,6 +179,8 @@ class AutonomousLoop:
         stop_check=None,
         auto_integrate=None,
         tiers=None,
+        limits=None,
+        limit_policy=None,
     ):
         if not isinstance(master, Master):
             raise TypeError(f"expected a Master, got {type(master).__name__}")
@@ -229,6 +231,8 @@ class AutonomousLoop:
             worker_env=worker_env,
             auto_integrate=auto_integrate,
             tiers=tiers,
+            limits=limits,
+            limit_policy=limit_policy,
         )
 
     @property

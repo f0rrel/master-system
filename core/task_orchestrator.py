@@ -113,6 +113,8 @@ class TaskOrchestrator:
         worker_env: Optional[Mapping[str, str]] = None,
         auto_integrate=None,
         tiers=None,
+        limits=None,
+        limit_policy=None,
     ):
         if attempt_timeout_s <= 0 or verification_timeout_s <= 0:
             raise ValueError("timeouts must be positive")
@@ -134,6 +136,10 @@ class TaskOrchestrator:
         #: Worker tiers (core.worker_tiers.TierSet): the orchestrator, never
         #: Master, picks each attempt's worker profile from history.
         self._tiers = tiers
+        #: core.worker_limits.LimitState: waits, the owner's choices, overrides.
+        self._limits = limits
+        #: {"max_auto_wait_minutes", "unknown_limit_wait_minutes"}.
+        self._limit_policy = dict(limit_policy or {})
         #: Process logs live in the state dir, never in the worktree.
         self._log_root = (
             Path(log_root) if log_root is not None
@@ -143,6 +149,20 @@ class TaskOrchestrator:
     @property
     def worktrees(self) -> GitWorktrees:
         return self._worktrees
+
+    def _profile_choice(self, project_id):
+        """(profile, why) from the owner's override or the worker order; None: tiers/default."""
+        if self._tiers is None:
+            return None
+        override = self._limits.override(project_id) if self._limits is not None else None
+        if override in self._tiers.backends:
+            return override, "owner"
+        if self._tiers.ladder:
+            return None
+        project = self._master.project_state(project_id).project()
+        workers = [w for w in project.get("workers") or self._tiers.workers
+                   if w in self._tiers.backends]
+        return (workers[0], "order") if workers else None
 
     def _propose_lessons(self, project_id, task, attempt_id, reply) -> list:
         """A verified attempt's LESSON lines go to the owner's pending list, nowhere else."""
@@ -255,7 +275,17 @@ class TaskOrchestrator:
             raise WorkspaceRefusal("workspace_refused", str(error)) from error
         branch = GitWorktrees.branch_for(attempt_id)
         runner, worker_env, tier_facts = self._runner, self._worker_env, {}
-        if self._tiers is not None and self._tiers.ladder:
+        chosen = self._profile_choice(project_id)
+        if chosen is not None:
+            backend = self._tiers.backends[chosen[0]]
+            runner = TaskExecutionRunner(self._master, backend)
+            worker_env = dict(self._tiers.envs[chosen[0]])
+            tier_facts = {"worker_profile": chosen[0],
+                          "worker_model": self._tiers.models.get(chosen[0]),
+                          "worker_paid": bool((self._tiers.paid or {}).get(chosen[0])),
+                          "worker_choice": chosen[1]}
+            worker = describe_worker(backend)
+        elif self._tiers is not None and self._tiers.ladder:
             from core.worker_tiers import choose_tier
             from core.history import InMemoryHistoryStore
 
@@ -355,8 +385,12 @@ class TaskOrchestrator:
             raised = error
 
         timed_out = workspace.expired() or any(p.timed_out for p in workspace.processes)
+        limit = (exec_res.artifacts.get("limit")
+                 if exec_res is not None and isinstance(exec_res.artifacts, Mapping) else None)
         if raised is not None:
             outcome = "error"
+        elif limit:
+            outcome = "limited"
         elif timed_out:
             outcome = "timed_out"
         else:
@@ -385,6 +419,18 @@ class TaskOrchestrator:
             )
         if raised is not None:
             finished.update(error_type=type(raised).__name__, message=str(raised))
+        profile = tier_facts.get("worker_profile") or "default"
+        if limit:
+            finished["limit"] = jsonable(limit)
+            if self._limits is not None:
+                state = self._limits.record_limit(
+                    project_id, profile, limit,
+                    self._limit_policy.get("max_auto_wait_minutes", 120),
+                    self._limit_policy.get("unknown_limit_wait_minutes", 60))
+                finished["limit_decision"] = {"phase": state.get("phase"),
+                                              "until": state.get("until")}
+        elif self._limits is not None and outcome == "finished":
+            self._limits.record_success(project_id, profile)
         record(EventType.ATTEMPT_FINISHED, **finished)
         if raised is not None:
             raise raised
@@ -406,7 +452,7 @@ class TaskOrchestrator:
         }
 
         # Only a finished attempt with a committed result is verified. A timed
-        # out attempt is not: the completion gate refuses it either way.
+        # out or limited attempt is not: the completion gate refuses it either way.
         if outcome != "finished" or not facts.get("result_sha"):
             return result
 

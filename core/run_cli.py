@@ -96,6 +96,9 @@ class SetupError(RuntimeError):
 # --- composition ---------------------------------------------------------------------
 
 
+from core.worker_limits import LimitState  # noqa: E402
+
+
 def build_provider(config):
     """The Master's reasoning provider, from [master]. The one place names live."""
     m = config.master
@@ -155,16 +158,18 @@ def build_tiers(config):
     from core.worker_tiers import TierSet
 
     w = config.worker
-    if not w.ladder:
+    if not w.ladder and not w.workers:
         return None
     backends, envs, models = {}, {}, {}
-    for name in w.ladder:
+    for name in dict.fromkeys((*w.ladder, *w.workers, *w.profiles)):
         profile = w.profiles[name]
         backends[name] = OpenCodeCliBackend(opencode_bin=w.opencode_bin, model=profile["model"],
                                             extra_args=w.extra_args)
         envs[name] = build_worker_env(config, home=profile["home"] or w.home)
         models[name] = profile["model"]
-    return TierSet(tuple(w.ladder), backends, envs, models)
+    return TierSet(tuple(w.ladder), backends, envs, models, workers=tuple(w.workers),
+                   paid={n: p.get("paid", False) for n, p in w.profiles.items()},
+                   labels={n: p.get("label", n) for n, p in w.profiles.items()})
 
 
 def build_worker_env(config, home=None):
@@ -202,6 +207,22 @@ def budget_check(ctx, session_id, max_cost_usd):
     return check
 
 
+def limit_check(ctx, project_id, inner=None):
+    """A stop_check that also ends the run while the project waits for a worker limit."""
+    limits = LimitState(ctx.paths.state_dir)
+
+    def check():
+        phase = limits.paused(project_id) if project_id else None
+        if phase:
+            state = limits.get(project_id)
+            return (f"worker {state.get('profile')} is limited ({state.get('kind')}); "
+                    + ("waiting for the owner's choice" if phase == "needs_choice"
+                       else f"waiting until {state.get('until')}"))
+        return inner() if inner is not None else None
+
+    return check
+
+
 def build_runner(ctx, stop_check=None):
     from core.session_runner import SessionRunner
     from core.session_store import FileSessionStore
@@ -227,6 +248,10 @@ def build_runner(ctx, stop_check=None):
         worker_env=worker_env,
         stop_check=stop_check,
         tiers=build_tiers(ctx.config),
+        limits=LimitState(ctx.paths.state_dir),
+        limit_policy={"max_auto_wait_minutes": ctx.config.worker.max_auto_wait_minutes,
+                      "unknown_limit_wait_minutes":
+                          ctx.config.worker.unknown_limit_wait_minutes},
         auto_integrate=AutoIntegrator(ctx.master, ctx.history, ctx.paths, verifier=verifier,
                                       worker_env=worker_env,
                                       verification_timeout_s=r.verification_timeout_s),
@@ -241,9 +266,10 @@ def _describe(session) -> str:
             f"(stop: {session.last_stop_reason}, steps: {session.steps_completed})")
 
 
-def _run(ctx, args, out, first, session_id):
+def _run(ctx, args, out, first, session_id, project_id):
     """Run once, then (with --until-stopped) resume while runs end at the step limit."""
-    runner = build_runner(ctx, budget_check(ctx, session_id, args.max_cost_usd))
+    runner = build_runner(ctx, limit_check(ctx, project_id,
+                                           budget_check(ctx, session_id, args.max_cost_usd)))
     started = time.monotonic()
     session = first(runner)
     runs = 1
@@ -267,12 +293,18 @@ def _command_start(ctx, args, out):
         f"{args.project_id}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}")
     return _run(ctx, args, out,
                 lambda runner: runner.start(args.project_id, args.objective, session_id),
-                session_id)
+                session_id, args.project_id)
 
 
 def _command_resume(ctx, args, out):
+    from core.session_store import FileSessionStore
+
+    try:
+        project_id = FileSessionStore(ctx.paths.sessions_dir).load(args.session_id).project_id
+    except (OSError, ValueError, KeyError):
+        project_id = None
     return _run(ctx, args, out, lambda runner: runner.resume(args.session_id),
-                args.session_id)
+                args.session_id, project_id)
 
 
 # --- status ------------------------------------------------------------------------------

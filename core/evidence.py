@@ -209,9 +209,12 @@ class HistoryEvidence:
     # --- attempt limit ---------------------------------------------------
 
     def attempts_in_scope(self, project_id: str, task_id: str) -> int:
-        """Attempts that started, whatever their outcome. Errors and
-        interruptions count: the worker actually started."""
-        return len(attempts_for_task(self._history, project_id, task_id, **self._scope()))
+        """Attempts that started, whatever their outcome, except worker limits.
+        Errors and interruptions count: the worker actually started. A
+        ``limited`` attempt (the provider refused) is infrastructure."""
+        return sum(1 for a in attempts_for_task(self._history, project_id, task_id,
+                                                **self._scope())
+                   if a.outcome != "limited")
 
     def attempt_limit_reached(self, project_id: str, task_id: str) -> bool:
         return self.attempts_in_scope(project_id, task_id) >= self.max_attempts

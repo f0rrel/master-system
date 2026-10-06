@@ -32,7 +32,8 @@ def build_summary(master, history, since_iso: str, prices: Mapping,
                   default_model: Optional[str] = None,
                   needs_you: Callable[[str], list] = lambda project_id: [],
                   max_failures: int = 3, reason: str = "",
-                  now: Optional[datetime] = None, project_ids=None) -> dict:
+                  now: Optional[datetime] = None, project_ids=None,
+                  labels: Optional[Mapping] = None) -> dict:
     from core.daemon import work_for
     from core.report import spend_since
 
@@ -55,8 +56,10 @@ def build_summary(master, history, since_iso: str, prices: Mapping,
                 reviews[e.task_id] = {"verdict": review.get("verdict") or review.get("status"),
                                       "notes": review.get("notes") or review.get("note") or "",
                                       "screenshots": list(review["screenshots"])}
+        workers, limits = _workers(history, project_id, since_iso, prices, labels or {})
         projects.append({
             "project_id": project_id, "name": status.get("name") or project_id,
+            "workers": workers, "limits": limits,
             "done": [{"id": t, "title": tasks[t].get("title"),
                       "manual_check": tasks[t].get("manual_check")} for t in done],
             "blocked": [{"id": t, "title": tasks[t].get("title")} for t in blocked],
@@ -68,6 +71,58 @@ def build_summary(master, history, since_iso: str, prices: Mapping,
     spend = spend_since(history, since_iso, prices, default_model)
     return {"since": since_iso, "at": (now or datetime.now(timezone.utc)).isoformat(),
             "reason": reason, "projects": projects, "spend": spend}
+
+
+def _workers(history, project_id, since_iso, prices, labels) -> tuple:
+    """Attempts and cost per worker profile, and the worker limits met, since ``since_iso``."""
+    from core.report import _price
+
+    profiles, workers, limits = {}, {}, []
+    for e in history.events(project_id=project_id,
+                            types=[EventType.ATTEMPT_STARTED, EventType.ATTEMPT_FINISHED]):
+        if e.created_at < since_iso:
+            continue
+        if e.type is EventType.ATTEMPT_STARTED:
+            profiles[e.attempt_id] = e.payload.get("worker_profile") or "default"
+            continue
+        profile = profiles.get(e.attempt_id, "default")
+        label = labels.get(profile, profile)
+        if e.payload.get("limit"):
+            decision = e.payload.get("limit_decision") or {}
+            limits.append({"worker": label, "kind": e.payload["limit"].get("kind"),
+                           "at": e.created_at,
+                           "reset_at": e.payload["limit"].get("reset_at") or "unknown",
+                           "phase": decision.get("phase"), "until": decision.get("until")})
+            continue
+        row = workers.setdefault(label, {"worker": label, "attempts": 0, "cost_usd": 0.0})
+        row["attempts"] += 1
+        usage = e.payload.get("worker_reported_usage") or {}
+        model = (e.payload.get("artifacts") or {}).get("model")
+        cost = _price(usage, model, prices) if model else None
+        row["cost_usd"] += cost if cost is not None else float(usage.get("reported_cost_usd") or 0)
+    return list(workers.values()), limits
+
+
+def _time(iso) -> str:
+    if not iso or iso == "unknown":
+        return "unknown"
+    return datetime.fromisoformat(iso).astimezone().strftime("%H:%M")
+
+
+def limit_line(limit: Mapping) -> str:
+    what = {"rate_limited": "rate-limited", "model_unavailable": "unavailable",
+            "not_configured": "not set up", "provider_error": "failing"}.get(limit["kind"],
+                                                                              "limited")
+    then = {"auto_wait": f"waited automatically until {_time(limit.get('until'))}",
+            "chosen_wait": f"waited until {_time(limit.get('until'))} (your choice)",
+            "needs_choice": "waiting for your choice"}.get(limit.get("phase"), "")
+    return (f"{limit['worker']} was {what} at {_time(limit['at'])} (reset "
+            f"{_time(limit['reset_at'])}" + (f"; {then}" if then else "") + ")")
+
+
+def worker_line(row: Mapping) -> str:
+    cost = f" for ${row['cost_usd']:.2f}" if row["cost_usd"] >= 0.005 else ""
+    return f"{row['attempts']} attempt(s) ran on {row['worker']}{cost}"
 
 
 def headline(summary: Mapping) -> str:
@@ -106,6 +161,10 @@ def render_text(summary: Mapping) -> str:
                          + ", ".join(r["screenshots"]))
             if r.get("notes"):
                 lines.append(f"    reviewer: {r['notes']}")
+        if p.get("limits") or len(p.get("workers") or []) > 1:
+            lines.append("  Workers: " + "; ".join(
+                [limit_line(x) for x in p.get("limits") or []]
+                + [worker_line(w) for w in p.get("workers") or []]) + ".")
         if p["needs_you"]:
             lines.append("  Needs you:")
             lines += [f"    - {item}" for item in p["needs_you"]]
@@ -131,6 +190,11 @@ def render_html(summary: Mapping) -> str:
             + (f"<br><small>{e(' '.join(str(t['manual_check']).split()))}</small>"
                if t.get("manual_check") else "") + "</li>" for t in p["done"]) + "</ul>"
             if p["done"] else "<p>Nothing.</p>"))
+        if p.get("limits") or len(p.get("workers") or []) > 1:
+            body.append("<h3>Workers</h3><ul>" + "".join(
+                f"<li>{e(line)}</li>" for line in
+                [limit_line(x) for x in p.get("limits") or []]
+                + [worker_line(w) for w in p.get("workers") or []]) + "</ul>")
         stuck = p["blocked"] + p["exhausted"]
         if stuck:
             body.append("<h3>Blocked</h3><ul>" + "".join(

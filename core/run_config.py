@@ -20,6 +20,13 @@ extra_args = []
 node_min_major = 22
 playwright_browsers_path = "~/.cache/ms-playwright"
 
+# Worker profiles in order of preference (the first is used). On a long limit the owner
+# chooses: ms limit <project> wait | free | paid.
+# [worker]  workers = ["big-pickle", "space-bunny", "deepseek-flash"]
+# [worker.profiles.big-pickle]     model = "opencode/big-pickle"; label = "Big Pickle"
+# [worker.profiles.deepseek-flash] model = "deepseek/deepseek-flash"; paid = true
+#                                  home = "~/.local/share/master-system-worker-paid"
+# max_auto_wait_minutes = 120       # wait automatically for a known reset this close
 # Worker tiers (optional): cheapest first; a task moves up after 2 failed attempts.
 # [worker]  ladder = ["tier0", "tier1", "tier2"]
 # [worker.profiles.tier0]          # OpenCode's free default model
@@ -122,6 +129,16 @@ class WorkerConfig:
     profiles: Mapping[str, Mapping] = field(default_factory=dict)
     #: The escalation ladder, cheapest first (profile names).
     ladder: tuple = ()
+    #: Worker profiles in order of preference: the first is used; on a long limit the
+    #: owner may switch to the next free or a paid one (core.worker_limits). A project
+    #: may override it with ``workers`` in project.yaml. Empty: the default worker.
+    workers: tuple = ()
+    #: A known limit reset this close is waited for automatically.
+    max_auto_wait_minutes: float = 120
+    #: An unknown reset is waited for this long, once.
+    unknown_limit_wait_minutes: float = 60
+    #: How often the free worker models are checked (still listed, still free).
+    model_check_days: float = 7
 
 
 @dataclass(frozen=True)
@@ -261,17 +278,23 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
 
     w = _section(data, "worker", ("opencode_bin", "model", "home", "extra_args",
                                   "node_min_major", "playwright_browsers_path", "profiles",
-                                  "ladder"))
+                                  "ladder", "workers", "max_auto_wait_minutes",
+                                  "unknown_limit_wait_minutes", "model_check_days"))
     profiles = {}
     for name, value in (w.get("profiles") or {}).items():
-        if not isinstance(value, dict) or set(value) - {"model", "home"}:
-            raise ConfigError(f"[worker.profiles.{name}] takes only model and home")
+        if not isinstance(value, dict) or set(value) - {"model", "home", "paid", "label"}:
+            raise ConfigError(f"[worker.profiles.{name}] takes only model, home, paid and label")
+        if not isinstance(value.get("paid", False), bool):
+            raise ConfigError(f"[worker.profiles.{name}] paid must be true or false")
         profiles[name] = {"model": value.get("model") or None,
-                          "home": _path(value["home"]) if value.get("home") else None}
+                          "home": _path(value["home"]) if value.get("home") else None,
+                          "paid": value.get("paid", False),
+                          "label": str(value.get("label") or name)}
     ladder = tuple(w.get("ladder") or ())
-    unknown_profiles = [name for name in ladder if name not in profiles]
+    workers = tuple(w.get("workers") or ())
+    unknown_profiles = [name for name in (*ladder, *workers) if name not in profiles]
     if unknown_profiles:
-        raise ConfigError(f"[worker] ladder names unknown profiles {unknown_profiles}")
+        raise ConfigError(f"[worker] ladder/workers name unknown profiles {unknown_profiles}")
     defaults = WorkerConfig()
     extra_args = w.get("extra_args", [])
     if not isinstance(extra_args, list) or not all(isinstance(a, str) for a in extra_args):
@@ -288,6 +311,12 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
         ),
         profiles=profiles,
         ladder=ladder,
+        workers=workers,
+        max_auto_wait_minutes=_positive(w, "worker", "max_auto_wait_minutes",
+                                        defaults.max_auto_wait_minutes),
+        unknown_limit_wait_minutes=_positive(w, "worker", "unknown_limit_wait_minutes",
+                                             defaults.unknown_limit_wait_minutes),
+        model_check_days=_positive(w, "worker", "model_check_days", defaults.model_check_days),
     )
 
     r = _section(data, "run", ("max_steps", "max_retries", "max_attempts_per_task",

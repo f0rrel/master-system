@@ -73,3 +73,9 @@ class TierSet:
     backends: Mapping
     envs: Mapping
     models: Mapping
+    #: Profiles in order of preference (the first is used; core.worker_limits).
+    workers: tuple = ()
+    #: profile -> whether it costs money (counts toward the daily cap).
+    paid: Mapping = None
+    #: profile -> a readable name ("Big Pickle").
+    labels: Mapping = None

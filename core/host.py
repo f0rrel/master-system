@@ -88,3 +88,13 @@ def capture(argv, timeout=30) -> str:
         return (done.stdout + done.stderr).strip()
     except (OSError, subprocess.TimeoutExpired) as error:
         return f"({argv[0]} unavailable: {error})"
+
+
+def run_capture(argv, env, timeout=120):
+    """(exit code, stdout) of a control-plane helper command with an explicit environment."""
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, errors="replace",
+                              env=dict(env), timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return None, f"({argv[0]} failed: {error})"
+    return done.returncode, done.stdout

@@ -183,6 +183,8 @@ def build_report(history: HistoryStore, session_id: str,
             "files_changed": (finished.payload.get("diffstat") or {}).get("files")
             if finished else None,
             "seconds": _seconds(started.created_at, finished.created_at if finished else None),
+            "profile": started.payload.get("worker_profile"),
+            "limit": finished.payload.get("limit") if finished else None,
         })
 
     # --- tokens and cost ----------------------------------------------------
@@ -359,7 +361,12 @@ def render_report(report: dict) -> str:
     lines += ["", f"Attempts: {len(report['attempts'])}"]
     for a in report["attempts"]:
         lines.append(f"  {a['task_id']:<14} {a['outcome']:<11} verdict {a['verdict'] or '-':<17} "
-                     f"files {a['files_changed']}  {a['seconds']} s  {a['attempt_id'][:12]}")
+                     f"files {a['files_changed']}  {a['seconds']} s  {a['attempt_id'][:12]}"
+                     + (f"  worker {a['profile']}" if a.get("profile") else ""))
+        if a.get("limit"):
+            limit = a["limit"]
+            lines.append(f"      worker limit: {limit.get('kind')}, reset "
+                         f"{limit.get('reset_at') or 'unknown'} (not counted as a failure)")
     lines += ["", "Tokens and cost (USD; worker usage is the worker's own claim)"]
     for m in report["master_usage"]:
         lines.append(f"  master {m['reasoner']:<32} {_tokens(m['usage'])}  cost {m['cost_usd']}")

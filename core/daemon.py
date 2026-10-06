@@ -88,7 +88,8 @@ def failed_attempts_since_human(history, project_id: str, task_id: str) -> int:
             passed = set()
         elif e.type is EventType.VERIFICATION and e.payload.get("verdict") == "pass":
             passed.add(e.attempt_id)
-        elif e.type is EventType.ATTEMPT_FINISHED:
+        elif e.type is EventType.ATTEMPT_FINISHED and e.payload.get("outcome") != "limited":
+            # A worker limit is infrastructure, never the task's failure.
             count += 1
     # Attempts that later passed are not failures.
     return max(0, count - len(passed))
@@ -151,6 +152,11 @@ class Daemon:
     #: (since_iso, reason, stalled project ids) -> (title, message, click URL): writes
     #: the morning summary (core.summary) once the work runs out; None: no summary.
     summarize: Optional[Callable] = None
+    #: core.worker_limits.LimitState: projects waiting for a worker limit are skipped.
+    limits: Optional[object] = None
+    #: Called every cycle, even while paused (e.g. the weekly free-model check);
+    #: each returns lines for the log.
+    checks: list = field(default_factory=list)
 
     # --- files the service and `ms` share ---
 
@@ -194,8 +200,13 @@ class Daemon:
         log = []
         memory = self._memory()
         today = start_of_today_utc(self.now())[:10]
+        for check in self.checks:
+            try:
+                log += check() or []
+            except Exception as error:  # a check must not stop the service
+                log.append(f"check failed: {error}")
         if self.pause_flag.exists():
-            return ["paused"]
+            return log + ["paused"]
         spent = self.spent_today()
         daily = self.config.budget.daily_usd
         if spent >= daily:
@@ -225,6 +236,8 @@ class Daemon:
                 continue
             if self.is_busy(project_id):
                 log.append(f"{project_id}: busy")
+                continue
+            if self._limited(memory, project_id, log):
                 continue
             stalled = memory.get("stalled", {}).get(project_id)
             if stalled is not None and stalled == self._human_mark(project_id):
@@ -278,6 +291,8 @@ class Daemon:
                     extra.append(f"after-run step failed: {error}")
             progressed = self._report_changes(memory, project_id, session_id, before, code,
                                               extra)
+            if self._limited(memory, project_id, log):
+                continue  # a worker limit, not a lack of progress
             if not progressed:
                 # The same run would happen again in five minutes: wait for a
                 # human action (a task edit, a new task, a reopen) instead.
@@ -291,10 +306,34 @@ class Daemon:
             spent = self.spent_today()
             if spent >= daily:
                 break
-        if not ran and memory.get("work_since") and self.summarize is not None:
+        waiting = self.limits is not None and any(
+            self.limits.paused(p) in ("auto_wait", "chosen_wait")
+            for p in self.master.list_projects())
+        if not ran and not waiting and memory.get("work_since") and self.summarize is not None:
             log += self._summary(memory, "the backlog is done or waits for you")
         self._remember(memory)
         return log
+
+    def _limited(self, memory, project_id, log) -> bool:
+        """Skip a project that waits for a worker limit; ask the owner once when needed."""
+        if self.limits is None:
+            return False
+        phase = self.limits.paused(project_id)
+        if not phase:
+            return False
+        from core.worker_limits import describe
+
+        state = self.limits.get(project_id)
+        labels = {n: p.get("label", n) for n, p in self.config.worker.profiles.items()}
+        line = describe(project_id, state, labels)
+        if phase == "needs_choice":
+            # Always immediate: the project stays paused until the owner chooses.
+            self._notify_once(memory, f"limit:{project_id}:{state.get('profile')}:"
+                                      f"{state.get('since')}:{len(state.get('events', []))}",
+                              f"{project_id}: needs you", line, tags="hourglass",
+                              priority="high")
+        log.append(f"{project_id}: {line}")
+        return True
 
     @property
     def _batch(self) -> bool:
