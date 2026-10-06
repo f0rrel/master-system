@@ -393,3 +393,42 @@ def chat_render(chat):
     from core.planner import render_draft
 
     return render_draft(chat.state.draft)
+
+
+def test_asking_again_for_files_already_read_is_re_asked_once(env):
+    chat = env["chat"]([answer(read_files=["greet.js"]), answer(read_files=["greet.js"]),
+                        answer(draft(), reply="Here is a plan.")])
+    result = chat.turn("plan it")
+    assert result["draft_changed"] and len(chat._provider.prompts) == 3
+    assert "asked again for files you already have" in chat._provider.prompts[2]
+
+
+def test_long_files_are_cut_with_a_way_to_read_on(env, monkeypatch):
+    import core.planner as planner
+
+    repo = env["repo"]
+    git(repo, "checkout", "-q", "develop")
+    (repo / "big.js").write_text("".join(f"line {n}\n" for n in range(1, 101)))
+    git(repo, "add", "big.js")
+    git(repo, "commit", "-qm", "big")
+    git(repo, "checkout", "-q", "main")
+    monkeypatch.setattr(planner, "MAX_FILE_CHARS", 80)
+    chat = env["chat"]([])
+    text = chat.read_file("big.js")
+    assert text.startswith("(lines 1-") and 'read on with "big.js:' in text
+    part = chat.read_file("big.js:50-52")
+    assert part == "(lines 50-52 of 100)\nline 50\nline 51\nline 52"
+    assert chat.read_file("big.js:500-600") == "(the file has 100 lines)"
+    assert chat.read_file("../x:1-2") == "(refused: invalid path)"
+
+
+def test_a_draft_never_re_adds_epics_that_already_exist(env):
+    env["master"].add_backlog_epic("toy", "epic-hi", "Friendlier greetings", priority=1)
+    env["master"].add_backlog_epic("toy", "epic-bye", "Goodbyes", priority=2)
+    echoed = {**draft(), "backlog": [{"id": "epic-bye", "title": "Goodbyes"},
+                                     {"id": "epic-hi", "title": "Friendlier greetings"},
+                                     {"id": "epic-new", "title": "New one"}]}
+    chat = env["chat"]([answer(echoed)])
+    chat.turn("plan epic 1 from the backlog")
+    assert chat.state.draft["backlog"] == [{"id": "epic-new", "title": "New one"}]
+    assert chat.problems() == []

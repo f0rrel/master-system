@@ -67,14 +67,16 @@ SIZES = ("small", "medium", "hard")
 MAX_TASKS = 12
 MAX_BACKLOG = 12
 MAX_TEST_CHARS = 20000
-MAX_FILE_CHARS = 20000
+MAX_FILE_CHARS = 40000
 MAX_ROUNDS = 4  # model calls per owner message: reads, at most one re-ask, the answer
 PROMISE = re.compile(
     r"\b(i'?ll|i will|i'?m going to|let me|i need to|first,? i)\b[^.!?\n]{0,80}?"
     r"\b(read|look|check|review|examine|inspect|open|scan|go through)\b", re.IGNORECASE)
-NUDGE = ("SYSTEM NOTE: your previous answer promised to read or check something but did "
-         "nothing, and the owner has not seen it. Do it now, in this answer: list the files "
-         "in read_files, or ask your questions, or give the draft.")
+NUDGE = ("SYSTEM NOTE: your previous answer did not move the planning forward, and the owner "
+         "has not seen it: it promised to read or check something without listing new files, "
+         "or asked again for files you already have (their contents are above, as FILE "
+         "sections). Answer now: ask your questions or give the draft. List in read_files "
+         "only files or line ranges (\"path:START-END\") you have not seen yet.")
 LAST_ROUND = ("SYSTEM NOTE: no more files can be read in this turn. Answer the owner now "
               "with what you have: questions, a draft, or both.")
 BROKEN_TEST_MARKERS = ("SyntaxError", "Cannot find module", "ERR_MODULE_NOT_FOUND",
@@ -393,8 +395,10 @@ conflict in "reply" and ask in "questions". Drafts must fit its look, feel and a
 - When something is unclear or is the owner's decision (look and feel, external assets \
 and where they come from, scope, priorities), ask in "questions" instead of guessing. Keep questions few \
 and concrete; offer options.
-- BACKLOG lists the project's epics in priority order, numbered from 1. To add epics to \
-the backlog without planning them, put them in draft.backlog (id "epic-<slug>", title, \
+- BACKLOG lists the project's epics in priority order, numbered from 1. draft.backlog is \
+only for NEW epics the owner asks to add (leave it empty otherwise; never repeat epics \
+already listed). To add epics to the backlog without planning them, put them in \
+draft.backlog (id "epic-<slug>", title, \
 summary, optional priority) and leave draft.epic null and draft.tasks empty. When the owner \
 asks to plan a backlog epic ("plan epic 1"), draft ALL of its tasks in one draft, with \
 draft.epic.id set to that epic's id and its title; read the relevant code first.
@@ -423,7 +427,8 @@ behaviour, not implementation details.{guidance}
 setup and base checks are added automatically.
 - manual_check: short numbered steps the owner follows to see the result by hand (on the \
 preview, or by running the program).
-- To look at code, list paths in "read_files" (at most 6 per turn, from the file list). The \
+- To look at code, list paths in "read_files" (at most 6 per turn, from the file list); a \
+long file is cut, so read further parts as "path:START-END" (line numbers). The \
 system reads them and asks you again IN THE SAME TURN, before the owner sees anything, so \
 never answer "I'll read/check the files" without listing them in read_files: the owner \
 would only see that sentence. Don't invent file contents.
@@ -543,15 +548,39 @@ class PlannerChat:
         return [f"{prefix}-{n}" for n in range(start, start + count)]
 
     def read_file(self, path: str) -> str:
+        """A file of the base branch, or a line range of it ("path:START-END").
+
+        Long files are cut at a line boundary, with a note saying how to read on.
+        """
         repo, branch = self._repo()
-        if not re.match(r"^[\w./@+-]+$", path) or ".." in path:
+        span = re.match(r"^(.+):(\d+)-(\d+)$", path)
+        name, first = (span.group(1), int(span.group(2))) if span else (path, 1)
+        if not re.match(r"^[\w./@+-]+$", name) or ".." in name:
             return "(refused: invalid path)"
         try:
-            content = self._git(["show", f"refs/heads/{branch}:{path}"], repo)
+            content = self._git(["show", f"refs/heads/{branch}:{name}"], repo)
         except RuntimeError:
             return "(no such file)"
-        return content[:MAX_FILE_CHARS] + ("\n...(truncated)" if len(content) > MAX_FILE_CHARS
-                                           else "")
+        lines = content.splitlines()
+        last = min(int(span.group(3)), len(lines)) if span else len(lines)
+        first = max(1, first)
+        if first > last:
+            return f"(the file has {len(lines)} lines)"
+        shown, size = [], 0
+        for number in range(first, last + 1):
+            line = lines[number - 1]
+            if size + len(line) + 1 > MAX_FILE_CHARS and shown:
+                break
+            shown.append(line)
+            size += len(line) + 1
+        end = first + len(shown) - 1
+        text = "\n".join(shown)
+        if span or end < len(lines):
+            text = (f"(lines {first}-{end} of {len(lines)})\n" + text)
+        if end < last:
+            text += (f"\n...(cut at line {end} of {len(lines)}; read on with "
+                     f"\"{name}:{end + 1}-{min(last, end + 800)}\")")
+        return text
 
     def _file_list(self) -> list:
         repo, branch = self._repo()
@@ -625,7 +654,8 @@ class PlannerChat:
             if answer.get("draft") or last:
                 break
             already = {name for name, _ in extra_files}
-            wanted = [p for p in answer.get("read_files") or [] if isinstance(p, str)]
+            requested = [p for p in answer.get("read_files") or [] if isinstance(p, str)]
+            wanted = requested
             if not wanted and not answer.get("questions"):
                 # P1: the files were named in prose instead of read_files.
                 wanted = mentioned_files(answer.get("reply"), listing)
@@ -633,14 +663,15 @@ class PlannerChat:
             if wanted:
                 extra_files += [(p, self.read_file(p)) for p in wanted]
                 continue
-            if stalled(answer) and not nudged:
-                # P1: a promise to act with nothing to act on; ask again, once.
+            repeated = bool(requested) and not answer.get("questions")
+            if (stalled(answer) or repeated) and not nudged:
+                # P1: a promise to act with nothing new to act on; ask again, once.
                 note, nudged = NUDGE, True
                 continue
             break
         changed = False
         if isinstance(answer.get("draft"), dict):
-            self.state.draft = answer["draft"]
+            self.state.draft = self._without_known_epics(answer["draft"])
             self.state.check = None
             changed = True
         reply = str(answer.get("reply") or "").strip()
@@ -648,6 +679,17 @@ class PlannerChat:
         self.state.messages.append({"role": "planner", "text": reply, "questions": questions})
         self.save()
         return {"reply": reply, "questions": questions, "draft_changed": changed}
+
+    def _without_known_epics(self, draft) -> dict:
+        """Drop backlog entries that already exist: draft.backlog is only for new epics."""
+        if not isinstance(draft.get("backlog"), list):
+            return draft
+        known = {m.get("id") for m in self._master.status(self.project_id)["milestones"]}
+        epic = draft.get("epic") if isinstance(draft.get("epic"), dict) else {}
+        known.add(epic.get("id"))
+        backlog = [e for e in draft["backlog"]
+                   if not (isinstance(e, dict) and e.get("id") in known)]
+        return {**draft, "backlog": backlog}
 
     def _prompt(self, system, extra_files, note=None) -> str:
         parts = [system, self._context()]
