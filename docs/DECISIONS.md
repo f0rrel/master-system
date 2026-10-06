@@ -161,3 +161,14 @@ choice* — made during implementation and recorded here for review.
 | Workers are told to write files early and in pieces | The cut-off happened while composing six SVG drawings in one go | Implementation choice |
 | Every task type keeps the `bash` tool | OpenCode's free tier refuses requests without it (HTTP 403); found by a live test creating a file under each type | Implementation choice |
 | `ms reopen` puts a blocked task back to planned with a recorded human action, spec unchanged | A retry after an infrastructure fix needs no spec change | Approved |
+
+## Task size and splits
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| The Master's evidence covers only attempts since the task's last human action | A reopen must be a fresh start; ml-15 was blocked again from its pre-reopen failures | Approved |
+| Planner rule: one new thing per task, about 150 lines, bigger work as an ordered sequence with depends_on; every task has estimate_lines | Free models have a per-reply output limit; ml-15 (six drawings) never fit | Approved |
+| `check` flags oversized tasks (estimate, item count, files) with a suggested split; approve refuses them unless "approve anyway" (recorded) | Catch oversized tasks before they run, keep the owner's override | Approved; heuristics are implementation choices |
+| After one cut-off the next attempt writes incrementally; after two, the planner drafts a split for the owner instead of blocking | Recover without burning attempts; splitting changes the plan, so the owner approves it | Approved |
+| A split is a draft with `replaces`; approval cancels the task (`replaced_by`), inserts the replacements in its place and rewires dependents to all of them | The plan stays a single ordered list; nothing that depended on the task can start early | Implementation choice |
+| Escalate (set size to hard, the top tier) is offered only when worker tiers are configured | Escalation without tiers would do nothing | Approved |

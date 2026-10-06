@@ -139,6 +139,31 @@ and writes the epic and tasks atomically through `Master.add_planned_work` (huma
 recording a `human_action` per task with the draft's hash. Acceptance edits therefore stay
 human-approved.
 
+## Task size, cut-offs and splits (`core/task_size.py`, `core/splits.py`)
+
+**Size.** The planner's rules: one new thing per task (one module piece, one screen, one
+asset group), about `max_task_lines` (150) at most, bigger work as an ordered sequence
+with `depends_on`, each task's tests covering only its part, and an `estimate_lines`
+per task. `check` adds `size` findings (estimate missing or too large, more than three
+items created at once, more than three files) with a suggested split; `approve`
+refuses oversized drafts unless `approve anyway` (recorded as `size_override`).
+
+**Cut-offs.** A stalled attempt with `finish_reason: length` means the model spent its
+output on thinking. The next attempt's briefing carries a write-incrementally
+instruction (`recovery_note`). After a second cut-off since the last human action,
+`SplitStep` (a service step) has the planner draft a split: a draft with
+`replaces: <task>` in the task's own epic. It runs the draft's checks and notifies the
+owner with Approve / Reject (Escalate when a worker ladder exists). The task is
+`waiting` meanwhile (the service skips it, the Master sees `waiting_for_owner`).
+Approving calls `Master.split_task`: the task becomes `cancelled` with `replaced_by`,
+the new tasks take its place, and its dependents depend on all of them. Reject blocks
+the task; Escalate sets its size to `hard` (the top tier).
+
+**Fresh starts.** The Master's evidence for a task covers only attempts after its last
+human action (reopen, edit, pick, split decision); earlier ones are counted as
+`attempts_before_last_human_change`. Without this, a reopened task was blocked again
+from its old failures.
+
 ## Direction, task types and lessons
 
 **Direction** (`core/direction.py`): `docs/DIRECTION.md` (configurable) is read from the

@@ -37,6 +37,10 @@ code:
   with test files, acceptance commands and manual-check steps. Drafts are validated in a
   fresh worktree (tests must be valid and must fail on the current code) before they can
   be approved.
+- **Right-sized tasks**: the planner keeps each task to one new thing and about 150
+  lines; `check` flags oversized tasks with a suggested split. A worker that runs out
+  of output while planning is retried with a write-incrementally instruction, and then
+  the planner drafts a split for the owner to approve.
 - **Task types**: `developer`, `visual`, `logic`, `docs`, each with a skill doc, allowed
   paths and allowed tools that the orchestrator enforces.
 - **Shared project memory**: workers propose lessons after verified tasks; approved
@@ -276,13 +280,14 @@ ever run as a command.
 | Command | Description |
 | --- | --- |
 | `ms status [--details]` | Headline per project, items that need you, work finished since you last looked, upcoming work, links and today's spend. Also completes releases merged on GitHub. `--details` lists every task, session and recent event. |
-| `ms chat <project> [--new] [--file <path>]` | Talk to the planner. Continues the last open chat unless `--new`; `--file` sends a file as the first message. In-chat commands: `show`, `check`, `approve`, `discard`, `release`, `help`, `quit`. For multi-line input, paste it or put it between two lines containing only `"""`. |
+| `ms chat <project> [--new] [--file <path>]` | Talk to the planner. `approve anyway` also queues tasks the size check flagged. Continues the last open chat unless `--new`; `--file` sends a file as the first message. In-chat commands: `show`, `check`, `approve`, `discard`, `release`, `help`, `quit`. For multi-line input, paste it or put it between two lines containing only `"""`. |
 | `ms release <project>` | Commits a changelog entry to `develop` and opens a pull request `develop` → release branch with generated notes. Merging it approves the release. |
 | `ms report [<session>]` | A run's report: steps, attempts, verdicts, tokens and cost. Defaults to the latest run. |
 | `ms report --summary` | The latest morning summary, with a link to its HTML page (screenshot thumbnails). |
 | `ms backlog <project> [add "<title>" [--summary …] [--priority N] \| priority <epic> <N>]` | List the backlog in priority order; add a proposed epic; change an epic's priority (lower runs first). |
 | `ms lessons <project> [--approve all\|IDS] [--reject IDS\|rest]` | Review lessons workers proposed; only approved lessons are used. |
 | `ms pick <project> <task> <asset> <n>` | Choose one of a task's generated image candidates; it is committed and the task can run. |
+| `ms split <project> <task> draft ["guidance"] \| approve [anyway] \| reject \| escalate` | Ask the planner to split a too-big task, or decide a pending split (also offered in Telegram). Approving replaces the task in place; its dependents wait for all new tasks. |
 | `ms reopen <project> <task> [--reason …]` | Put a blocked task back in the queue (spec unchanged, recorded); its attempt budget starts over. |
 | `ms telegram pair\|status\|test\|unpair` | Pair the Telegram bot with your account (one-time code), check it, send a test message, or forget the owner. |
 | `ms limit <project> [wait\|free\|paid]` | Show or answer a worker limit: wait for the reset, switch to the next free worker profile, or use the paid one (counts toward the daily cap). |
@@ -333,6 +338,7 @@ Settings live in `~/.config/master-system/config.toml`. Every key is optional.
 | | `timeout_s` | `300` | Per-call timeout (seconds) |
 | | `chat_usd` | `0.30` | Cost cap per planner chat |
 | | `max_output_tokens` | `16000` | Output tokens per planner reply (a whole epic with tests) |
+| project `planner.max_task_lines` | | `150` | Lines one task may add or change before `check` flags it |
 | `[worker]` | `opencode_bin` | `~/.opencode/bin/opencode` | Worker binary |
 | | `model` | the worker home's default | Passed to the worker as `--model` |
 | | `home` | `~/.local/share/master-system-worker` | The worker's `HOME` and only credential store |

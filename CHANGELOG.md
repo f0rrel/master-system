@@ -5,6 +5,16 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Right-sized tasks
+- Fixed: a reopened task could be blocked again at once, because the Master still saw
+  its attempts from before the reopen. The Master now sees only attempts since the
+  task's last human action.
+- Planner sizing rules (one new thing, about 150 lines, ordered splits, `estimate_lines`);
+  `check` flags oversized tasks with a suggested split; `approve anyway` overrides.
+- After a cut-off the next attempt writes incrementally; after a second, the planner
+  drafts a split, sent with Approve / Reject (/ Escalate) buttons. `ms split` and
+  `/splits` decide it. Approving replaces the task in place and rewires its dependents.
+
 ### Stalled workers
 - Fixed: a task creating a large new file (six SVG drawings) failed three times without
   changing anything: the free model spent its whole 32,000-token output budget on

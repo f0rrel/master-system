@@ -41,6 +41,10 @@ Paths: `$MS_HOME` is the repository; `<clone>` is a managed project's dedicated 
 | A button says "This button has expired." | Buttons work once and expire after 48 hours | Run the command again (`/lessons`, `/pick`, `/limit`) |
 | Telegram notifications stopped, ntfy still works | Telegram send failed or the bot was unpaired; ntfy is the fallback | `ms telegram test` |
 | An attempt is `stalled` in `ms report` | The worker changed nothing: cut off while thinking (`finish_reason: length`) or busy for minutes without writing | Usually nothing; it is not a failure and is retried. After 3 stalls the task waits: split it or describe a smaller first step, then `ms reopen <project> <task>` |
+| `check` shows `[!!] too big` | A task asks for too much at once (estimate, items, files) | Ask the planner to split it as suggested, or `approve anyway` |
+| "N task(s) are too big … approve anyway" on approve | The size check flagged tasks | Split them in the chat, or type `approve anyway` |
+| A task "waits for your decision on a split" | The worker was cut off twice; the planner drafted a split | Telegram buttons, or `ms split <project> <task> approve \| reject` (see the draft with `ms chat`, `show`) |
+| A reopened task was blocked again at once | Fixed: the Master counted attempts from before the reopen | Update; `ms reopen` again |
 | A task is blocked although the worker never changed anything | Attempts before stall detection counted as failures | `ms reopen <project> <task> --reason "…"` |
 | Worker error 403 "free tier can only be used from within OpenCode" | A profile's tool configuration disabled `bash` | Keep `bash` in `task_types.<type>.tools` (it is added automatically) |
 | `ms lessons` shows nothing | No verified attempt has proposed lessons yet | Nothing to do |
