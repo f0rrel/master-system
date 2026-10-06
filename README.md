@@ -121,8 +121,15 @@ API keys or tokens in its environment; secret-looking extras are refused. It doe
 the same OS user, so it can read any file that user can, including `master.env` and the
 GitHub App key.
 
-**The verifier** (`core/acceptance_verifier.py`) runs in the attempt's worktree after the
-orchestrator has committed it. It reports `unable_to_verify` if the task has no
+**Around the worker**, the orchestrator records every ref of the dedicated clone and its
+shared git configuration, hooks and `info/` files, and puts them back before it commits
+the worker's result; a change beyond the attempt's own branch fails the attempt as
+`repository_tampered`. That is detection and restoration, not a sandbox. Its own git
+commands run without repository hooks, and `develop` is pushed only at a tip the system
+set.
+
+**The verifier** (`core/acceptance_verifier.py`) runs in a fresh worktree of the commit the
+orchestrator made of the attempt's result, never in the worker's. It reports `unable_to_verify` if the task has no
 acceptance or the worktree is not clean, a `protected_path` finding for any changed,
 renamed or deleted protected path, an `outside_allowed_paths` finding for changes outside
 the task type's paths, and a `command_failed` finding for any acceptance command that
@@ -133,12 +140,15 @@ the result is bound to the task's `spec_hash`.
 | Defends against | Does not defend against |
 | --- | --- |
 | False success reports | A worker deliberately using its shell against the host: it runs as your user |
-| Edited, deleted or renamed protected tests | Untracked files hidden by `.gitignore` or `.git/info/exclude` that change how acceptance commands behave (gap V1) |
-| Files changed outside the task type's paths | A worker moving `develop` from its worktree, which shares refs with the clone (gap V2) |
-| Hangs (deadline and process-group kill) | Processes that escape their group with `setsid` (gap N1) |
-| A spec changed after a pass | Weak tests that a human approved |
-| The orchestrating model completing or integrating without evidence | The orchestrating model cancelling or retitling tasks (gap H2) |
-| Crashes mid-attempt (no replay) | |
+| Edited, deleted or renamed protected tests | A worker acting outside git as your user: reading keys, editing `~/.gitconfig` or the dedicated clone's files (gap N1) |
+| Files changed outside the task type's paths | Changes to the shared git directory while the worker runs: they are undone afterwards, not prevented (gap V2, narrowed) |
+| Uncommitted or ignored files changing the verdict (fresh verification worktree) | Processes that escape their group with `setsid` (gap N1) |
+| Moving `develop`, tags, hooks or git config from the worktree (restored, attempt fails) | Weak tests that a human approved |
+| Pushing a `develop` that no gate produced (publish guard) | The orchestrating model cancelling or retitling tasks (gap H2) |
+| Hangs (deadline and process-group kill) |  |
+| A spec changed after a pass |  |
+| The orchestrating model completing or integrating without evidence |  |
+| Crashes mid-attempt (no replay) |  |
 
 Details: [safety rules](docs/ARCHITECTURE.md#safety-rules-and-trust-boundaries) and
 [known gaps](docs/ARCHITECTURE.md#known-gaps).
@@ -238,20 +248,24 @@ errors.
 | Fake success | Have the worker report success without passing the test | `command_failed`; the task is not completed | `ms report`, history |
 | Protected tests | Edit, delete or rename a file under `tests/` | `protected_path` finding, verdict fail | `ms report` |
 | Type paths | Make a `docs` task touch `src/` | `outside_allowed_paths` finding, verdict fail | `ms report` |
-| Ignored files | Leave a file ignored by `.gitignore` or `.git/info/exclude` that changes a test's outcome | **Known gap V1**; report new routes only | `ms report`, `git -C <clone> log develop` |
-| Moving `develop` | `git update-ref refs/heads/develop <sha>` from the worktree | **Known gap V2** | `git -C <clone> log develop` |
+| Ignored files | Leave a file ignored by `.gitignore` or `.git/info/exclude` that changes a test's outcome | Not in the fresh verification worktree, so it cannot help; through `info/exclude` also `repository_tampered` | `ms report`, `git -C <clone> log develop` |
+| Moving `develop` | `git update-ref refs/heads/develop <sha>` from the worktree | `develop` restored before the snapshot; verdict fail with `repository_tampered` | `ms report`, `git -C <clone> log develop` |
+| Hooks and config | Plant a hook, an `info/` file or a filter driver in the clone's git directory | Removed before control-plane git runs (which ignores hooks anyway); `repository_tampered` | `ms report`, `ls <clone>/.git/hooks` |
+| Publishing a hand edit | Commit to `develop` in the dedicated clone outside a run, then wait for publishing | Not pushed; "needs you" until `ms publish <project> --accept-tip` | `ms status`, notifications |
 | Process escape | `setsid` a process that outlives the attempt | **Known gap N1** | `ps` |
 | Crash | `kill -9` the run during an attempt | The attempt becomes `interrupted` and is not replayed | `ms report`, history |
-| Concurrent change | Commit to `develop` by hand during a run | Replay onto the new tip and re-verification, or `integration_refused` and a new attempt | `git log`, history |
+| Concurrent change | Commit to `develop` by hand during a run | While the worker runs: undone like a worker's change (the attempt fails; the commit's sha is kept in `restored_refs`). After it: replay onto the new tip and re-verification, or `integration_refused` and a new attempt; either way not published without `--accept-tip` | `git log`, history |
 | Prompt injection | Instructions in task text, `DIRECTION.md` or repository files aimed at the planner or orchestrating model | Never completed without a pass or integrated without the gate; cancelling or retitling is possible (gap H2, known) | history |
 | Trivial tests | Get the planner to draft tests that fail now but pass trivially | Nothing stops this except human review of the draft | `ms chat` → `show` |
 | Spend | Push spend past the caps | Caps are checked between steps; one call in flight can overshoot | `ms status`, `ms report` |
 | Release | Change `develop` after the release pull request opens | The pull request shows the new commits; after a merge, the release is tagged only if the merge's tree equals the pull request head's tree at merge time, so commits added after opening are released if the human merges | `ms status`, GitHub |
 
-Already known, so please report these only if you find a new route: ignored or excluded
-files (V1), moving `develop` from a worktree (V2), `setsid` escapes and anything else that
-follows from workers running as your user (N1), and the orchestrating model cancelling or
-retitling tasks (H2). The full list is in [known gaps](docs/ARCHITECTURE.md#known-gaps).
+Already known, so please report these only if you find a new route: changes to the shared
+git directory that take effect before they are undone, or files in it that are not checked
+(V2, narrowed), git configuration outside the repository such as `~/.gitconfig` (G1),
+`setsid` escapes and anything else that follows from workers running as your user (N1),
+and the orchestrating model cancelling or retitling tasks (H2). Ignored files (V1) and
+moving `develop` from a worktree are now defended: a route around either is a bypass. The full list is in [known gaps](docs/ARCHITECTURE.md#known-gaps).
 
 **Useful feedback includes:** the master-system commit; `ms doctor` output (it redacts
 secrets); `ms report` for the run; the task's YAML; the attempt id; expected versus actual

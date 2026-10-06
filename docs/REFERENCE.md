@@ -220,7 +220,7 @@ ever run as a command.
 | `ms reopen <project> <task> [--reason …]` | Put a blocked task back in the queue (spec unchanged, recorded); its attempt budget starts over. |
 | `ms telegram pair\|status\|test\|unpair` | Pair the Telegram bot with your account (one-time code), check it, send a test message, or forget the owner. |
 | `ms limit <project> [wait\|free\|paid]` | Show or answer a worker limit: wait for the reset, switch to the next free worker profile, or use the paid one (counts toward the daily cap). |
-| `ms publish <project>` | Push `develop` and the preview site now (the service also does this after every run). |
+| `ms publish <project> [--accept-tip]` | Push `develop` and the preview site now (the service also does this after every run). `develop` is pushed only at a tip the system set; `--accept-tip` accepts a change you made outside Master System (recorded as a human action). |
 | `ms pause` / `ms resume` | Start no new work (a running task finishes) / allow new work. |
 | `ms stop` | Stop the current run now, keeping its work, and pause. |
 | `ms doctor` | A diagnostic block to paste into an issue or an AI chat. Keys, tokens and the notification topic are redacted. |
@@ -250,6 +250,7 @@ With `[daemon] batch_notifications = true` it also notifies after every run and 
 | `<project>: <task-id> needs you` (batch mode) | A task used up its attempt budget | Revise or split the task in `ms chat` |
 | `Daily budget reached` | The daily cap was hit without work to summarise; work resumes the next day | None, or raise the cap |
 | `<project>: needs you` (always) | A worker is limited for longer than `max_auto_wait_minutes`, gone, or not set up, or the planner drafted a split of a task the worker could not finish; the project or task waits | `ms limit …` or `ms split …` |
+| `<project>: needs you` (always) | `develop` is at a tip the system did not set, so it is not published | Inspect it; `ms publish <project> --accept-tip` if the change is yours |
 | `Worker models need you` (always) | The weekly check found a free model that is gone or no longer free | Change `[worker] workers` or the profiles |
 | `<project>: release` | A release was published, or a release pull request was closed | None |
 | `Master System service stopped` | The service exited; systemd restarts it | If it repeats: `ms doctor` |
@@ -377,6 +378,10 @@ Per-project options (`repository`, `base_branch`, `auto_integrate`, `github`, `p
 | The definition of done is independent of the worker | Acceptance commands and protected paths are set by a human or the approved planner flow and run by the orchestrator's verifier |
 | Evidence is bound to the spec | Every attempt carries a `spec_hash` (title, acceptance, description, assets); changing the spec invalidates a pass |
 | A separate working tree per attempt (not a sandbox) | One git worktree per attempt; runtime state outside every workspace. The worktree shares refs and the `.git` directory with the dedicated clone, so it isolates files, not authority (gap N1) |
+| Verification sees only the committed result | Acceptance runs in a fresh worktree of the result commit, so uncommitted or ignored files cannot change the verdict |
+| The shared repository is checked around the worker (detection and restoration, not a sandbox) | Refs and the clone's git `config`, `hooks/` and `info/` are recorded before the worker and restored before its result is committed; changes beyond its own branch, the stash, remote-tracking refs and the git identity fail the attempt (`repository_tampered`) |
+| Control-plane git runs no repository code | Hooks and fsmonitor are off for every git command the control plane runs |
+| Only system-set tips are published | `develop` is pushed only at a tip the system set (`refs/ms-system/heads/develop`); `ms publish --accept-tip` accepts a deliberate change |
 | No secrets in the worker's environment | An allowlisted environment: toolchain `PATH`, a dedicated worker home, no keys. Workers still run as the same OS user and can read that user's files, including `master.env` and `github-app.pem` |
 | Bounded execution | `timeout --kill-after` in a separate process group; one run per project (`flock`) |
 | Intent before side effects | Decisions and attempt starts are recorded before they act; interrupted attempts are never replayed |

@@ -5,6 +5,23 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Hardening: independent verification
+- Verification runs in a fresh worktree of the attempt's committed result
+  (`<attempt>-verify`, named in the `verification` event), so files a worker leaves
+  uncommitted or ignored (`.gitignore`, `info/exclude`) cannot change the verdict
+  (gap V1 closed). Acceptance must build what it needs from committed files.
+- The repository is checked around every worker run: refs, the worktree's `HEAD`, and
+  the common git dir's `config`, `hooks/` and `info/` are restored before the snapshot.
+  Changes beyond the attempt's branch, the stash, remote-tracking refs and the git
+  identity fail the attempt with a `repository_tampered` finding, shown in `ms report`
+  (gap V2 narrowed). Detection and restoration, not a sandbox.
+- Control-plane git runs without repository hooks or fsmonitor (gap G1 narrowed).
+- Publish guard: develop is pushed (by the publisher and by release preparation) only
+  at a tip the system set; otherwise "needs you". `ms publish <project> --accept-tip`
+  accepts a deliberate change.
+- The release check in `ms status`, `ms publish` and the release fetch take the project
+  lock and wait while a run is in progress.
+
 ### Documentation
 - README rewritten for visitors, engineers and external testers: what it is, what makes
   it different, how a task flows, a worked example, the trust model, a local trial, a

@@ -328,6 +328,10 @@ Master's context never names them. Reports show attempts, passes and cost per ti
 | Worker output is untrusted | `state_updates` are never applied; raw output is stored as provenance and never shown to Master |
 | One worktree per attempt; runtime state outside every workspace | `core/workspace.py` isolation checks (`check_isolated`) |
 | An independent definition of done | The task's `acceptance` (commands and protected paths), written by a human or the approved planner flow, run by the orchestrator's verifier |
+| Verification sees only the committed result | The verifier runs in a fresh worktree of `result_sha` (`<attempt>-verify`, named in the `verification` event), never in the worker's; uncommitted and ignored files are not there |
+| The shared repository is checked around every worker run | `workspace.record_repository` / `restore_repository`: every ref, the worktree's `HEAD`, and the common git dir's `config`, `hooks/` and `info/` are recorded before the worker starts and put back before the snapshot. Changes beyond the attempt's own branch, `refs/stash`, `refs/remotes/*` and `user.name`/`user.email` fail the attempt (`repository_tampered`, without running acceptance). This is detection and restoration, not a sandbox: it does not stop a worker acting outside git (N1) |
+| Control-plane git runs no repository code | Every git command the control plane starts goes through `workspace.control_git_argv` (`-c core.hooksPath=/dev/null -c core.fsmonitor=false`); a boundary test keeps call sites on it. Ref writers outside a run (release check, `ms publish`, release fetch) take the project lock |
+| Only system-set tips are published | `workspace.fast_forward` records each new tip in `refs/ms-system/heads/<branch>` when the branch moved from the recorded tip; the publisher and release preparation refuse to push a `develop` that differs (the owner accepts with `ms publish <project> --accept-tip`) |
 | Evidence is bound to the spec | `spec_hash` on every attempt; a changed spec invalidates a pass |
 | Intent before side effects; no automatic replay | `decision` / `attempt_started` are written first; unfinished attempts become `interrupted` |
 | One run per project | Non-blocking `flock`, inherited by workers, never unlocked early |
@@ -345,7 +349,7 @@ Master's context never names them. Reports show attempts, passes and cost per ti
 
 | ID | Gap | Plan |
 | --- | --- | --- |
-| N1 | Workers run as the system's OS user: isolation, not a sandbox | Containers or an OS sandbox |
+| N1 | Workers run as the system's OS user: isolation, not a sandbox. A worker can read the owner's files (`master.env`, the GitHub App key), write outside its worktree (for example `~/.gitconfig`, the state directory, the dedicated clone's working files) and leave processes behind (`setsid`). Everything below that says "detected" assumes the worker stays inside git | Containers or an OS sandbox |
 | H2 | Policy is keyed on operation names, not state transitions | A transition table |
 | H3 | Approvals for gated operations cannot be granted outside a run | Approval events and `ms approve` |
 | H4 | The service's per-task failure budget and the in-run attempt limit are separate | Unify |
@@ -355,8 +359,9 @@ Master's context never names them. Reports show attempts, passes and cost per ti
 | B1 | Backlog order is guidance for the Master, not enforced by policy | Enforce with transition policy (H2) if it is ignored |
 | T2 | Type isolation is only as fine as the project's file layout (a single-file app cannot separate visual from logic work by path) | Split such files; tool limits still apply |
 | S1 | Screenshots and the summary page are local files, not viewable from a phone | Optionally publish them with the preview |
-| V1 | Verification runs in the worker's own worktree, and its cleanliness check (`git status --porcelain`) does not list ignored files. A worker can leave an untracked file ignored through `.gitignore` or the shared `.git/info/exclude` that changes how acceptance commands behave; it is not in the commit or the diff, so the verdict can be pass, and when `develop` has not moved, integration fast-forwards on it. The replay path (a fresh worktree) does not carry such files. A consequence of N1 | Verify in a fresh worktree of the result commit, or check `git status --porcelain --ignored` |
-| V2 | Attempt worktrees share refs and the common `.git` directory (hooks, config, `info/exclude`) with the dedicated clone: `git update-ref refs/heads/develop <sha>` from the worktree moves `develop`, and the publisher pushes whatever `develop` points to without comparing it with the last recorded integration. A consequence of N1 | Compare `develop` with the last integration before publishing; isolate attempt repositories |
+| V1 | Closed. Verification ran in the worker's worktree, where an uncommitted file ignored through `.gitignore` or `info/exclude` could change how acceptance behaved. It now runs in a fresh worktree of the result commit | — |
+| V2 | Narrowed. Attempt worktrees still share refs, objects and the common git directory with the dedicated clone. Changes to refs, `config`, `hooks/` and `info/` are undone after the worker returns and fail the attempt, but they are not prevented while it runs, other files in the common git dir (`objects/`, other worktrees' metadata) are not checked, and a process that outlives the attempt (N1) can change them later. The publisher no longer pushes a `develop` the system did not set | Separate repositories per attempt, with the OS sandbox |
+| G1 | Narrowed. Control-plane git ran the repository's hooks and fsmonitor, and its filters and other config-defined commands (a worker could write `.git/config`). Hooks and fsmonitor are now off for every control-plane git command, and the repository config is restored before the snapshot. Control-plane git still reads the owner's global git config, which a worker can write (N1), and runs with the control plane's environment, which holds the keys from `master.env` during a run | Run control-plane git with a minimal environment and no global config, with the OS sandbox |
 
 ## Developing
 
