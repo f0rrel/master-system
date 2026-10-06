@@ -307,14 +307,17 @@ def _config_keys(text: bytes) -> dict:
     return keys
 
 
-def restore_repository(repository, worktree, recorded: dict, own_branch: str) -> list:
-    """Put refs and guarded files back as recorded; return what counts as tampering.
+def restore_repository(repository, worktree, recorded: dict, own_branch: str):
+    """Put refs and guarded files back as recorded.
+
+    Returns ``(tampered, found)``: what counts as tampering, and the tip each
+    tampered ref had before it was restored (so a commit can be recovered).
 
     The attempt's own branch is the attempt's work and stays. The stash,
     remote-tracking refs and the git identity are restored silently. Anything
     else changed is restored and listed. Detection and restoration, not a sandbox.
     """
-    tampered = []
+    tampered, found = [], {}
     now = record_repository(repository, worktree)
     before, after = recorded["refs"], now["refs"]
     for ref in sorted(set(before) | set(after)):
@@ -323,6 +326,8 @@ def restore_repository(repository, worktree, recorded: dict, own_branch: str) ->
             continue
         if ref != "refs/stash" and not ref.startswith("refs/remotes/"):
             tampered.append(ref)
+            if new is not None:
+                found[ref] = new
         if old is None:
             _git(["update-ref", "-d", ref, new], repository)
         else:
@@ -353,7 +358,7 @@ def restore_repository(repository, worktree, recorded: dict, own_branch: str) ->
             else:
                 path.write_bytes(old[1])
                 path.chmod(old[0])
-    return tampered
+    return tampered, found
 
 
 # --- integration (used only by the human integrate command) ---------------

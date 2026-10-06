@@ -51,9 +51,9 @@ def fake_worker(toy, monkeypatch=None, also_on_develop=None):
         original = task_orchestrator.restore_repository
 
         def restore_then_move(*args):
-            tampered = original(*args)
+            restored = original(*args)
             subprocess.run([str(mover)], check=False)
-            return tampered
+            return restored
 
         monkeypatch.setattr(task_orchestrator, "restore_repository", restore_then_move)
     toy["fake"].write_text("#!/bin/sh\n"

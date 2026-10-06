@@ -179,3 +179,15 @@ def test_a_tampered_attempt_counts_as_a_failed_attempt_and_is_reported(tmp_path)
     session_id = history.events(types=[EventType.ATTEMPT_STARTED])[-1].session_id
     text = render_report(build_report(history, session_id))
     assert "REPOSITORY TAMPERED" in text and "refs/heads/main" in text
+
+
+def test_the_tip_of_a_restored_ref_is_recorded_so_the_commit_can_be_recovered(tmp_path):
+    def move_main(path):
+        edit_app(path)
+        git(path, "commit", "-qam", "sneak")
+        git(path, "update-ref", "refs/heads/main", "HEAD")
+
+    result, history, repo, _, _ = run_once(tmp_path, Does(move_main))
+
+    found = payload(history, EventType.ATTEMPT_FINISHED)["restored_refs"]
+    assert git(repo, "log", "-1", "--format=%s", found["refs/heads/main"]) == "sneak"

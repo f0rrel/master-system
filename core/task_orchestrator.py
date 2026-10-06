@@ -432,11 +432,12 @@ class TaskOrchestrator:
             outcome = "finished"
         worker_minutes = (time.monotonic() - worker_started) / 60
 
-        facts, tampered = {}, []
+        facts, tampered, found = {}, [], {}
         try:
             # Restored before the snapshot, so nothing the worker put in the shared
             # git dir (a filter driver, a hook) runs in control-plane git.
-            tampered = restore_repository(prepared["repository"], worktree, recorded, branch)
+            tampered, found = restore_repository(prepared["repository"], worktree, recorded,
+                                                 branch)
             facts = self._worktrees.snapshot(
                 worktree, base_sha, attempt_id, subject=commit_subject(task))
         except WorkspaceError as error:
@@ -459,7 +460,7 @@ class TaskOrchestrator:
         if raised is not None:
             finished.update(error_type=type(raised).__name__, message=str(raised))
         if tampered:
-            finished["repository_tampered"] = tampered
+            finished.update(repository_tampered=tampered, restored_refs=found)
         stall = None if tampered else self._stall(outcome, facts, exec_res, worker_minutes)
         if stall is not None:
             outcome = finished["outcome"] = "stalled"
