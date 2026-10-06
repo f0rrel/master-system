@@ -801,6 +801,7 @@ def doctor_report(args) -> str:
 
     from core.daemon import load_env_file
     from core.host import capture
+    from core.workspace import control_git_argv
 
     paths = _paths()
     config_path = Path(args.config).expanduser() if args.config else default_config_path()
@@ -818,16 +819,16 @@ def doctor_report(args) -> str:
 
     node = find_node_bin(22)
     section("Versions", "\n".join([
-        f"ms: {capture(['git', '-C', str(REPO), 'describe', '--always', '--dirty', '--tags'])}",
-        f"git: {capture(['git', '--version'])}",
+        f"ms: {capture([*control_git_argv(), '-C', str(REPO), 'describe', '--always', '--dirty', '--tags'])}",
+        f"git: {capture([*control_git_argv(), '--version'])}",
         f"python: {platform.python_version()} ({sys.executable})",
         f"node (workers): {capture([str(Path(node) / 'node'), '--version']) if node else 'none >= 22'}",
         f"system: {platform.platform()}"]))
     section("Master System checkout", "\n".join([
         f"path: {REPO}",
-        f"branch: {capture(['git', '-C', str(REPO), 'branch', '--show-current'])}",
-        f"commit: {capture(['git', '-C', str(REPO), 'log', '-1', '--format=%h %s (%cr)'])}",
-        "changes: " + (capture(['git', '-C', str(REPO), 'status', '--short']) or "none")]))
+        f"branch: {capture([*control_git_argv(), '-C', str(REPO), 'branch', '--show-current'])}",
+        f"commit: {capture([*control_git_argv(), '-C', str(REPO), 'log', '-1', '--format=%h %s (%cr)'])}",
+        "changes: " + (capture([*control_git_argv(), '-C', str(REPO), 'status', '--short']) or "none")]))
     pid_file = paths.state_dir / "run.pid"
     section("Service", "\n".join([
         f"systemd: {capture(['systemctl', '--user', 'is-active', UNIT_NAME])}, "

@@ -37,6 +37,7 @@ __all__ = [
     "RepositoryError",
     "WorkspaceError",
     "check_isolated",
+    "control_git_argv",
     "control_plane_root",
 ]
 
@@ -85,12 +86,21 @@ def check_isolated(path, protected: Iterable, what: str = "workspace") -> Path:
     return target
 
 
+def control_git_argv(*args: str) -> list:
+    """argv for a git command the control plane runs itself, never a worker's.
+
+    Repository hooks and the fsmonitor hook are switched off: a worker can write
+    the shared git directory, and the control plane must not run its code.
+    """
+    return ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *args]
+
+
 def _git(args: Sequence[str], cwd, check: bool = True,
          extra_env=None) -> subprocess.CompletedProcess:
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", **(extra_env or {}))
     try:
         done = subprocess.run(
-            ["git", *args], cwd=str(cwd), capture_output=True, text=True,
+            control_git_argv(*args), cwd=str(cwd), capture_output=True, text=True,
             errors="replace", env=env, timeout=_GIT_TIMEOUT_S,
         )
     except (OSError, subprocess.TimeoutExpired) as error:

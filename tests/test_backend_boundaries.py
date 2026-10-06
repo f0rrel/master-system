@@ -36,3 +36,16 @@ def test_only_the_designated_modules_start_processes():
     }
 
     assert starters <= PROCESS_STARTERS, starters - PROCESS_STARTERS
+
+
+def test_control_plane_git_goes_through_the_hook_free_helper():
+    """Only workspace.control_git_argv spells out a git argv; verifiers run theirs in the
+    workspace (a verification process), which this rule does not cover."""
+    import re
+
+    spelled = {
+        path.name for path in CORE.glob("*.py")
+        if re.search(r"""\[\s*["']git["']""", path.read_text())
+    }
+
+    assert spelled <= {"workspace.py", "acceptance_verifier.py"}, spelled

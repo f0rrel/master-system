@@ -218,3 +218,36 @@ def test_a_per_call_timeout_never_extends_the_deadline(tmp_path):
     outcome = workspace.run(["sleep", "30"], timeout=600)
 
     assert outcome.timed_out is True
+
+
+# --- control-plane git ignores the repository's hooks ---------------------------------
+
+
+def plant_hook(repo, name, marker):
+    hook = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")) \
+        / "hooks" / name
+    hook.parent.mkdir(exist_ok=True)
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    hook.chmod(0o755)
+
+
+def test_a_post_checkout_hook_in_the_common_git_dir_does_not_run_on_create(
+        git_repo, worktrees, tmp_path):
+    marker = tmp_path / "hook-ran"
+    plant_hook(git_repo, "post-checkout", marker)
+    base = git(git_repo, "rev-parse", "main")
+
+    worktrees.create(git_repo, worktrees.path_for("p", ATTEMPT), ATTEMPT, base)
+
+    assert not marker.exists()
+
+
+def test_host_git_does_not_run_the_repositorys_hooks(git_repo, tmp_path):
+    from core.host import git as host_git
+
+    marker = tmp_path / "hook-ran"
+    plant_hook(git_repo, "post-checkout", marker)
+
+    host_git(["checkout", "-q", "-b", "other"], git_repo)
+
+    assert not marker.exists()
