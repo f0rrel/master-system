@@ -13,3 +13,5 @@ Work on what the user sees: layout, styling, graphics, animation, visual feedbac
   reject work that is unreadable, invisible or off-style.
 - Generated images named in the task are already in the repository at their paths; use
   them, do not replace them.
+- Tasks are sized to about 150 lines. Write the first part of a new file in your first
+  steps, then add the rest with further edits; never hold a whole large file in your head.

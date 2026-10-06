@@ -30,6 +30,7 @@ BROKEN = "const test = require('node:test');\ntest('x', () => {\n"
 
 def draft(content=FAILING, **task_extra):
     task = {"id": "t-2", "title": "Say hi", "size": "small", "type": "logic", "depends_on": [],
+            "estimate_lines": 20,
             "description": "greet() must say Hi.", "manual_check": "1. Open the page.",
             "tests": [{"path": "tests/tasks/t-2-greet.test.js", "content": content}],
             "test_commands": ["node --test tests/tasks/t-2-greet.test.js"]}

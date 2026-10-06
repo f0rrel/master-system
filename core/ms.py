@@ -957,7 +957,8 @@ def latest_open_chat(store_dir: Path, project_id: str):
 
 
 CHAT_HELP = ("Type what you want in plain words. Commands: show (the draft), check (run the "
-             "checks), approve (queue the tasks), discard, release (open the release pull "
+             "checks), approve (queue the tasks; 'approve anyway' also queues tasks flagged too "
+             "big), discard, release (open the release pull "
              "request), help, quit.")
 PASTE_HINT = ('To send several lines as one message, just paste them, or put them between '
               'two lines containing only """.')
@@ -1082,9 +1083,9 @@ def chat_loop(chat, read=input, out=None, releaser=None, first_message=None,
                 print("All checks passed. Type `approve` to queue the tasks." if result["ok"]
                       else "Some checks failed; tell the planner what to fix (or paste the "
                       "failure).", file=out)
-            elif command == "approve":
+            elif command in ("approve", "approve anyway"):
                 print("Re-checking on the latest code and queueing...", file=out, flush=True)
-                ids = chat.approve()
+                ids = chat.approve(size_override=command == "approve anyway")
                 print(f"Approved. Queued {', '.join(ids)}; the service starts on them within a "
                       "few minutes. You'll get a notification when they're done.", file=out)
                 return 0

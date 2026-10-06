@@ -128,7 +128,7 @@ def make_approver(master, history, paths, checker, git=None):
     if git is None:
         from core.host import git
 
-    def approve(project_id, draft, records, *, chat_id, draft_hash):
+    def approve(project_id, draft, records, *, chat_id, draft_hash, size_override=None):
         from pathlib import Path
 
         state = master.project_state(project_id)
@@ -166,6 +166,8 @@ def make_approver(master, history, paths, checker, git=None):
                     type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex,
                     project_id=project_id, task_id=record["id"],
                     payload={"actor": ACTOR, "action": "planner_approved", "chat_id": chat_id,
+                             **({"size_override": True}
+                                if size_override and record["id"] in size_override else {}),
                              "draft_hash": draft_hash, "tests_commit": commit,
                              "spec_hash_before": None, "spec_hash_after": spec_hash(record)})
         return commit

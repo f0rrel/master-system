@@ -291,6 +291,19 @@ class HistoryEvidence:
 
     # --- context for Master ---------------------------------------------
 
+    def _since_last_human(self, project_id: str, task_id: str):
+        """Attempt ids started after the task's last human action, or None without one."""
+        last = None
+        started = []
+        for event in self._history.events(project_id=project_id, task_id=task_id,
+                                          types=[EventType.HUMAN_ACTION,
+                                                 EventType.ATTEMPT_STARTED]):
+            if event.type is EventType.HUMAN_ACTION:
+                last, started = event.seq, []
+            else:
+                started.append(event.attempt_id)
+        return None if last is None else set(started)
+
     def for_project(self, project_id: str, focus_task_ids: Iterable[str],
                     task_records: Optional[Mapping[str, Mapping]] = None) -> Mapping:
         """The context keys Master sees about execution in project_id.
@@ -311,12 +324,20 @@ class HistoryEvidence:
         tasks = {}
         for task_id in task_ids:
             every = attempts_for_task(self._history, project_id, task_id)
-            here = attempts_for_task(self._history, project_id, task_id, **scope)
+            # A human change (a reopen, a new description, a pick) is a fresh start:
+            # attempts before it are not this task's current story.
+            fresh = self._since_last_human(project_id, task_id)
+            before = len(every)
+            if fresh is not None:
+                every = [a for a in every if a.attempt_id in fresh]
+            here = [a for a in attempts_for_task(self._history, project_id, task_id, **scope)
+                    if fresh is None or a.attempt_id in fresh]
             not_integrated = (bool(every) and self._integration_required(project_id)
                               and every[-1].verdict == "pass" and not every[-1].integrated)
             tasks[task_id] = {
                 "attempts_this_session": len(here),
                 "attempts_total": len(every),
+                "attempts_before_last_human_change": before - len(every),
                 "latest_attempt": (
                     every[-1].to_context(
                         spec_hash((task_records or {}).get(task_id))

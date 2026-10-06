@@ -57,6 +57,7 @@ from typing import Callable, Optional
 from core.direction import direction_settings, read_direction
 from core.history import EventType
 from core.images import asset_problems
+from core.task_size import MAX_LINES, size_findings
 from core.task_types import TYPES, frozen_allowed_paths, type_settings
 
 __all__ = ["PlannerChat", "DraftProblem", "draft_hash", "draft_problems", "render_draft",
@@ -126,6 +127,7 @@ def planner_settings(project: dict) -> dict:
         "direction_path": direction_settings(project)["path"],
         "types": {t: type_settings(project, t) for t in TYPES},
         "screens": _screen_names(project),
+        "max_task_lines": int(planner.get("max_task_lines") or MAX_LINES),
     }
 
 
@@ -298,6 +300,17 @@ def task_records(draft, settings) -> list:
     return records
 
 
+def draft_size(draft, settings) -> dict:
+    """task id -> size findings, for the draft's oversized tasks."""
+    found = {}
+    for task in (draft or {}).get("tasks") or []:
+        if isinstance(task, dict):
+            findings = size_findings(task, settings.get("max_task_lines", MAX_LINES))
+            if findings:
+                found[str(task.get("id"))] = findings
+    return found
+
+
 def plannable_epics(status) -> set:
     """Proposed backlog epics that have no tasks yet."""
     with_tasks = {t.get("milestone") for t in status.get("tasks") or []}
@@ -372,11 +385,18 @@ def render_draft(draft, check=None, width: int = 100) -> str:
                                + f": {asset.get('prompt')}", width)
         if task.get("screens"):
             lines += _labelled("Review screens", ", ".join(task["screens"]), width)
+        if task.get("estimate_lines"):
+            lines += _labelled("Estimate", f"{task['estimate_lines']} lines", width)
+        for finding in ((check or {}).get("size") or {}).get(str(task.get("id")), []):
+            lines += _wrap(f"[!!] too big: {finding}", width, "  ")
         if task.get("test_commands"):
             lines += _labelled("Test commands", "; ".join(task["test_commands"]), width)
     if check:
-        lines.append("\nChecks: " + ("all passed, ready to approve" if check["ok"]
-                                     else "FAILED (see below)"))
+        oversized = check.get("size") or {}
+        lines.append("\nChecks: " + ("all passed" if check["ok"] else "FAILED (see below)")
+                     + (f"; {len(oversized)} task(s) too big ([!!] above): split them, or "
+                        "`approve anyway`" if oversized else
+                        (", ready to approve" if check["ok"] else "")))
         for item in check["items"]:
             if not item["ok"]:
                 lines += _wrap(f"!! {item['what']}: {item['note']}", width, "  ")
@@ -402,6 +422,12 @@ draft.backlog (id "epic-<slug>", title, \
 summary, optional priority) and leave draft.epic null and draft.tasks empty. When the owner \
 asks to plan a backlog epic ("plan epic 1"), draft ALL of its tasks in one draft, with \
 draft.epic.id set to that epic's id and its title; read the relevant code first.
+- SIZE: one task = one new "thing" (one module piece, one screen, one asset group) and at \
+most about {max_lines} new or changed lines. A worker writes a task in a few replies with a \
+limited output each, so bigger work MUST be an ordered sequence of tasks with depends_on \
+(for example: the module skeleton with the first two items, then two more items per \
+task). Each task's tests check only that task's part. Give every task "estimate_lines", \
+your estimate of the lines it adds or changes.
 - Prefer independent tasks; use depends_on only when one task truly needs another.
 - Task ids: continue the project's numbering; the next free ids are {next_ids}. The epic id \
 is a short slug like "epic-search".
@@ -441,6 +467,7 @@ Answer with ONE JSON object only:
                          "priority": 1}}],
             "epic": {{"id": "...", "title": "...", "description": "..."}},
             "tasks": [{{"id": "...", "title": "...", "type": "developer|visual|logic|docs",
+                        "estimate_lines": 80,
                         "size": "small|medium|hard",
                         "depends_on": [], "files": ["files it will change"],
                         "description": "...", "manual_check": "...",
@@ -469,7 +496,8 @@ def system_prompt(name, next_ids, settings) -> str:
     return SYSTEM.format(name=name, next_ids=", ".join(next_ids),
                          test_dir=settings["test_dir"], suffix_rule=suffix_rule,
                          examples=examples, guidance=guidance, types=types or "developer",
-                         screens=", ".join(settings.get("screens") or []) or "(none set up)")
+                         screens=", ".join(settings.get("screens") or []) or "(none set up)",
+                         max_lines=settings.get("max_task_lines", MAX_LINES))
 
 
 @dataclass
@@ -723,12 +751,15 @@ class PlannerChat:
             result = {"ok": True, "items": []}  # backlog epics only: nothing to run
         else:
             result = self._checker(self.project_id, self.state.draft)
+        result["size"] = draft_size(self.state.draft, planner_settings(self._project()))
+        result["size_ok"] = not result["size"]
         result["draft_hash"] = draft_hash(self.state.draft)
         self.state.check = result
         self.save()
         return result
 
-    def approve(self) -> list:
+    def approve(self, size_override: bool = False) -> list:
+        """Queue the checked draft. Oversized tasks need ``size_override`` ("approve anyway")."""
         problems = self.problems()
         if problems:
             raise DraftProblem("the draft is incomplete:\n  - " + "\n  - ".join(problems))
@@ -737,10 +768,18 @@ class PlannerChat:
         if has_tasks and (not check or not check.get("ok")
                           or check.get("draft_hash") != draft_hash(self.state.draft)):
             raise DraftProblem("run `check` first: the current draft has not passed its checks")
+        oversized = (check or {}).get("size") or {}
+        if has_tasks and oversized and not size_override:
+            raise DraftProblem(
+                f"{len(oversized)} task(s) are too big for a worker to write in one go ("
+                + ", ".join(oversized) + "). Ask the planner to split them, or type "
+                "`approve anyway` to queue them as they are.")
         settings = planner_settings(self._project())
         records = task_records(self.state.draft, settings) if has_tasks else []
         self._approver(self.project_id, self.state.draft, records,
-                       chat_id=self.state.chat_id, draft_hash=draft_hash(self.state.draft))
+                       chat_id=self.state.chat_id, draft_hash=draft_hash(self.state.draft),
+                       **({"size_override": sorted(oversized)} if size_override and oversized
+                          else {}))
         self.state.status = "approved"
         self.save()
         return [r["id"] for r in records] + [e["id"] for e in self.state.draft.get("backlog")

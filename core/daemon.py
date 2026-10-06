@@ -45,7 +45,8 @@ OBJECTIVE = (
     "priority order): start a task, run it, and mark it completed "
     "only when its latest attempt passed verification. Never request integration: the "
     "system integrates verified work itself. If a task fails verification on its third "
-    "attempt, mark it blocked and move on to the next task. When no task is ready, stop."
+    "attempt since the last human change to it (attempts_total counts only those), mark it "
+    "blocked and move on to the next task. When no task is ready, stop."
 )
 
 
