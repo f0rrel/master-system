@@ -1,12 +1,13 @@
 """H-D1..H-D3: verified attempts are integrated into develop by the system, during the run."""
 
 import json
+import subprocess
 
 import pytest
 import yaml
 
 from conftest import git
-from core import run_cli
+from core import run_cli, task_orchestrator
 from core.history import EventType
 from core.sqlite_history import SQLiteHistoryStore
 from test_m2_dry_run import FIXTURE, ScriptedMaster, act, cli, toy  # noqa: F401
@@ -30,20 +31,35 @@ def dev(toy, tmp_path, monkeypatch):  # noqa: F811
     return toy
 
 
-def fake_worker(toy, also_on_develop=None):
-    """The fake OpenCode fixes greet.py; optionally someone else moves develop meanwhile."""
-    moved = ""
+def fake_worker(toy, monkeypatch=None, also_on_develop=None):
+    """The fake OpenCode fixes greet.py; optionally someone else moves develop meanwhile.
+
+    The other writer acts after the worker returns (once the tamper check has restored
+    the repository), as a concurrent writer would: a worker moving develop from its own
+    worktree is tampering (tests/test_tamper_check.py)."""
     if also_on_develop:
         name, content = also_on_develop
-        moved = (f'git -C {toy["repo"]} worktree add -q /tmp/ms-mover-$$ develop >/dev/null 2>&1\n'
-                 f'printf "{content}" > /tmp/ms-mover-$$/{name}\n'
-                 f'git -C /tmp/ms-mover-$$ add -A && git -C /tmp/ms-mover-$$ '
-                 '-c user.name=o -c user.email=o@x commit -qm moved\n'
-                 f'git -C {toy["repo"]} worktree remove --force /tmp/ms-mover-$$\n')
+        mover = toy["fake"].with_name("move-develop")
+        mover.write_text(
+            "#!/bin/sh\n"
+            f'git -C {toy["repo"]} worktree add -q /tmp/ms-mover-$$ develop >/dev/null 2>&1\n'
+            f'printf "{content}" > /tmp/ms-mover-$$/{name}\n'
+            f'git -C /tmp/ms-mover-$$ add -A && git -C /tmp/ms-mover-$$ '
+            '-c user.name=o -c user.email=o@x commit -qm moved\n'
+            f'git -C {toy["repo"]} worktree remove --force /tmp/ms-mover-$$\n')
+        mover.chmod(0o755)
+        original = task_orchestrator.restore_repository
+
+        def restore_then_move(*args):
+            tampered = original(*args)
+            subprocess.run([str(mover)], check=False)
+            return tampered
+
+        monkeypatch.setattr(task_orchestrator, "restore_repository", restore_then_move)
     toy["fake"].write_text("#!/bin/sh\n"
                            'while [ "$1" != "--dir" ]; do shift; done; cd "$2"\n'
                            "printf \"def greet(name):\\n    return 'Hi ' + name\\n\" > greet.py\n"
-                           + moved + f"cat {FIXTURE}\n")
+                           + f"cat {FIXTURE}\n")
     toy["fake"].chmod(0o755)
 
 
@@ -86,7 +102,7 @@ def test_a_passing_attempt_lands_on_develop_and_the_task_completes(dev, monkeypa
 
 
 def test_a_moved_develop_is_rebased_and_reverified(dev, monkeypatch):
-    fake_worker(dev, also_on_develop=("notes.txt", "unrelated\\n"))
+    fake_worker(dev, monkeypatch, also_on_develop=("notes.txt", "unrelated\\n"))
     start, run_task, done = ops()
     _, history = run(dev, monkeypatch, [start, run_task, done])
 
@@ -103,7 +119,7 @@ def test_a_moved_develop_is_rebased_and_reverified(dev, monkeypatch):
 
 
 def test_a_conflict_is_retried_from_the_new_develop(dev, monkeypatch):
-    fake_worker(dev, also_on_develop=("greet.py", "def greet(name):\\n    return 'Yo ' + name\\n"))
+    fake_worker(dev, monkeypatch, also_on_develop=("greet.py", "def greet(name):\\n    return 'Yo ' + name\\n"))
     start, run_task, done = ops()
     out, history = run(dev, monkeypatch, [start, run_task, done, run_task, done])
 
@@ -136,7 +152,7 @@ def test_without_auto_integrate_nothing_is_integrated(toy, monkeypatch):  # noqa
 
 
 def test_a_master_that_keeps_completing_is_stopped_and_sees_why(dev, monkeypatch):
-    fake_worker(dev, also_on_develop=("greet.py", "def greet(name):\\n    return 'Yo ' + name\\n"))
+    fake_worker(dev, monkeypatch, also_on_develop=("greet.py", "def greet(name):\\n    return 'Yo ' + name\\n"))
     start, run_task, done = ops()
     master_replies = [start, run_task, done, done]
     out, history = run(dev, monkeypatch, master_replies)
@@ -147,7 +163,7 @@ def test_a_master_that_keeps_completing_is_stopped_and_sees_why(dev, monkeypatch
 def test_masters_context_says_a_passed_attempt_is_not_integrated(dev, monkeypatch):
     from core.evidence import HistoryEvidence
 
-    fake_worker(dev, also_on_develop=("greet.py", "def greet(name):\\n    return 'Yo ' + name\\n"))
+    fake_worker(dev, monkeypatch, also_on_develop=("greet.py", "def greet(name):\\n    return 'Yo ' + name\\n"))
     start, run_task, done = ops()
     _, history = run(dev, monkeypatch, [start, run_task, done, done])
     evidence = HistoryEvidence(history, integration_required=lambda project_id: True)

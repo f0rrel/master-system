@@ -16,6 +16,7 @@ sandbox. A worker still runs as the owner's user.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -30,6 +31,8 @@ __all__ = [
     "checkout_of",
     "fast_forward",
     "has_tracked_changes",
+    "record_repository",
+    "restore_repository",
     "is_ancestor",
     "GitWorktrees",
     "IsolationError",
@@ -96,12 +99,12 @@ def control_git_argv(*args: str) -> list:
 
 
 def _git(args: Sequence[str], cwd, check: bool = True,
-         extra_env=None) -> subprocess.CompletedProcess:
+         extra_env=None, input_text=None) -> subprocess.CompletedProcess:
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", **(extra_env or {}))
     try:
         done = subprocess.run(
             control_git_argv(*args), cwd=str(cwd), capture_output=True, text=True,
-            errors="replace", env=env, timeout=_GIT_TIMEOUT_S,
+            errors="replace", env=env, timeout=_GIT_TIMEOUT_S, input=input_text,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise WorkspaceError(f"git {' '.join(args)} failed: {error}") from error
@@ -254,6 +257,100 @@ class GitWorktrees:
             if diff.returncode == 0:
                 facts["diffstat"] = _numstat(diff.stdout)
         return facts
+
+
+# --- the shared repository around a worker run ------------------------------
+
+#: Git directory contents a worker can use to change what the control plane runs.
+_GUARDED_DIRS = ("hooks", "info")
+#: Config keys a worker may set; restored without counting as tampering.
+_ALLOWED_CONFIG_KEYS = frozenset({"user.name", "user.email"})
+
+
+def _guarded_files(common: Path) -> dict:
+    files, names = {}, ["config"]
+    for name in _GUARDED_DIRS:
+        top = common / name
+        if top.is_symlink():
+            names.append(name)
+        elif top.is_dir():
+            names += [str(p.relative_to(common)) for p in top.rglob("*")]
+    for rel in names:
+        path = common / rel
+        if path.is_symlink():
+            files[rel] = ("link", os.readlink(path))
+        elif path.is_file():
+            files[rel] = (path.stat().st_mode & 0o7777, path.read_bytes())
+    return files
+
+
+def record_repository(repository, worktree) -> dict:
+    """Every ref, the common git dir's config, hooks/ and info/, and the worktree's HEAD."""
+    common = Path(_git(["rev-parse", "--path-format=absolute", "--git-common-dir"],
+                       repository).stdout.strip())
+    listing = _git(["for-each-ref", "--format=%(objectname) %(refname)"], repository).stdout
+    head = _git(["symbolic-ref", "-q", "HEAD"], worktree, check=False).stdout.strip()
+    return {"common_dir": common, "head": head, "files": _guarded_files(common),
+            "refs": dict(reversed(line.split(" ", 1)) for line in listing.splitlines())}
+
+
+def _config_keys(text: bytes) -> dict:
+    listing = _git(["config", "-f", "-", "--list", "-z"], ".",
+                   input_text=text.decode(errors="replace")).stdout
+    keys: dict = {}
+    for entry in filter(None, listing.split("\0")):
+        key, _, value = entry.partition("\n")
+        keys.setdefault(key, []).append(value)
+    return keys
+
+
+def restore_repository(repository, worktree, recorded: dict, own_branch: str) -> list:
+    """Put refs and guarded files back as recorded; return what counts as tampering.
+
+    The attempt's own branch is the attempt's work and stays. The stash,
+    remote-tracking refs and the git identity are restored silently. Anything
+    else changed is restored and listed. Detection and restoration, not a sandbox.
+    """
+    tampered = []
+    now = record_repository(repository, worktree)
+    before, after = recorded["refs"], now["refs"]
+    for ref in sorted(set(before) | set(after)):
+        old, new = before.get(ref), after.get(ref)
+        if old == new or ref == f"refs/heads/{own_branch}":
+            continue
+        if ref != "refs/stash" and not ref.startswith("refs/remotes/"):
+            tampered.append(ref)
+        if old is None:
+            _git(["update-ref", "-d", ref, new], repository)
+        else:
+            _git(["update-ref", ref, old, new or ""], repository)
+    if now["head"] != recorded["head"]:
+        tampered.append("HEAD")
+        _git(["symbolic-ref", "HEAD", recorded["head"]], worktree)
+    common = recorded["common_dir"]
+    for rel in sorted(set(recorded["files"]) | set(now["files"])):
+        old, new = recorded["files"].get(rel), now["files"].get(rel)
+        if old == new:
+            continue
+        if rel == "config" and old and new and old[0] != "link" and new[0] != "link":
+            was, keys = _config_keys(old[1]), _config_keys(new[1])
+            tampered += [f"config: {key}" for key in sorted(set(was) | set(keys))
+                         if was.get(key) != keys.get(key) and key not in _ALLOWED_CONFIG_KEYS]
+        else:
+            tampered.append(rel)
+        path = common / rel
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+        if old is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if old[0] == "link":
+                path.symlink_to(old[1])
+            else:
+                path.write_bytes(old[1])
+                path.chmod(old[0])
+    return tampered
 
 
 # --- integration (used only by the human integrate command) ---------------

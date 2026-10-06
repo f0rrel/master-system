@@ -21,6 +21,8 @@ from core.workspace import (
     RepositoryError,
     WorkspaceError,
     control_plane_root,
+    record_repository,
+    restore_repository,
 )
 
 #: Default bound on one worker run, and on one verification.
@@ -383,6 +385,8 @@ class TaskOrchestrator:
 
         try:
             self._worktrees.create(prepared["repository"], worktree, attempt_id, base_sha)
+            # Refs and the shared git dir as they are before the worker can touch them.
+            recorded = record_repository(prepared["repository"], worktree)
         except BaseException as error:
             record(
                 EventType.ATTEMPT_FINISHED,
@@ -428,8 +432,11 @@ class TaskOrchestrator:
             outcome = "finished"
         worker_minutes = (time.monotonic() - worker_started) / 60
 
-        facts = {}
+        facts, tampered = {}, []
         try:
+            # Restored before the snapshot, so nothing the worker put in the shared
+            # git dir (a filter driver, a hook) runs in control-plane git.
+            tampered = restore_repository(prepared["repository"], worktree, recorded, branch)
             facts = self._worktrees.snapshot(
                 worktree, base_sha, attempt_id, subject=commit_subject(task))
         except WorkspaceError as error:
@@ -451,7 +458,9 @@ class TaskOrchestrator:
             )
         if raised is not None:
             finished.update(error_type=type(raised).__name__, message=str(raised))
-        stall = self._stall(outcome, facts, exec_res, worker_minutes)
+        if tampered:
+            finished["repository_tampered"] = tampered
+        stall = None if tampered else self._stall(outcome, facts, exec_res, worker_minutes)
         if stall is not None:
             outcome = finished["outcome"] = "stalled"
             finished["stall"] = jsonable(stall)
@@ -490,6 +499,15 @@ class TaskOrchestrator:
         # Only a finished attempt with a committed result is verified. A timed
         # out or limited attempt is not: the completion gate refuses it either way.
         if outcome != "finished" or not facts.get("result_sha"):
+            return result
+        if tampered:
+            # The fail path, without running anything the attempt left behind.
+            finding = {"kind": "repository_tampered", "changed": tampered}
+            summary = f"the worker changed the repository outside its branch: {', '.join(tampered)}"
+            record(EventType.VERIFICATION, verdict="fail", summary=summary, findings=[finding],
+                   evidence={"base_sha": base_sha, "result_sha": facts["result_sha"]})
+            result["verification"] = {"verdict": "fail", "summary": summary,
+                                      "findings": [finding], "evidence": {}}
             return result
 
         # Verification gets its own worktree of the committed result: anything the

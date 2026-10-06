@@ -220,10 +220,8 @@ class PlantsIgnoredConftest:
     def execute(self, task, context, *, workspace):
         (workspace.path / "conftest.py").write_text(
             "import app\napp.greet = lambda name: 'Hi ' + name\n")
-        common = git(workspace.path, "rev-parse", "--path-format=absolute",
-                     "--git-common-dir")
-        with open(f"{common}/info/exclude", "a") as exclude:
-            exclude.write("conftest.py\n")
+        # Through .gitignore; the shared info/exclude is caught by the tamper check.
+        (workspace.path / ".gitignore").write_text("conftest.py\n")
         return ExecutionResult(status="success", reason="all tests pass now")
 
 
@@ -232,7 +230,7 @@ def test_an_ignored_file_left_in_the_worktree_does_not_reach_verification(tmp_pa
 
     finished = history.events(types=[EventType.ATTEMPT_FINISHED])[-1].payload
     verification = history.events(types=[EventType.VERIFICATION])[-1].payload
-    assert finished["files_changed"] == []
+    assert finished["files_changed"] == [".gitignore"]
     assert verification["verdict"] == "fail"
     assert verification["findings"][0]["kind"] == "command_failed"
     assert master.status("alpha")["tasks"][0]["status"] == "in_progress"

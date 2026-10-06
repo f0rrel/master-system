@@ -186,6 +186,7 @@ def build_report(history: HistoryStore, session_id: str,
             "profile": started.payload.get("worker_profile"),
             "limit": finished.payload.get("limit") if finished else None,
             "stall": finished.payload.get("stall") if finished else None,
+            "tampered": finished.payload.get("repository_tampered") if finished else None,
         })
 
     # --- tokens and cost ----------------------------------------------------
@@ -364,6 +365,9 @@ def render_report(report: dict) -> str:
         lines.append(f"  {a['task_id']:<14} {a['outcome']:<11} verdict {a['verdict'] or '-':<17} "
                      f"files {a['files_changed']}  {a['seconds']} s  {a['attempt_id'][:12]}"
                      + (f"  worker {a['profile']}" if a.get("profile") else ""))
+        if a.get("tampered"):
+            lines.append("      REPOSITORY TAMPERED (restored; counted as a failure): "
+                         + ", ".join(a["tampered"]))
         if a.get("stall"):
             stall = a["stall"]
             lines.append(f"      stalled worker: {stall.get('reason')} after "
