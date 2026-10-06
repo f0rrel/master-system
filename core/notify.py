@@ -52,8 +52,8 @@ class Notifier:
         return bool(self.topic)
 
     def send(self, title: str, message: str, *, tags: str = "", click: Optional[str] = None,
-             priority: str = "default") -> bool:
-        """Post one notification. True if it was delivered to the server."""
+             priority: str = "default", **_ignored) -> bool:
+        """``actions`` and ``photos`` (Telegram only) are ignored here."""
         self.sent.append({"title": title, "message": message, "tags": tags, "click": click,
                           "priority": priority})
         if not self.enabled:

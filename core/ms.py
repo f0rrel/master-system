@@ -11,6 +11,7 @@
     ms lessons <project>       lessons workers proposed; --approve all|IDS, --reject IDS|rest
     ms pick <project> <task> <asset> <n>   choose one of a task's generated images
     ms limit <project> [wait|free|paid]    answer a worker limit (see ms status)
+    ms telegram pair|status|test|unpair    the Telegram bot (the phone interface)
     ms pause | resume          stop or allow new work (a running task finishes)
     ms stop                    stop the current run now, and pause
     ms daemon                  the background service loop (run by systemd)
@@ -135,7 +136,7 @@ def build_daemon(config, config_path):
                           paths.state_dir)
     releaser = Releaser(master, history, lambda repo: github_app(config, repo),
                         askpass_dir=paths.state_dir, prices=config.prices, publisher=publisher)
-    notifier = Notifier.from_file(config.daemon.ntfy_server)
+    notifier = build_notifier(config)
     return Daemon(
         master=master, history=history, config=config, state_dir=paths.state_dir,
         notifier=notifier,
@@ -169,11 +170,12 @@ def morning_summary(config, master, history, paths, releaser, publisher):
             project_ids=projects,
             labels={n: p.get("label", n) for n, p in config.worker.profiles.items()})
         written = write_summary(summary, paths.state_dir / "reports")
+        from core.summary import screenshots
         message = (f"{headline(summary)}\nThe service stopped: {reason}.\n"
                    f"Details: ms report --summary ({written['html'].as_uri()})")
         click = next((publisher.preview_url(p) for p in projects if publisher.preview_url(p)),
                      None)
-        return "Morning summary", message, click
+        return "Morning summary", message, click, screenshots(summary)
 
     return summarize
 
@@ -224,14 +226,59 @@ def github_app(config, repo):
     return GitHubApp(app_id=config.github.app_id, repo=repo, key_path=key)
 
 
+def telegram_token() -> Optional[str]:
+    """TELEGRAM_BOT_TOKEN from the environment or master.env; never printed."""
+    from core.daemon import load_env_file
+
+    return (os.environ.get("TELEGRAM_BOT_TOKEN")
+            or load_env_file(default_config_path().parent / "master.env")
+            .get("TELEGRAM_BOT_TOKEN"))
+
+
+def build_notifier(config):
+    """Telegram when a bot token is set (ntfy as the fallback), otherwise ntfy."""
+    ntfy = Notifier.from_file(config.daemon.ntfy_server)
+    token = telegram_token()
+    if not token:
+        return ntfy
+    from core.telegram import FallbackNotifier, TelegramAPI, TelegramNotifier, TelegramState
+
+    return FallbackNotifier(TelegramNotifier(TelegramAPI(token),
+                                             TelegramState(_paths().state_dir)), ntfy)
+
+
+def start_telegram_bot(config_path, out):
+    """The bot's long-polling thread inside the service; None without a token."""
+    import threading
+
+    token = telegram_token()
+    if not token:
+        return None
+    from core.daemon import load_env_file
+    from core.telegram import TelegramAPI, TelegramState
+    from core.telegram_bot import BotOps, TelegramBot
+
+    for key, value in load_env_file(default_config_path().parent / "master.env").items():
+        os.environ.setdefault(key, value)  # the planner and /spend use the DeepSeek key
+    state = TelegramState(_paths().state_dir)
+    bot = TelegramBot(TelegramAPI(token, timeout=60), state, BotOps(state, config_path),
+                      log=lambda line: print(line, file=out, flush=True))
+    stop = threading.Event()
+    thread = threading.Thread(target=bot.run, args=(stop,), name="telegram", daemon=True)
+    thread.start()
+    return stop
+
+
 def _command_daemon(args, out):
     config = _config(args)
     daemon = build_daemon(config, args.config)
+    telegram = start_telegram_bot(args.config, out)
     stopping = []
     signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
     print(f"master-system service: every {config.daemon.interval_s:.0f}s, "
           f"daily cap ${config.budget.daily_usd:.2f}, run cap ${config.budget.run_usd:.2f}, "
-          f"notifications {'on' if daemon.notifier.enabled else 'off'}", file=out, flush=True)
+          f"notifications {'on' if daemon.notifier.enabled else 'off'}, "
+          f"telegram {'on' if telegram else 'off'}", file=out, flush=True)
     if args.once:
         for line in daemon.cycle():
             print(line, file=out)
@@ -245,6 +292,8 @@ def _command_daemon(args, out):
             time.sleep(min(5, end - time.monotonic()))
 
     daemon.serve(sleep=sleep, should_stop=lambda: bool(stopping), out=out)
+    if telegram is not None:
+        telegram.set()
     return 0
 
 
@@ -304,7 +353,7 @@ def _command_service(args, out):
     result = os.environ.get("SERVICE_RESULT", "success")
     if result != "success":
         config = _config(args)
-        Notifier.from_file(config.daemon.ntfy_server).send(
+        build_notifier(config).send(
             "Master System service stopped",
             f"The background service stopped unexpectedly ({result}). systemd restarts it "
             "in a minute; if this repeats, run `ms status`.", tags="warning", priority="high")
@@ -693,7 +742,7 @@ def check_releases(config, master, history, paths, *, max_age_s: float = 60, now
                             prices=config.prices,
                             publisher=Publisher(master, history, factory, paths.state_dir))
     if notifier is None:
-        notifier = Notifier.from_file(config.daemon.ntfy_server)
+        notifier = build_notifier(config)
     lines = []
     for project_id in master.list_projects():
         try:
@@ -1141,7 +1190,7 @@ def _command_backlog(args, out):
             print(f"error: {error}", file=out)
             return 1
         history.append(type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex,
-                       project_id=args.project, payload={"actor": "owner", **action})
+                       project_id=args.project, payload={"actor": args.actor, **action})
     rows = backlog_rows(master.status(args.project))
     print(f"Backlog of {args.project} (lower priority number runs first):", file=out)
     print(render_backlog(rows), file=out)
@@ -1189,7 +1238,7 @@ def _command_lessons(args, out):
             return 1
         SQLiteHistoryStore(_paths().history_path).append(
             type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex, project_id=args.project,
-            payload={"actor": "owner", "action": "lessons_decided",
+            payload={"actor": args.actor, "action": "lessons_decided",
                      "approved": [r["id"] for r in moved["approved"]],
                      "rejected": [r["id"] for r in moved["rejected"]]})
         print(f"Approved {len(moved['approved'])}, rejected {len(moved['rejected'])}.",
@@ -1241,7 +1290,7 @@ def _command_pick(args, out):
         return 1
     SQLiteHistoryStore(paths.history_path).append(
         type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex, project_id=args.project,
-        task_id=args.task, payload={"actor": "owner", "action": "asset_picked",
+        task_id=args.task, payload={"actor": args.actor, "action": "asset_picked",
                                     "asset": args.asset, "candidate": args.n,
                                     "commit": commit})
     print(f"Committed candidate {args.n} of {args.asset} to {task['id']}'s base branch "
@@ -1277,7 +1326,7 @@ def _command_limit(args, out):
         return 1
     SQLiteHistoryStore(paths.history_path).append(
         type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex, project_id=args.project,
-        payload={"actor": "owner", "action": "worker_limit_choice", "choice": args.choice,
+        payload={"actor": args.actor, "action": "worker_limit_choice", "choice": args.choice,
                  "profile": profile, "limited": state.get("override_for")
                  or state.get("profile")})
     if args.choice == "wait":
@@ -1288,6 +1337,46 @@ def _command_limit(args, out):
             else ""
         print(f"The project continues with {labels.get(profile, profile)} until "
               f"{_local_time(state['override_until'])}.{paid}", file=out)
+    return 0
+
+
+def _command_telegram(args, out):
+    from core.telegram import TelegramAPI, TelegramError, TelegramState
+
+    state = TelegramState(_paths().state_dir)
+    token = telegram_token()
+    if not token:
+        print("No bot token: put TELEGRAM_BOT_TOKEN=... in ~/.config/master-system/master.env "
+              "(docs/TELEGRAM-SETUP.md).", file=out)
+        return 1
+    api = TelegramAPI(token)
+    if args.action == "unpair":
+        state.unpair()
+        print("Unpaired: the bot ignores everyone until you pair again.", file=out)
+        return 0
+    try:
+        bot = api.get_me().get("username")
+    except TelegramError as error:
+        print(f"error: {error}", file=out)
+        return 1
+    owner = state.owner()
+    if args.action == "status":
+        print(f"Bot @{bot}: " + (f"paired with Telegram user {owner[0]}." if owner
+                                 else "not paired (ms telegram pair)."), file=out)
+        return 0
+    if args.action == "test":
+        if not owner:
+            print("Not paired yet: ms telegram pair.", file=out)
+            return 1
+        api.send_message(owner[1], "Test message from the Master System.")
+        print("Sent.", file=out)
+        return 0
+    code = state.new_pairing_code()
+    print(f"Pairing code (valid 15 minutes, once): {code}\n"
+          f"In Telegram, open @{bot} and send:\n  /pair {code}\n"
+          "The service must be running; your user id is stored and everyone else is "
+          "ignored." + ("\nPairing again replaces the current owner." if owner else ""),
+          file=out)
     return 0
 
 
@@ -1410,6 +1499,8 @@ def _command_github(args, out):
 def build_parser():
     parser = argparse.ArgumentParser(prog="ms", description="The Master System, for its owner.")
     parser.add_argument("--config", default=None, metavar="PATH")
+    # Who acts, for the history record (the Telegram bot passes "telegram").
+    parser.add_argument("--actor", default="owner", help=argparse.SUPPRESS)
     commands = parser.add_subparsers(dest="command", required=True)
     status = commands.add_parser("status", help="Everything, in plain words.")
     status.add_argument("--details", action="store_true", help="The technical view.")
@@ -1457,6 +1548,9 @@ def build_parser():
     backlog.add_argument("--priority", type=int, default=None)
     backlog.add_argument("--id", default=None)
     backlog.set_defaults(handler=_command_backlog)
+    telegram = commands.add_parser("telegram", help="The Telegram bot: pair, status, test.")
+    telegram.add_argument("action", choices=["pair", "status", "test", "unpair"])
+    telegram.set_defaults(handler=_command_telegram)
     limit = commands.add_parser("limit", help="Answer a worker limit: wait, free or paid.")
     limit.add_argument("project")
     limit.add_argument("choice", nargs="?", choices=["wait", "free", "paid"])

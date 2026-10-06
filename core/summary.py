@@ -25,7 +25,14 @@ from typing import Callable, Mapping, Optional
 
 from core.history import EventType
 
-__all__ = ["build_summary", "render_text", "render_html", "write_summary", "headline"]
+__all__ = ["build_summary", "render_text", "render_html", "write_summary", "headline",
+           "screenshots"]
+
+
+def screenshots(summary) -> list:
+    """Every review screenshot in a summary, in order."""
+    return [s for p in summary.get("projects", []) for r in p.get("reviews", [])
+            for s in r.get("screenshots", [])]
 
 
 def build_summary(master, history, since_iso: str, prices: Mapping,
@@ -228,5 +235,8 @@ def write_summary(summary: Mapping, reports_dir: Path) -> dict:
     paths["text"].write_text(text + "\n")
     paths["html"].write_text(page)
     (reports_dir / "latest.txt").write_text(text + "\n")
+    import json
+
+    (reports_dir / "latest.json").write_text(json.dumps(summary, indent=1, default=str))
     (reports_dir / "latest.html").write_text(page)
     return paths

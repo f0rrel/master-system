@@ -35,6 +35,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from typing import Optional
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -163,6 +164,15 @@ class DeepSeekProvider(ReasoningProvider):
 
         return content
 
+    def balance(self) -> Optional[str]:
+        """The account balance from DeepSeek's read-only endpoint (GET /user/balance)."""
+        api_key = os.environ.get("DEEPSEEK_API_KEY")
+        if not api_key:
+            return None
+        request = urllib.request.Request(f"{self.base_url}/user/balance", method="GET",
+                                         headers={"Authorization": f"Bearer {api_key}"})
+        return _balance_text(self._send(request))
+
     def _post(self, path, body, api_key):
         request = urllib.request.Request(
             f"{self.base_url}{path}",
@@ -225,6 +235,13 @@ class DeepSeekProvider(ReasoningProvider):
             raise ProviderError(
                 f"DeepSeek returned a non-JSON reply: {error}"
             ) from error
+
+
+def _balance_text(payload) -> Optional[str]:
+    infos = payload.get("balance_infos") if isinstance(payload, dict) else None
+    if not infos:
+        return None
+    return ", ".join(f"{i.get('total_balance')} {i.get('currency')}" for i in infos)
 
 
 class DeepSeekVision(DeepSeekProvider):

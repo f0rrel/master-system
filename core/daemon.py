@@ -328,10 +328,12 @@ class Daemon:
         line = describe(project_id, state, labels)
         if phase == "needs_choice":
             # Always immediate: the project stays paused until the owner chooses.
+            from core.telegram_bot import limit_buttons
+
             self._notify_once(memory, f"limit:{project_id}:{state.get('profile')}:"
                                       f"{state.get('since')}:{len(state.get('events', []))}",
                               f"{project_id}: needs you", line, tags="hourglass",
-                              priority="high")
+                              priority="high", actions=limit_buttons(project_id))
         log.append(f"{project_id}: {line}")
         return True
 
@@ -343,12 +345,13 @@ class Daemon:
     def _summary(self, memory, reason) -> list:
         since = memory.pop("work_since")
         try:
-            title, message, click = self.summarize(since, reason,
-                                                   set(memory.get("stalled", {})))
+            title, message, click, *rest = self.summarize(since, reason,
+                                                          set(memory.get("stalled", {})))
         except Exception as error:  # the summary must not stop the service
             memory["work_since"] = since
             return [f"summary failed: {error}"]
-        self.notifier.send(title, message, tags="sunrise", click=click)
+        self.notifier.send(title, message, tags="sunrise", click=click,
+                           photos=rest[0] if rest else None)
         memory["last_summary"] = self.now().isoformat()
         return [f"summary sent: {message.splitlines()[0] if message else title}"]
 
