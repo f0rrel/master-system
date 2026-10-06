@@ -26,7 +26,7 @@ from core.run_lock import ProjectLock
 from core.session_store import FileSessionStore
 from core.task_orchestrator import default_worktrees
 
-__all__ = ["ACTOR", "reopen", "set_acceptance", "set_description", "set_manual_check"]
+__all__ = ["ACTOR", "cancel", "reopen", "set_acceptance", "set_description", "set_manual_check"]
 
 ACTOR = "human-cli"
 
@@ -101,3 +101,28 @@ def reopen(master, history, project_id, task_id, reason: str, actor: str = "owne
                                 "status_before": before, "spec_hash_before": spec_hash(task),
                                 "spec_hash_after": spec_hash(record)})
         return record
+
+
+def cancel(master, history, project_id, task_id, reason: str, actor: str = "owner",
+           paths: Optional[RuntimePaths] = None) -> tuple:
+    """Cancel an open task, recorded as a human action (the orchestrating model
+    can only propose this). Returns ``(record, ids of tasks that depend on it)``;
+    those are not changed, but a cancelled dependency blocks them."""
+    state = master.project_state(project_id)
+    with ProjectLock(state.project_path, holder=f"{actor} cancel"):
+        task = state.get_task(task_id)
+        if task is None:
+            raise ValueError(f"Task not found: {task_id}")
+        before = task.get("status")
+        if before in ("completed", "cancelled"):
+            raise ValueError(f"{task_id} is already {before}; nothing to cancel")
+        record = master.update_task(project_id, task_id, status="cancelled")
+        history.append(type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex,
+                       project_id=project_id, task_id=task_id,
+                       payload={"actor": actor, "action": "cancel", "reason": reason,
+                                "status_before": before, "spec_hash_before": spec_hash(task),
+                                "spec_hash_after": spec_hash(record)})
+        dependents = [t["id"] for t in master.status(project_id)["tasks"]
+                      if task_id in (t.get("depends_on") or [])
+                      and t.get("status") not in ("completed", "cancelled")]
+        return record, dependents

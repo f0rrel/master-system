@@ -276,7 +276,12 @@ class Daemon:
                                           tags="frame_with_picture")
             before = self.master.status(project_id)
             runnable, exhausted = work_for(before, self.history, self.max_failures)
-            waiting = self.waiting(project_id) or {}
+            from core.evidence import held_cancellations
+
+            # A cancellation the gate held waits for the owner (ms reopen / ms cancel);
+            # running the task again would only stop on the same proposal.
+            waiting = {**held_cancellations(self.history, project_id),
+                       **(self.waiting(project_id) or {})}
             runnable = [t for t in runnable if t not in waiting]
             for task_id in exhausted if self._batch else ():
                 self._notify_once(

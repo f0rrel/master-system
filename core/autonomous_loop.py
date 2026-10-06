@@ -573,7 +573,9 @@ class AutonomousLoop:
                 return stop(
                     STOP_APPROVAL,
                     decision,
-                    detail=f"completion requires a human: {gate_reason}",
+                    detail=("cancellation requires a human"
+                            if gate_reason == "cancellation_requires_human"
+                            else f"completion requires a human: {gate_reason}"),
                     approval_reason=gate_reason,
                 )
 

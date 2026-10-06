@@ -173,6 +173,22 @@ def attempts_for_task(
     return [AttemptSummary(**record) for record in attempts.values()]
 
 
+def held_cancellations(history, project_id: str) -> dict:
+    """``{task id: the model's reason}`` for cancellations held for the owner.
+
+    A task's cancellation is held from the decision the gate stopped until the
+    next human action on that task (cancelling, reopening or editing it).
+    """
+    held = {}
+    for event in history.events(project_id=project_id,
+                                types=[EventType.DECISION, EventType.HUMAN_ACTION]):
+        if event.type is EventType.HUMAN_ACTION:
+            held.pop(event.task_id, None)
+        elif event.payload.get("gate_reason") == "cancellation_requires_human":
+            held[event.task_id] = event.payload.get("reason") or ""
+    return held
+
+
 class HistoryEvidence:
     """Evidence about execution for one loop, read from history.
 
@@ -240,24 +256,28 @@ class HistoryEvidence:
         return reason, (attempts[-1].attempt_id if attempts else None)
 
     def _completion_reason(self, operation, current_task: Optional[Mapping] = None):
-        """Why an autonomous ``completed`` must wait for a human, or None.
+        """Why an autonomous ``completed`` or ``cancelled`` must wait for a human, or None.
 
-        Applies to any operation that would set a task's status to
-        ``completed``. It may apply autonomously only when the task's latest
+        A ``cancelled`` status always waits (``cancellation_requires_human``): a model
+        that cannot fake a completion could otherwise drop a task it cannot finish.
+        A ``completed`` status may apply autonomously only when the task's latest
         attempt -- across all of history, since a pass from an earlier session
         is still evidence -- finished, was run against the task's spec as it
         will be *after* the operation (so retitling and completing in one
         operation does not pass), and was verified as ``pass``. Every other
-        status change is left to the approval policy alone.
+        status change (``blocked``, ``in_progress``, ``planned``) is left to the
+        approval policy alone.
 
         ``current_task`` is the task record as it is now, or None if it does
         not exist yet.
         """
         arguments = operation.arguments
-        if arguments.get("status") != "completed":
+        if arguments.get("status") not in ("completed", "cancelled"):
             return _NOT_A_COMPLETION
         if operation.operation not in ("update_task", "create_task"):
             return _NOT_A_COMPLETION
+        if arguments["status"] == "cancelled":
+            return "cancellation_requires_human"
 
         task_id = arguments.get("task_id")
         project_id = arguments.get("project_id")

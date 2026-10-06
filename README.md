@@ -109,7 +109,7 @@ acceptance:
 | Role | What it can do | What checks it |
 | --- | --- | --- |
 | Planner | drafts tasks and tests | fail-first check + human approval |
-| Orchestrating model | proposes one allowlisted operation per step | policy + completion gate |
+| Orchestrating model | proposes one allowlisted operation per step | policy + completion gate; cancelling waits for a human |
 | Worker | edits a fresh worktree with a bash-capable agent | the verifier; its claims are ignored |
 | Visual reviewer | can only turn pass into fail | — |
 
@@ -144,11 +144,12 @@ the result is bound to the task's `spec_hash`.
 | Files changed outside the task type's paths | Changes to the shared git directory while the worker runs: they are undone afterwards, not prevented (gap V2, narrowed) |
 | Uncommitted or ignored files changing the verdict (fresh verification worktree) | Processes that escape their group with `setsid` (gap N1) |
 | Moving `develop`, tags, hooks or git config from the worktree (restored, attempt fails) | Weak tests that a human approved |
-| Pushing a `develop` that no gate produced (publish guard) | The orchestrating model cancelling or retitling tasks (gap H2) |
+| Pushing a `develop` that no gate produced (publish guard) | The orchestrating model retitling tasks or setting them blocked, in progress or planned (gap H2) |
 | Hangs (deadline and process-group kill) |  |
 | A spec changed after a pass |  |
 | The orchestrating model completing or integrating without evidence |  |
 | Crashes mid-attempt (no replay) |  |
+| The orchestrating model cancelling a task it cannot finish (held for you) |  |
 
 Details: [safety rules](docs/ARCHITECTURE.md#safety-rules-and-trust-boundaries) and
 [known gaps](docs/ARCHITECTURE.md#known-gaps).
@@ -255,7 +256,8 @@ errors.
 | Process escape | `setsid` a process that outlives the attempt | **Known gap N1** | `ps` |
 | Crash | `kill -9` the run during an attempt | The attempt becomes `interrupted` and is not replayed | `ms report`, history |
 | Concurrent change | Commit to `develop` by hand during a run | While the worker runs: undone like a worker's change (the attempt fails; the commit's sha is kept in `restored_refs`). After it: replay onto the new tip and re-verification, or `integration_refused` and a new attempt; either way not published without `--accept-tip` | `git log`, history |
-| Prompt injection | Instructions in task text, `DIRECTION.md` or repository files aimed at the planner or orchestrating model | Never completed without a pass or integrated without the gate; cancelling or retitling is possible (gap H2, known) | history |
+| Prompt injection | Instructions in task text, `DIRECTION.md` or repository files aimed at the planner or orchestrating model | Never completed without a pass or integrated without the gate; a cancellation is held for you (`ms status`); retitling or other status changes are possible (gap H2, known) | history, `ms status` |
+| Dropping a task | Get the orchestrating model to cancel a task it cannot finish (a hard task, or a hint in the task text) | Held with `cancellation_requires_human`; the task waits for `ms reopen` or `ms cancel`, other tasks keep running | `ms status`, history |
 | Trivial tests | Get the planner to draft tests that fail now but pass trivially | Nothing stops this except human review of the draft | `ms chat` → `show` |
 | Spend | Push spend past the caps | Caps are checked between steps; one call in flight can overshoot | `ms status`, `ms report` |
 | Release | Change `develop` after the release pull request opens | The pull request shows the new commits; after a merge, the release is tagged only if the merge's tree equals the pull request head's tree at merge time, so commits added after opening are released if the human merges | `ms status`, GitHub |
@@ -264,7 +266,8 @@ Already known, so please report these only if you find a new route: changes to t
 git directory that take effect before they are undone, or files in it that are not checked
 (V2, narrowed), git configuration outside the repository such as `~/.gitconfig` (G1),
 `setsid` escapes and anything else that follows from workers running as your user (N1),
-and the orchestrating model cancelling or retitling tasks (H2). Ignored files (V1) and
+and the orchestrating model retitling tasks or changing their status other than to
+completed or cancelled (H2). Ignored files (V1) and
 moving `develop` from a worktree are now defended: a route around either is a bypass. The full list is in [known gaps](docs/ARCHITECTURE.md#known-gaps).
 
 **Useful feedback includes:** the master-system commit; `ms doctor` output (it redacts

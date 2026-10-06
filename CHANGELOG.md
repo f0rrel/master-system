@@ -5,6 +5,14 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Orchestrator scope
+- The orchestrating model can no longer cancel a task: a proposal to set `cancelled` is
+  held for the owner (`cancellation_requires_human`), like a completion without evidence.
+  `ms status` lists it with the model's reason; the service skips that task (others keep
+  running) until the owner decides. Other status changes are unchanged.
+- New `ms cancel <project> <task> --reason "…"`: cancel an open task as a recorded human
+  action; it names the tasks that depend on it.
+
 ### Hardening: independent verification
 - Verification runs in a fresh worktree of the attempt's committed result
   (`<attempt>-verify`, named in the `verification` event), so files a worker leaves

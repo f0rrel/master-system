@@ -243,12 +243,25 @@ def test_creating_a_task_as_already_completed_is_gated():
     assert gate == "no_attempt"
 
 
-@pytest.mark.parametrize("status", ["blocked", "cancelled", "in_progress", "planned"])
+@pytest.mark.parametrize("status", ["blocked", "in_progress", "planned"])
 def test_other_status_changes_are_not_gated(status):
     operation = Operation.propose({"operation": "update_task", "project_id": "alpha",
                                    "task_id": "t1", "status": status})
 
     assert HistoryEvidence(InMemoryHistoryStore()).completion_gate(operation) is None
+
+
+@pytest.mark.parametrize("operation", ["update_task", "create_task"])
+def test_cancelling_is_held_for_a_human_even_after_a_pass(operation):
+    history = InMemoryHistoryStore()
+    attempt = started(history)
+    finished(history, attempt)
+    verified(history, attempt, "pass")
+    cancel = Operation.propose({"operation": operation, "project_id": "alpha",
+                                "task_id": "t1", "title": "T1", "milestone": "m1",
+                                "status": "cancelled"})
+
+    assert HistoryEvidence(history).completion_gate(cancel, TASK) == "cancellation_requires_human"
 
 
 def test_the_approval_policy_itself_stays_a_pure_function_of_the_operation():
@@ -576,3 +589,17 @@ def test_completion_check_returns_no_attempt_for_other_operations():
 
     assert HistoryEvidence(InMemoryHistoryStore()).completion_check(operation, TASK) == \
         (None, None)
+
+
+def test_the_loop_holds_a_cancellation_for_a_human(tmp_path):
+    cancel = act({"operation": "update_task", "project_id": "alpha", "task_id": "t1",
+                  "status": "cancelled"})
+    loop, master, _, backend = loop_for(tmp_path, [cancel])
+
+    result = loop.run("alpha")
+
+    assert result.stop_reason == STOP_APPROVAL
+    assert result.approval_reason == "cancellation_requires_human"
+    assert status_of(master) == "in_progress"
+    decision = loop.history.events(types=[EventType.DECISION])[-1].payload
+    assert decision["gate_reason"] == "cancellation_requires_human"

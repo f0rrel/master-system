@@ -33,7 +33,10 @@ installation and usage, see the [README](../README.md).
   - `integrate_attempt` (human only).
 - **Policy and the completion gate** decide whether a proposal runs. A task completes only
   if its latest attempt finished, was verified `pass` against the current spec and, in
-  projects with `auto_integrate: true`, is integrated into the base branch.
+  projects with `auto_integrate: true`, is integrated into the base branch. A proposal to
+  cancel a task is always held for the owner (`cancellation_requires_human`): the service
+  skips that task until `ms reopen` (keep it) or `ms cancel` (accept), and `ms status`
+  lists it with the model's reason.
 - **History** (`core/sqlite_history.py`, SQLite, append-only, schema v4) records every
   decision, attempt, verification, integration, human action, publish and release.
   Reports are built from history alone.
@@ -350,7 +353,7 @@ Master's context never names them. Reports show attempts, passes and cost per ti
 | ID | Gap | Plan |
 | --- | --- | --- |
 | N1 | Workers run as the system's OS user: isolation, not a sandbox. A worker can read the owner's files (`master.env`, the GitHub App key), write outside its worktree (for example `~/.gitconfig`, the state directory, the dedicated clone's working files) and leave processes behind (`setsid`). Everything below that says "detected" assumes the worker stays inside git | Containers or an OS sandbox |
-| H2 | Policy is keyed on operation names, not state transitions | A transition table |
+| H2 | Policy is keyed on operation names, not state transitions. Partly addressed: completing needs evidence and cancelling is held for the owner; other transitions (`blocked`, `in_progress`, `planned`) and retitling are still routine for the orchestrating model | A transition table |
 | H3 | Approvals for gated operations cannot be granted outside a run | Approval events and `ms approve` |
 | H4 | The service's per-task failure budget and the in-run attempt limit are separate | Unify |
 | M4 | Edits made directly in YAML are not recorded (`ms chat` and `run_cli task …` edits are) | Record every write with an actor |

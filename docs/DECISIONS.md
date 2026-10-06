@@ -20,7 +20,7 @@ choice* — made during implementation and recorded here for review.
 | SQLite with WAL and `synchronous=FULL`; only `sqlite_history.py` imports `sqlite3` | Durability before side effects; replaceable store | Approved |
 | No automatic replay of uncertain attempts | The first worker may already have changed the world | Approved |
 | One autonomous run per project via a non-blocking `flock`; human mutations take the same lock; PIDs are informational only | Simple and kernel-managed; no leases needed on one machine | Approved |
-| Completion gate: latest attempt finished, verdict `pass`, no newer attempt; otherwise a human decides | A QA pass is not completion | Approved |
+| Completion gate: latest attempt finished, verdict `pass`, no newer attempt; otherwise a human decides | A QA pass is not completion | Approved; widened to cancellation (see "Orchestrator scope") |
 | Attempt limit of 3 per (session, task) | Prevents hammering a broken task | Approved; to be unified with the service budget (gap H4) |
 | A work session is operational continuity, not memory | Separation of concerns | Approved |
 | AI coding assistants used to build the system are never runtime dependencies | Model and agent independence | Approved |
@@ -184,3 +184,13 @@ choice* — made during implementation and recorded here for review.
 | Ref writers outside a run (release check, `ms publish`, the release fetch, the service's watcher and post-run publisher) take the project lock and skip while it is busy | During a worker run every ref change is attributed to the worker and undone | Implementation choice |
 | Publish guard: `fast_forward` records the tip it set in `refs/ms-system/heads/<branch>`; the publisher and release preparation refuse a different `develop`; the owner accepts a deliberate change with `ms publish --accept-tip` (a recorded human action) | Nothing should reach GitHub that no gate produced. A ref rather than a history event: image and changelog commits record no event and a new event type needs a schema migration; `refs/ms-*` changes during a run are already tampering | Approved (guard); implementation choice (ref) |
 | The recorded tip advances only when the branch moved from it; before the first system write the current tip is trusted | Building on a foreign tip must not adopt it; existing installations need no manual step | Implementation choice |
+
+## Orchestrator scope
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| **Reversed:** the completion gate applied only to `completed`; every other status change, including `cancelled`, was left to the approval policy, where `update_task` is routine, so the orchestrating model could cancel a task on its own | — | Superseded by the next row |
+| A proposal to set a task `cancelled` (`update_task` or `create_task`) is held for the owner with gate reason `cancellation_requires_human`, through the completion gate's stop path; `blocked`, `in_progress` and `planned` stay routine | A model that cannot fake a completion could otherwise drop a task it cannot finish | Approved |
+| `ms cancel <project> <task> --reason` cancels an open task as a recorded human action and names the tasks that depend on it (unchanged); `ms reopen` keeps a task | The owner needs a recorded way to accept a held cancellation; a recorded human action also clears the wait | Approved |
+| A held cancellation makes its task wait for the owner in the service (other tasks keep running); held completions are unchanged | Running the task again would stop on the same proposal and stall the whole project | Approved |
+| Split approval still cancels the replaced task | It is the owner's action, not the model's | Approved |

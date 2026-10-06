@@ -195,3 +195,44 @@ def test_ms_reopen_puts_a_blocked_task_back_with_a_record():
     tasks["tasks"][2]["status"] = "completed"
     tasks_file.write_text(yaml.safe_dump(tasks))
     assert ms_main(["reopen", "sample-project", task_id], out=io.StringIO()) == 1
+
+
+# --- cancelling ---
+
+
+def test_ms_cancel_cancels_with_a_record_and_names_the_tasks_that_depend_on_it():
+    from core.paths import RuntimePaths
+    from core.sqlite_history import SQLiteHistoryStore
+
+    tasks_file = default_projects_root() / "sample-project" / "tasks.yaml"
+    tasks = yaml.safe_load(tasks_file.read_text())
+    tasks["tasks"][3]["depends_on"] = ["foundation-003"]
+    tasks_file.write_text(yaml.safe_dump(tasks))
+    out = io.StringIO()
+
+    assert ms_main(["cancel", "sample-project", "foundation-003", "--reason", "not needed"],
+                   out=out) == 0
+
+    assert "foundation-003 is cancelled" in out.getvalue()
+    assert "foundation-004" in out.getvalue()  # its dependent is named, not changed
+    after = {t["id"]: t for t in yaml.safe_load(tasks_file.read_text())["tasks"]}
+    assert after["foundation-003"]["status"] == "cancelled"
+    assert after["foundation-004"]["status"] == "planned"
+    [event] = SQLiteHistoryStore(RuntimePaths.default().history_path).events(
+        types=[EventType.HUMAN_ACTION])
+    assert event.task_id == "foundation-003"
+    assert event.payload["action"] == "cancel" and event.payload["reason"] == "not needed"
+    assert event.payload["status_before"] == "planned"
+
+
+@pytest.mark.parametrize("status", ["completed", "cancelled"])
+def test_ms_cancel_refuses_a_finished_task(status):
+    tasks_file = default_projects_root() / "sample-project" / "tasks.yaml"
+    tasks = yaml.safe_load(tasks_file.read_text())
+    tasks["tasks"][2]["status"] = status
+    tasks_file.write_text(yaml.safe_dump(tasks))
+    out = io.StringIO()
+
+    assert ms_main(["cancel", "sample-project", "foundation-003", "--reason", "x"],
+                   out=out) == 1
+    assert f"foundation-003 is already {status}" in out.getvalue()

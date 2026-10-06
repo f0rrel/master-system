@@ -217,7 +217,8 @@ ever run as a command.
 | `ms lessons <project> [--approve all\|IDS] [--reject IDS\|rest]` | Review lessons workers proposed; only approved lessons are used. |
 | `ms pick <project> <task> <asset> <n>` | Choose one of a task's generated image candidates; it is committed and the task can run. |
 | `ms split <project> <task> draft ["guidance"] \| recheck \| approve [anyway] \| reject \| escalate` | Ask the planner to split a too-big task (again: it continues the pending split), re-run its checks without the model, or decide it (also offered in Telegram). Approving replaces the task in place; its dependents wait for all new tasks. |
-| `ms reopen <project> <task> [--reason …]` | Put a blocked task back in the queue (spec unchanged, recorded); its attempt budget starts over. |
+| `ms reopen <project> <task> [--reason …]` | Put a blocked or open task back in the queue (spec unchanged, recorded); its attempt budget starts over. Also keeps a task whose cancellation the orchestrating model proposed. |
+| `ms cancel <project> <task> --reason …` | Cancel an open task (recorded as a human action). Lists tasks that depend on it; they are not changed and cannot start while it is cancelled. The orchestrating model can only propose a cancellation; this is how you accept one. |
 | `ms telegram pair\|status\|test\|unpair` | Pair the Telegram bot with your account (one-time code), check it, send a test message, or forget the owner. |
 | `ms limit <project> [wait\|free\|paid]` | Show or answer a worker limit: wait for the reset, switch to the next free worker profile, or use the paid one (counts toward the daily cap). |
 | `ms publish <project> [--accept-tip]` | Push `develop` and the preview site now (the service also does this after every run). `develop` is pushed only at a tip the system set; `--accept-tip` accepts a change you made outside Master System (recorded as a human action). |
@@ -374,6 +375,7 @@ Per-project options (`repository`, `base_branch`, `auto_integrate`, `github`, `p
 | Boundary | Enforcement |
 | --- | --- |
 | Models only propose; one component writes project state | `core/master.py` is the single writer; boundary tests |
+| The orchestrating model cannot complete or cancel on its own | Completing needs a verified (and, with `auto_integrate`, integrated) pass; cancelling always waits for the owner (`ms cancel` / `ms reopen`) |
 | Worker output is untrusted | Worker state updates are never applied; raw output is stored as provenance and never shown to the orchestrating model |
 | The definition of done is independent of the worker | Acceptance commands and protected paths are set by a human or the approved planner flow and run by the orchestrator's verifier |
 | Evidence is bound to the spec | Every attempt carries a `spec_hash` (title, acceptance, description, assets); changing the spec invalidates a pass |

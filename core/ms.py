@@ -573,6 +573,14 @@ def owner_needs(master, history, config, project_id, *, stalled=(), pending_rele
              "(ms chat)" for t in tasks if t.get("status") == "blocked"]
     needs += [f"{t} {titles[t]}: failed several attempts; change its description "
               "(ms chat)" for t in exhausted]
+    from core.evidence import held_cancellations
+
+    for task_id, reason in held_cancellations(history, project_id).items():
+        if task_id in titles:
+            needs.append(f"{task_id} {titles[task_id]}: the orchestrating model wants to "
+                         f"cancel it" + (f": {reason}" if reason else "") + ". Keep it: "
+                         f"ms reopen {project_id} {task_id} --reason \"…\" / Accept: "
+                         f"ms cancel {project_id} {task_id} --reason \"…\"")
     if project_id in stalled:
         needs.append("The last run made no progress; the service waits for a change.")
     if pending_release:
@@ -1445,6 +1453,28 @@ def _command_reopen(args, out):
     return 0
 
 
+def _command_cancel(args, out):
+    from core.human_edits import cancel
+    from core.master import EXPECTED_ERRORS, Master
+    from core.run_lock import ProjectBusyError
+    from core.sqlite_history import SQLiteHistoryStore
+
+    paths = _paths()
+    master = Master(_config(args).run.projects_root)
+    try:
+        record, dependents = cancel(master, SQLiteHistoryStore(paths.history_path),
+                                    args.project, args.task, args.reason, actor=args.actor,
+                                    paths=paths)
+    except (*EXPECTED_ERRORS, ProjectBusyError) as error:
+        print(f"error: {error}", file=out)
+        return 1
+    print(f"{record['id']} is cancelled.", file=out)
+    if dependents:
+        print(f"These tasks depend on it and cannot start now: {', '.join(dependents)}. "
+              "Change their dependencies in ms chat, or cancel them too.", file=out)
+    return 0
+
+
 def split_decision(config, project_id, task_id, decision, actor="owner",
                    size_override=False) -> str:
     """Approve, reject or escalate a pending split. Returns a plain answer."""
@@ -1703,6 +1733,11 @@ def build_parser():
     reopen.add_argument("task")
     reopen.add_argument("--reason", default="reopened by the owner")
     reopen.set_defaults(handler=_command_reopen)
+    cancel = commands.add_parser("cancel", help="Cancel an open task (recorded).")
+    cancel.add_argument("project")
+    cancel.add_argument("task")
+    cancel.add_argument("--reason", required=True)
+    cancel.set_defaults(handler=_command_cancel)
     telegram = commands.add_parser("telegram", help="The Telegram bot: pair, status, test.")
     telegram.add_argument("action", choices=["pair", "status", "test", "unpair"])
     telegram.set_defaults(handler=_command_telegram)

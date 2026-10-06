@@ -546,3 +546,65 @@ def test_ref_writers_outside_a_run_skip_a_busy_project(tmp_path):
         assert watch("ml") == []
     assert watch("ml") == ["x"]
     assert calls == ["ml"]
+
+
+def held_cancel(env, task_id="t2", reason="it cannot be done with this library"):
+    env.history.add(EventType.DECISION, task_id=task_id, payload={
+        "decision": "act", "reason": reason, "gate_reason": "cancellation_requires_human",
+        "operation": {"name": "update_task",
+                      "arguments": {"task_id": task_id, "status": "cancelled"}}})
+
+
+def test_status_lists_a_held_cancellation_with_the_models_reason(env):
+    from core.ms import friendly_status
+
+    held_cancel(env)
+    text = friendly_status(env.daemon.master, env.history, load_config("/nonexistent"),
+                           paused=False, last_looked=NOW.isoformat(),
+                           is_busy=lambda p: False, spend={"total_usd": 0}, now=NOW)
+
+    assert "Needs you" in text
+    assert "t2 T2: the orchestrating model wants to cancel it: it cannot be done with " \
+           "this library" in text
+    assert "ms reopen alpha t2" in text
+
+
+def test_a_human_action_on_the_task_resolves_a_held_cancellation(env):
+    from core.evidence import held_cancellations
+
+    held_cancel(env)
+    assert held_cancellations(env.history, "alpha") == {
+        "t2": "it cannot be done with this library"}
+    env.history.add(EventType.HUMAN_ACTION, task_id="t2", payload={"action": "reopen"})
+    assert held_cancellations(env.history, "alpha") == {}
+
+
+def test_other_tasks_keep_running_while_a_cancellation_is_held(env):
+    write_project(env.root, [task("t1"), task("t4")])
+    held_cancel(env, task_id="t1")
+
+    log = env.daemon.cycle()
+
+    assert len(env.runs) == 1
+    assert any("tasks ['t4']" in line for line in log)
+
+
+def test_a_run_does_not_stop_again_on_the_same_held_cancellation(env):
+    write_project(env.root, [task("t1")])
+
+    def run(request):  # the run made an attempt, then the model proposed cancelling
+        env.runs.append(request)
+        env.history.add(EventType.ATTEMPT_STARTED, task_id="t1", attempt_id="a1")
+        env.history.rows[-1].session_id = request.session_id  # progress: not stalled
+        held_cancel(env, task_id="t1")
+        return 0
+
+    env.daemon.run = run
+    env.daemon.cycle()
+    log = env.daemon.cycle()
+
+    assert len(env.runs) == 1
+    assert "alpha: nothing to do" in log
+    env.history.add(EventType.HUMAN_ACTION, task_id="t1", payload={"action": "reopen"})
+    env.daemon.cycle()
+    assert len(env.runs) == 2
