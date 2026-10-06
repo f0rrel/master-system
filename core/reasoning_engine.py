@@ -263,7 +263,9 @@ ADDITIONAL RULES
 - Anything not in the list above will be rejected.
 - "ready_tasks" are in backlog order (epic priority first). Work on them in
   that order unless the evidence gives a reason not to. Never change a milestone
-  whose status is "proposed": it is an unapproved backlog epic.
+  whose status is "proposed": it is an unapproved backlog epic. A task whose
+  readiness is "waiting_for_owner" waits for a human (for example to pick an
+  image): do not start or run it.
 - If PROJECT STATE has "direction", it is the owner's standing intent for the
   project. Judge every proposal against it: never create or change a task in a
   way that contradicts it; if the request conflicts with it, choose
@@ -423,7 +425,7 @@ class ReasoningEngine:
     """Turns a human request plus project state into an approvable proposal."""
 
     def __init__(self, provider, master=None, interface=None, evidence_source=None,
-                 direction_source=None):
+                 direction_source=None, waiting_source=None):
         if master is None:
             master = Master()
         if interface is None:
@@ -438,6 +440,8 @@ class ReasoningEngine:
         #: project_id -> the project's direction text or None (core.direction).
         #: Optional: without one the model sees no direction.
         self._direction_source = direction_source
+        #: project_id -> {task id: why it waits for the owner} (e.g. an image pick).
+        self._waiting_source = waiting_source
 
     @property
     def provider(self):
@@ -457,12 +461,15 @@ class ReasoningEngine:
         project_state = self._master.project_state(project_id)
         from core.backlog import epic_rank, ordered_tasks
 
+        waiting = (self._waiting_source(project_id) or {}) if self._waiting_source else {}
         # Backlog order: epic priority, then file order. ready_tasks keeps it.
         milestones = sorted(status.get("milestones", []),
                             key=lambda m: epic_rank(status.get("milestones", []))[m.get("id")])
         tasks_with_readiness = []
         for task in ordered_tasks(status.get("milestones", []), status.get("tasks", [])):
             readiness, blocked_by, reason = calculate_readiness(project_state, task)
+            if readiness == "ready" and task.get("id") in waiting:
+                readiness, reason = "waiting_for_owner", waiting[task.get("id")]
             tasks_with_readiness.append(
                 {
                     "id": task.get("id"),

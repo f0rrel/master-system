@@ -56,6 +56,7 @@ from typing import Callable, Optional
 
 from core.direction import direction_settings, read_direction
 from core.history import EventType
+from core.images import asset_problems
 from core.task_types import TYPES, frozen_allowed_paths, type_settings
 
 __all__ = ["PlannerChat", "DraftProblem", "draft_hash", "draft_problems", "render_draft",
@@ -122,7 +123,15 @@ def planner_settings(project: dict) -> dict:
         "protected_paths": list(planner.get("protected_paths") or ["tests/*"]),
         "direction_path": direction_settings(project)["path"],
         "types": {t: type_settings(project, t) for t in TYPES},
+        "screens": _screen_names(project),
     }
+
+
+def _screen_names(project) -> list:
+    review = project.get("visual_review") if isinstance(project.get("visual_review"), dict) \
+        else {}
+    return [str(s.get("name")) for s in review.get("screens") or []
+            if isinstance(s, dict) and s.get("name")]
 
 
 def draft_hash(draft) -> str:
@@ -208,6 +217,13 @@ def draft_problems(draft, existing_task_ids, existing_milestone_ids, settings,
         if task.get("size") not in SIZES:
             problems.append(f"{where}: size must be small, medium or hard")
         task_type = task.get("type")
+        if (task.get("assets") or task.get("screens")) and task_type != "visual":
+            problems.append(f"{where}: only visual tasks have assets or screens")
+        problems.extend(asset_problems(task.get("assets"), where))
+        for screen in task.get("screens") or []:
+            if screen not in settings.get("screens", []):
+                problems.append(f"{where}: unknown screen {screen!r} (screens: "
+                                f"{', '.join(settings.get('screens') or []) or 'none'})")
         if task_type not in TYPES:
             problems.append(f"{where}: type must be one of {', '.join(TYPES)}")
         else:
@@ -266,6 +282,14 @@ def task_records(draft, settings) -> list:
         allowed = frozen_allowed_paths(settings["types"][task["type"]])
         if allowed:
             record["acceptance"]["allowed_paths"] = allowed
+        if task.get("assets"):
+            record["assets"] = [{"name": a["name"], "prompt": a["prompt"].strip(),
+                                 "path": a["path"], "candidates": int(a.get("candidates", 1))}
+                                for a in task["assets"]]
+            # The worker uses the generated images; it may not replace them.
+            record["acceptance"]["protected_paths"] += [a["path"] for a in task["assets"]]
+        if task.get("screens"):
+            record["screens"] = list(task["screens"])
         if task.get("depends_on"):
             record["depends_on"] = list(task["depends_on"])
         records.append(record)
@@ -373,6 +397,13 @@ is a short slug like "epic-search".
 - type: what kind of work the task is: {types}. Each type may change only its allowed \
 paths; an attempt that changes anything else fails. Pick the type whose paths cover the \
 task's "files"; split work that needs two types into two tasks.
+- assets (visual tasks only, optional): images the task needs. The system generates them \
+before the task runs, in the project's fixed image style, and the worker finds them at \
+their paths: [{{"name": "slug", "prompt": "what to draw (the subject only; the style is \
+added)", "path": "where the image file goes", "candidates": 1, or 3 when the owner should \
+choose, e.g. character portraits}}].
+- screens (visual tasks only, optional): which screens the visual reviewer should look at, \
+from: {screens}.
 - size: "small" (one function or one screen element), "medium" (several parts), "hard" \
 (new mechanics, tricky logic). Be honest; it picks the coding model.
 - description: what to build and where in the code, written for the coding agent. End it \
@@ -402,7 +433,7 @@ Answer with ONE JSON object only:
                         "depends_on": [], "files": ["files it will change"],
                         "description": "...", "manual_check": "...",
                         "tests": [{{"path": "...", "content": "..."}}],
-                        "test_commands": ["..."]}}]}}}}
+                        "test_commands": ["..."], "assets": [], "screens": []}}]}}}}
 "draft" is the COMPLETE current draft whenever you change it (it replaces the previous one), \
 or null to keep the previous one unchanged."""
 
@@ -425,7 +456,8 @@ def system_prompt(name, next_ids, settings) -> str:
         for t, s in (settings.get("types") or {}).items())
     return SYSTEM.format(name=name, next_ids=", ".join(next_ids),
                          test_dir=settings["test_dir"], suffix_rule=suffix_rule,
-                         examples=examples, guidance=guidance, types=types or "developer")
+                         examples=examples, guidance=guidance, types=types or "developer",
+                         screens=", ".join(settings.get("screens") or []) or "(none set up)")
 
 
 @dataclass

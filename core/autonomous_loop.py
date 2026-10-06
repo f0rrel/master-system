@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from core.direction import direction_text
+from core.images import waiting_tasks
 from core.execution import ExecutionBackend
 from core.evidence import DEFAULT_MAX_ATTEMPTS, HistoryEvidence
 from core.execution_runner import ExecutionError
@@ -212,6 +213,7 @@ class AutonomousLoop:
         self._engine = ReasoningEngine(
             provider, master, self._interface, evidence_source=self._evidence,
             direction_source=lambda project_id: direction_text(master, project_id),
+            waiting_source=lambda project_id: waiting_tasks(master, project_id),
         )
         self._orchestrator = TaskOrchestrator(
             master,

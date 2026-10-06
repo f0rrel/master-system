@@ -143,6 +143,11 @@ class Daemon:
     #: Called every cycle per project (even without a run), e.g. the release
     #: watcher; returns notification lines.
     watchers: list = field(default_factory=list)
+    #: Called per idle hands-off project before choosing work (e.g. images for
+    #: visual tasks, core.images.AssetStep); returns lines.
+    prepare: list = field(default_factory=list)
+    #: project_id -> {task id: why it waits for the owner}; such tasks are not run.
+    waiting: Callable[[str], dict] = lambda project_id: {}
 
     # --- files the service and `ms` share ---
 
@@ -217,8 +222,21 @@ class Daemon:
                 log.append(f"{project_id}: stalled; waiting for the owner")
                 continue
             memory.get("stalled", {}).pop(project_id, None)
+            for step in self.prepare:
+                try:
+                    lines = step(project_id) or []
+                except Exception as error:  # a failed step must not stop the service
+                    lines = [f"preparing failed: {error}"]
+                log += [f"{project_id}: {line}" for line in lines]
+                for line in lines:
+                    if "to pick from" in line or "failed" in line:
+                        self._notify_once(memory, f"prepare:{project_id}:{line}",
+                                          f"{project_id}: needs you", line,
+                                          tags="frame_with_picture")
             before = self.master.status(project_id)
             runnable, exhausted = work_for(before, self.history, self.max_failures)
+            waiting = self.waiting(project_id) or {}
+            runnable = [t for t in runnable if t not in waiting]
             for task_id in exhausted:
                 self._notify_once(
                     memory, f"exhausted:{project_id}:{task_id}:{self._last_human(project_id, task_id)}",

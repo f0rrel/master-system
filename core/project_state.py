@@ -366,6 +366,11 @@ class ProjectState:
                     f"{sorted(VALID_TASK_STATUSES)}"
                 )
 
+            if task.get("assets") is not None:
+                from core.images import asset_problems
+
+                problems.extend(asset_problems(task.get("assets"), f"task {task_id}"))
+
             task_type = task.get("type")
             if task_type is not None and task_type not in TASK_TYPES:
                 problems.append(

@@ -455,3 +455,16 @@ def test_status_finishes_merged_releases_at_most_once_a_minute(tmp_path):
     check_releases(None, Master(), None, paths, now=1061.0, releaser=Releaser(),
                    notifier=notifier)
     assert calls == ["ml", "ml"]
+
+
+def test_prepare_steps_run_first_and_waiting_tasks_are_not_run(env):
+    env.daemon.prepare = [lambda project_id: ["t1: 3 images to pick from for blob (ms status)"]]
+    env.daemon.waiting = lambda project_id: {"t1": "waiting for images: blob"}
+    log = env.daemon.cycle()
+    assert env.runs == []
+    assert "alpha: t1: 3 images to pick from for blob (ms status)" in log
+    assert "alpha: nothing to do" in log
+    [sent] = env.notifier.sent
+    assert sent["title"] == "alpha: needs you" and "pick" in sent["message"]
+    env.daemon.cycle()
+    assert len(env.notifier.sent) == 1  # once per line

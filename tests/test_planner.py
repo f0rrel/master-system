@@ -2,6 +2,7 @@
 
 import io
 import json
+import re
 import os
 import shutil
 
@@ -290,7 +291,7 @@ def test_the_prompt_follows_the_projects_test_conventions():
             '"npx playwright test tests/tasks/app-3-x.spec.js"') in prompt
     generic = system_prompt("Example App", ["app-3"], planner_settings({}))
     assert "the project's existing test runner" in generic
-    assert "{" not in generic.split("Answer with ONE JSON")[0]
+    assert not re.search(r"\{[a-z_]+\}", generic)  # every placeholder is filled
 
 
 def test_without_a_syntax_check_the_check_runs_only_the_commands(env):

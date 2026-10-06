@@ -189,6 +189,15 @@ class TaskOrchestrator:
         """
         task, context = self._runner.prepare(project_id, task_id)
         project = self._master.project_state(project_id).project()
+        if task.get("assets") and project.get("repository"):
+            from core.images import missing_assets
+
+            missing = missing_assets(project, task)
+            if missing:
+                raise ExecutionError(
+                    f"task {task_id} waits for the owner: its images "
+                    f"({', '.join(a['name'] for a in missing)}) are not on "
+                    f"{project.get('base_branch')} yet")
         repository = project.get("repository")
         base_branch = project.get("base_branch")
         if not repository:

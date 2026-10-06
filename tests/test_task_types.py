@@ -178,3 +178,24 @@ def test_an_unknown_task_type_is_invalid_state(tmp_path):
     project = typed_project(tmp_path, task_type="artist")
     with pytest.raises(Exception, match="unknown type"):
         Master(tmp_path / "projects").status("p")
+
+
+def test_visual_drafts_can_ask_for_images_and_screens():
+    project = {**PROJECT, "visual_review": {"screens": [{"name": "home"}, {"name": "game"}]}}
+    settings = planner_settings(project)
+    asset = {"name": "blob", "prompt": "a blob monster", "path": "www/assets/blob.png",
+             "candidates": 3}
+    good = draft(assets=[asset], screens=["game"])
+    assert draft_problems(good, set(), set(), settings) == []
+    [record] = task_records(good, settings)
+    assert record["assets"] == [asset] and record["screens"] == ["game"]
+    assert "www/assets/blob.png" in record["acceptance"]["protected_paths"]
+    problems = draft_problems(draft(type="logic", files=[], assets=[asset]), set(), set(),
+                              settings)
+    assert any("only visual tasks" in p for p in problems)
+    bad = draft(assets=[{**asset, "path": "../x.gif", "candidates": 9}], screens=["boss"])
+    problems = draft_problems(bad, set(), set(), settings)
+    assert any("relative image path" in p for p in problems)
+    assert any("candidates must be 1 to 4" in p for p in problems)
+    assert any("unknown screen 'boss'" in p for p in problems)
+    assert "from: home, game" in system_prompt("App", ["t-1"], settings)
