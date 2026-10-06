@@ -304,7 +304,7 @@ def project_overview(master, history, project_id, *, is_busy=None, max_failures=
     """Everything `ms status` shows for one project, as plain data."""
     from core.daemon import work_for
     from core.history import EventType
-    from core.publish import pages_url
+    from core.publish import site_urls
     from core.workspace import is_ancestor
 
     status = master.status(project_id)
@@ -349,11 +349,11 @@ def project_overview(master, history, project_id, *, is_busy=None, max_failures=
     if groups["in develop"]:
         needs_you.append(f"release ready: {len(groups['in develop'])} task(s) in develop "
                          "are not released yet (`ms release`)")
-    url = pages_url(github["repo"]) if github.get("repo") else None
+    live_url, preview_url = site_urls(github)
     return {"project_id": project_id, "name": status.get("name"),
             "busy": bool(is_busy and is_busy(project_id)), "groups": groups,
             "ready": runnable, "needs_you": needs_you,
-            "preview_url": url + "develop/" if url else None, "live_url": url}
+            "preview_url": preview_url, "live_url": live_url}
 
 
 def _status_details(args, out):
@@ -506,7 +506,7 @@ def friendly_status(master, history, config, *, paused, last_looked, is_busy, sp
                                                     f"ms chat {project_id})"]
         if view["preview_url"]:
             lines.append(f"\n  Preview: {view['preview_url']}")
-            lines.append(f"  Live game: {view['live_url']}")
+            lines.append(f"  Live:    {view['live_url']}")
         lines.append("")
     lines.append(f"Spent today: ${spend['total_usd']:.2f} of ${config.budget.daily_usd:.2f}."
                  + (" The service is paused." if paused else ""))
@@ -1076,6 +1076,8 @@ def _command_github(args, out):
                  "main blocks force pushes and deletion", "step 6")
         except GitHubError as error:
             line(False, f"could not read main's rules: {error}", "step 6")
+        if not github.get("site_dir"):
+            continue  # no preview site: Pages is not needed
         try:
             pages = app.request("GET", f"/repos/{repo}/pages") or {}
             source = pages.get("source") or {}

@@ -1,21 +1,24 @@
-"""Publish a project's development branch and its preview site (H-D4).
+"""Publish a project's development branch and, optionally, its preview site (H-D4).
 
 After each run the background service pushes the project's ``base_branch``
-(``develop``) to GitHub and rebuilds the ``gh-pages`` branch:
+(``develop``) to GitHub. If the project has a ``site_dir``, it also rebuilds the
+``gh-pages`` branch:
 
-    /           the site directory of the release branch (``main``): the released game
-    /develop/   the site directory of ``develop``: the preview to play-test
+    /           the site directory of the release branch (``main``): the released version
+    /develop/   the site directory of ``develop``: the preview to review
 
-Both are plain files (Match Legends' ``www/``), so the site is assembled with
-git plumbing in a temporary index, without a checkout or a build step. The
-release branch is only read here, never pushed.
+The site directory holds plain static files, so the site is assembled with git
+plumbing in a temporary index, without a checkout or a build step. The release
+branch is only read here, never pushed. Without ``site_dir`` there is no preview
+site: only ``develop`` is pushed.
 
 project.yaml::
 
     github:
-      repo: f0rrel/Match_Legends_mobile_game
+      repo: example-user/example-app
       release_branch: main
-      site_dir: www
+      site_dir: public                       # optional: no preview site without it
+      site_url: https://app.example.com/     # optional: default https://<owner>.github.io/<repo>/
 """
 
 from __future__ import annotations
@@ -28,12 +31,21 @@ from typing import Optional
 
 from core.history import EventType
 
-__all__ = ["Publisher", "pages_url", "build_site_commit"]
+__all__ = ["Publisher", "pages_url", "site_urls", "build_site_commit"]
 
 
 def pages_url(repo: str) -> str:
     owner, name = repo.split("/", 1)
     return f"https://{owner.lower()}.github.io/{name}/"
+
+
+def site_urls(github) -> tuple:
+    """(live URL, preview URL) of a project's published site, or (None, None) without one."""
+    if not isinstance(github, dict) or not github.get("repo") or not github.get("site_dir"):
+        return None, None
+    base = str(github.get("site_url") or pages_url(github["repo"]))
+    base = base if base.endswith("/") else base + "/"
+    return base, base + "develop/"
 
 
 def build_site_commit(git, repository: Path, release_sha: str, develop_sha: str,
@@ -76,8 +88,7 @@ class Publisher:
         self._push = push
 
     def preview_url(self, project_id: str) -> Optional[str]:
-        github = self._github(project_id)
-        return pages_url(github["repo"]) + "develop/" if github else None
+        return site_urls(self._github(project_id))[1]
 
     def _github(self, project_id):
         try:
@@ -95,7 +106,7 @@ class Publisher:
         repository = Path(project["repository"]).expanduser()
         develop = project["base_branch"]
         release = github.get("release_branch", "main")
-        site_dir = github.get("site_dir", "www")
+        site_dir = github.get("site_dir")
         git = self._git
         develop_sha = git(["rev-parse", f"refs/heads/{develop}"], repository)
         release_sha = git(["rev-parse", f"refs/heads/{release}"], repository)
@@ -106,21 +117,27 @@ class Publisher:
         app = self._app_factory(github["repo"])
         if app is None:
             return ["Publishing is not set up yet (GitHub App): the preview link is not updated."]
-        try:
-            parent = git(["rev-parse", "--verify", "-q", "refs/heads/gh-pages"], repository)
-        except RuntimeError:
-            parent = None
-        site = build_site_commit(git, repository, release_sha, develop_sha, site_dir, parent)
-        if site:
-            git(["update-ref", "refs/heads/gh-pages", site] + ([parent] if parent else []),
-                repository)
-        self._push(app, repository, [develop, "gh-pages"], self._askpass_dir,
-                   force_refs=("gh-pages",))
-        url = pages_url(github["repo"])
+        site = parent = None
+        if site_dir:
+            try:
+                parent = git(["rev-parse", "--verify", "-q", "refs/heads/gh-pages"], repository)
+            except RuntimeError:
+                parent = None
+            site = build_site_commit(git, repository, release_sha, develop_sha, site_dir, parent)
+            if site:
+                git(["update-ref", "refs/heads/gh-pages", site] + ([parent] if parent else []),
+                    repository)
+            self._push(app, repository, [develop, "gh-pages"], self._askpass_dir,
+                       force_refs=("gh-pages",))
+        else:
+            self._push(app, repository, [develop], self._askpass_dir)
+        url, preview = site_urls(github)
         self._history.append(
             type=EventType.PUBLISHED, run_id=uuid.uuid4().hex, project_id=project_id,
             session_id=session_id,
             payload={"develop_branch": develop, "develop_sha": develop_sha,
                      "release_branch": release, "release_sha": release_sha,
                      "pages_sha": site or parent, "url": url, "actor": "system"})
-        return [f"Preview updated: {url}develop/ (develop {develop_sha[:12]})"]
+        if preview is None:
+            return [f"Pushed {develop} ({develop_sha[:12]})."]
+        return [f"Preview updated: {preview} (develop {develop_sha[:12]})"]

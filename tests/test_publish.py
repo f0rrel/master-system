@@ -12,7 +12,7 @@ from core.github import GitHubApp, GitHubError, push
 from core.history import EventType, InMemoryHistoryStore
 from core.host import git as host_git
 from core.master import Master
-from core.publish import Publisher, build_site_commit, pages_url
+from core.publish import Publisher, build_site_commit, pages_url, site_urls
 
 
 @pytest.fixture
@@ -25,12 +25,12 @@ def site(tmp_path):
     git(repo, "commit", "-qam", "develop change")
     git(repo, "checkout", "-q", "main")
     root = tmp_path / "projects"
-    project = root / "ml"
+    project = root / "app"
     project.mkdir(parents=True)
     (project / "project.yaml").write_text(yaml.safe_dump({
-        "id": "ml", "name": "ML", "status": "active", "repository": str(repo),
+        "id": "app", "name": "App", "status": "active", "repository": str(repo),
         "base_branch": "develop", "auto_integrate": True,
-        "github": {"repo": "f0rrel/Match_Legends_mobile_game", "release_branch": "main",
+        "github": {"repo": "example-user/example-app", "release_branch": "main",
                    "site_dir": "www"}}))
     (project / "milestones.yaml").write_text(yaml.safe_dump({"milestones": []}))
     (project / "tasks.yaml").write_text(yaml.safe_dump({"tasks": []}))
@@ -51,12 +51,22 @@ def show(repo, ref, path):
 
 
 def test_pages_url():
-    assert pages_url("f0rrel/Match_Legends_mobile_game") == \
-        "https://f0rrel.github.io/Match_Legends_mobile_game/"
+    assert pages_url("Example-User/example-app") == \
+        "https://example-user.github.io/example-app/"
+
+
+def test_site_urls_need_a_site_dir_and_honour_a_custom_url():
+    github = {"repo": "example-user/example-app", "site_dir": "public"}
+    assert site_urls(github) == ("https://example-user.github.io/example-app/",
+                                 "https://example-user.github.io/example-app/develop/")
+    assert site_urls({**github, "site_url": "https://app.example.com"}) == \
+        ("https://app.example.com/", "https://app.example.com/develop/")
+    assert site_urls({"repo": "example-user/example-app"}) == (None, None)
+    assert site_urls(None) == (None, None)
 
 
 def test_the_site_has_the_release_at_the_root_and_develop_below(site):
-    lines = site["publisher"]("ml", "s1")
+    lines = site["publisher"]("app", "s1")
 
     repo = site["repo"]
     assert show(repo, "gh-pages", "index.html") == "released"
@@ -64,7 +74,7 @@ def test_the_site_has_the_release_at_the_root_and_develop_below(site):
     assert show(repo, "gh-pages", "develop/js/app.js") == "v1"
     assert show(repo, "gh-pages", ".nojekyll") == ""
     assert "README.md" not in git(repo, "ls-tree", "-r", "--name-only", "gh-pages")
-    assert lines == ["Preview updated: https://f0rrel.github.io/Match_Legends_mobile_game/"
+    assert lines == ["Preview updated: https://example-user.github.io/example-app/"
                      f"develop/ (develop {git(repo, 'rev-parse', 'develop')[:12]})"]
     [(app, refspecs, force)] = site["pushes"]
     assert app == "APP" and refspecs == ["develop", "gh-pages"] and force == ("gh-pages",)
@@ -75,13 +85,13 @@ def test_the_site_has_the_release_at_the_root_and_develop_below(site):
 
 
 def test_nothing_is_published_when_nothing_changed(site):
-    site["publisher"]("ml")
-    assert site["publisher"]("ml") == []
+    site["publisher"]("app")
+    assert site["publisher"]("app") == []
     assert len(site["pushes"]) == 1
 
 
 def test_a_new_develop_commit_republishes_on_top_of_the_old_site(site):
-    site["publisher"]("ml")
+    site["publisher"]("app")
     first = git(site["repo"], "rev-parse", "gh-pages")
     repo = site["repo"]
     git(repo, "checkout", "-q", "develop")
@@ -89,7 +99,7 @@ def test_a_new_develop_commit_republishes_on_top_of_the_old_site(site):
     git(repo, "commit", "-qam", "more")
     git(repo, "checkout", "-q", "main")
 
-    site["publisher"]("ml")
+    site["publisher"]("app")
     assert show(repo, "gh-pages", "develop/index.html") == "preview 2"
     assert git(repo, "rev-parse", "gh-pages^") == first
 
@@ -97,17 +107,35 @@ def test_a_new_develop_commit_republishes_on_top_of_the_old_site(site):
 def test_without_the_app_nothing_is_pushed_and_the_owner_is_told(site, tmp_path):
     publisher = Publisher(Master(site["root"]), site["history"], lambda repo: None,
                           tmp_path / "state", push=lambda *a, **k: pytest.fail("pushed"))
-    assert "not set up yet" in publisher("ml")[0]
+    assert "not set up yet" in publisher("app")[0]
     assert site["history"].events(types=[EventType.PUBLISHED]) == ()
 
 
 def test_a_project_without_github_is_not_published(site, tmp_path):
-    project_yaml = site["root"] / "ml" / "project.yaml"
+    project_yaml = site["root"] / "app" / "project.yaml"
     data = yaml.safe_load(project_yaml.read_text())
     del data["github"]
     project_yaml.write_text(yaml.safe_dump(data))
-    assert site["publisher"]("ml") == [] and site["pushes"] == []
-    assert site["publisher"].preview_url("ml") is None
+    assert site["publisher"]("app") == [] and site["pushes"] == []
+    assert site["publisher"].preview_url("app") is None
+
+
+def test_without_a_site_dir_only_develop_is_pushed(site):
+    project_yaml = site["root"] / "app" / "project.yaml"
+    data = yaml.safe_load(project_yaml.read_text())
+    del data["github"]["site_dir"]
+    project_yaml.write_text(yaml.safe_dump(data))
+
+    lines = site["publisher"]("app")
+
+    repo = site["repo"]
+    assert lines == [f"Pushed develop ({git(repo, 'rev-parse', 'develop')[:12]})."]
+    [(app, refspecs, force)] = site["pushes"]
+    assert refspecs == ["develop"] and force == ()
+    assert "gh-pages" not in git(repo, "branch", "--list")
+    assert site["publisher"].preview_url("app") is None
+    [event] = site["history"].events(types=[EventType.PUBLISHED])
+    assert event.payload["url"] is None
 
 
 def test_build_site_commit_is_none_when_the_tree_is_unchanged(site):
