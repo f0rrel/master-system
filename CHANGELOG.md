@@ -9,6 +9,8 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 - Continuous integration: `.github/workflows/tests.yml` runs the offline suite on
   Python 3.12 and 3.13 with Node 22 (exposed in nvm's layout, as workers find it);
   README badge.
+- `pyproject.toml`: the package is named `master-system`, described with the README's
+  tagline (`uv.lock` updated; no dependency changed).
 
 ### The first ten minutes
 - Without a projects root, `ms status` and `ms doctor` print a one-line hint instead of a
