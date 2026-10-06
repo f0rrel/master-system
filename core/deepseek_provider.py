@@ -49,6 +49,7 @@ __all__ = [
     "DEFAULT_REASONING_EFFORT",
     "DEFAULT_MAX_COMPLETION_TOKENS",
     "DeepSeekProvider",
+    "DeepSeekVision",
 ]
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
@@ -224,3 +225,46 @@ class DeepSeekProvider(ReasoningProvider):
             raise ProviderError(
                 f"DeepSeek returned a non-JSON reply: {error}"
             ) from error
+
+
+class DeepSeekVision(DeepSeekProvider):
+    """DeepSeek's vision-capable model: a text prompt plus images, one text answer.
+
+    Used by the visual reviewer. Images are sent inline as base64 data URLs in
+    the OpenAI-compatible content-block format; DeepSeek bills at most 1024
+    tokens per image. Thinking is off: a review is a short judgement.
+    """
+
+    def __init__(self, base_url=DEFAULT_BASE_URL, model="deepseek-flash", timeout=120,
+                 max_completion_tokens=800, detail="high"):
+        super().__init__(base_url=base_url, model=model, timeout=timeout,
+                         max_completion_tokens=max_completion_tokens)
+        self.detail = detail
+
+    def judge(self, prompt: str, images) -> str:
+        import base64
+
+        api_key = os.environ.get("DEEPSEEK_API_KEY")
+        if not api_key:
+            raise ProviderError("DEEPSEEK_API_KEY environment variable is not set")
+        content = [{"type": "text", "text": prompt}]
+        for image in images:
+            data = base64.b64encode(bytes(image)).decode("ascii")
+            content.append({"type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{data}",
+                                          "detail": self.detail}})
+        body = {"model": self.model, "messages": [{"role": "user", "content": content}],
+                "stream": False, "thinking": {"type": "disabled"},
+                "response_format": {"type": "json_object"}, **GENERATION_OPTIONS}
+        if self.max_completion_tokens is not None:
+            body["max_completion_tokens"] = self.max_completion_tokens
+        self.last_usage = None
+        payload = self._post("/chat/completions", body, api_key)
+        self.last_usage = _usage(payload)
+        try:
+            text = payload["choices"][0]["message"].get("content")
+        except (KeyError, TypeError, IndexError) as error:
+            raise ProviderError(f"DeepSeek returned an unexpected response: {error}") from error
+        if not isinstance(text, str) or not text.strip():
+            raise ProviderError("DeepSeek returned no usable text content")
+        return text

@@ -52,6 +52,14 @@ provider = "deepseek"
 model = "deepseek-v4-flash"
 chat_usd = 0.30                   # cap per chat
 
+[reviewer]                        # visual reviewer (vision model); provider = "none" to switch off
+provider = "deepseek"
+model = "deepseek-flash"
+detail = "high"                   # or "low": 512 px images, cheaper
+
+[images]                          # image generation; keys in master.env
+providers = ["pollinations", "cloudflare"]
+
 [github]                          # the GitHub App (docs/GITHUB-SETUP.md)
 app_id = ""                       # its private key: ~/.config/master-system/github-app.pem
 
@@ -140,6 +148,8 @@ class DaemonSettings:
     interval_s: float = 300
     #: The ntfy server; the topic is in ~/.config/master-system/ntfy-topic.
     ntfy_server: str = "https://ntfy.sh"
+    #: A notification after every run; off: one morning summary when the work runs out.
+    batch_notifications: bool = False
 
 
 @dataclass(frozen=True)
@@ -150,6 +160,28 @@ class PlannerSettings:
     timeout_s: float = 300
     #: Priced spend allowed per planner chat.
     chat_usd: float = 0.30
+
+
+@dataclass(frozen=True)
+class ReviewerSettings:
+    """The visual reviewer's vision-capable model (core.visual_review)."""
+    #: deepseek, or none to switch the reviewer off.
+    provider: str = "deepseek"
+    model: str = "deepseek-flash"
+    base_url: Optional[str] = None
+    timeout_s: float = 120
+    #: Image detail sent to the model: low (512 px, cheaper) or high.
+    detail: str = "high"
+
+
+@dataclass(frozen=True)
+class ImagesSettings:
+    """Image generation for visual tasks (core.images); keys live in master.env."""
+    #: Providers tried in order: pollinations, cloudflare.
+    providers: tuple = ("pollinations", "cloudflare")
+    pollinations_model: str = "flux"
+    cloudflare_model: str = "@cf/black-forest-labs/flux-1-schnell"
+    timeout_s: float = 120
 
 
 @dataclass(frozen=True)
@@ -169,10 +201,14 @@ class RunConfig:
     daemon: DaemonSettings = field(default_factory=DaemonSettings)
     github: GitHubSettings = field(default_factory=GitHubSettings)
     planner: PlannerSettings = field(default_factory=PlannerSettings)
+    reviewer: ReviewerSettings = field(default_factory=ReviewerSettings)
+    images: ImagesSettings = field(default_factory=ImagesSettings)
     #: model name -> {"input": usd_per_m, "output": usd_per_m, "cached_input": usd_per_m}
     prices: Mapping[str, Mapping[str, float]] = field(default_factory=lambda: {
         "deepseek-v4-flash": {"input": 0.44, "output": 1.32, "cached_input": 0.0028},
         "deepseek-v4-pro": {"input": 1.32, "output": 3.96, "cached_input": 0.0084},
+        # Peak prices (off-peak is half): the conservative figure for caps.
+        "deepseek-flash": {"input": 0.30, "output": 1.20, "cached_input": 0.006},
     })
     source: Optional[Path] = None
 
@@ -280,10 +316,37 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
         daily_usd=_positive(b, "budget", "daily_usd", BudgetSettings.daily_usd),
         run_usd=_positive(b, "budget", "run_usd", BudgetSettings.run_usd),
     )
-    d = _section(data, "daemon", ("interval_s", "ntfy_server"))
+    d = _section(data, "daemon", ("interval_s", "ntfy_server", "batch_notifications"))
+    batch = d.get("batch_notifications", DaemonSettings.batch_notifications)
+    if not isinstance(batch, bool):
+        raise ConfigError("[daemon] batch_notifications must be true or false")
     daemon = DaemonSettings(
         interval_s=_positive(d, "daemon", "interval_s", DaemonSettings.interval_s),
         ntfy_server=str(d.get("ntfy_server", DaemonSettings.ntfy_server)).rstrip("/"),
+        batch_notifications=batch,
+    )
+    rv = _section(data, "reviewer", ("provider", "model", "base_url", "timeout_s", "detail"))
+    if rv.get("provider", ReviewerSettings.provider) not in ("deepseek", "none"):
+        raise ConfigError("[reviewer] provider must be deepseek or none")
+    if rv.get("detail", ReviewerSettings.detail) not in ("low", "high"):
+        raise ConfigError("[reviewer] detail must be low or high")
+    reviewer = ReviewerSettings(
+        provider=str(rv.get("provider", ReviewerSettings.provider)),
+        model=str(rv.get("model", ReviewerSettings.model)),
+        base_url=rv.get("base_url"),
+        timeout_s=_positive(rv, "reviewer", "timeout_s", ReviewerSettings.timeout_s),
+        detail=str(rv.get("detail", ReviewerSettings.detail)),
+    )
+    im = _section(data, "images", ("providers", "pollinations_model", "cloudflare_model",
+                                   "timeout_s"))
+    providers = tuple(im.get("providers", ImagesSettings.providers))
+    if not set(providers) <= {"pollinations", "cloudflare"}:
+        raise ConfigError("[images] providers may only list pollinations and cloudflare")
+    images = ImagesSettings(
+        providers=providers,
+        pollinations_model=str(im.get("pollinations_model", ImagesSettings.pollinations_model)),
+        cloudflare_model=str(im.get("cloudflare_model", ImagesSettings.cloudflare_model)),
+        timeout_s=_positive(im, "images", "timeout_s", ImagesSettings.timeout_s),
     )
 
     g = _section(data, "github", ("app_id", "key_path"))
@@ -301,4 +364,4 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
 
     return RunConfig(master=master, worker=worker, run=run, prices=prices,
                      budget=budget, daemon=daemon, github=github, planner=planner,
-                     source=path)
+                     reviewer=reviewer, images=images, source=path)

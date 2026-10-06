@@ -131,10 +131,22 @@ def build_worker(config):
                               extra_args=w.extra_args)
 
 
-def build_verifier(config):
+def build_verifier(config, master=None, paths=None):
+    """The acceptance verifier, wrapped by the visual reviewer when one is configured."""
     from core.acceptance_verifier import AcceptanceVerifier
 
-    return AcceptanceVerifier()
+    verifier = AcceptanceVerifier()
+    r = config.reviewer
+    if master is None or paths is None or r.provider == "none" \
+            or not os.environ.get("DEEPSEEK_API_KEY"):
+        return verifier
+    from core.deepseek_provider import DEFAULT_BASE_URL, DeepSeekVision
+    from core.visual_review import VisualReviewVerifier
+
+    judge = DeepSeekVision(base_url=r.base_url or DEFAULT_BASE_URL, model=r.model,
+                           timeout=r.timeout_s, detail=r.detail)
+    return VisualReviewVerifier(verifier, master, judge, paths.state_dir / "artifacts",
+                                prices=config.prices, reviewer_label=judge.name)
 
 
 def build_tiers(config):
@@ -197,7 +209,7 @@ def build_runner(ctx, stop_check=None):
     from core.auto_integrate import AutoIntegrator
 
     r = ctx.config.run
-    verifier = build_verifier(ctx.config)
+    verifier = build_verifier(ctx.config, ctx.master, ctx.paths)
     worker_env = build_worker_env(ctx.config)
     return SessionRunner(
         ctx.master,

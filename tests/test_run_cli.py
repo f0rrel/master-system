@@ -163,7 +163,7 @@ def wired(setup, monkeypatch):
         provider = Scripted(replies)
         monkeypatch.setattr(run_cli, "build_provider", lambda config: provider)
         monkeypatch.setattr(run_cli, "build_worker", lambda config: Writes())
-        monkeypatch.setattr(run_cli, "build_verifier", lambda config: Passes())
+        monkeypatch.setattr(run_cli, "build_verifier", lambda config, *rest: Passes())
         monkeypatch.setattr(run_cli, "build_worker_env",
                             lambda config: {"PATH": "/usr/bin:/bin", "HOME": "/tmp"})
         return provider

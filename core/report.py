@@ -89,16 +89,27 @@ def spend_since(history: HistoryStore, since_iso: str, prices: Mapping,
                 default_model: Optional[str] = None) -> dict:
     """Priced spend recorded at or after ``since_iso``, across all projects.
 
-    Master and planner calls are priced from their usage. A worker's claimed
+    Master and planner calls, and visual reviews, are priced from their usage. A worker's claimed
     usage is priced when its model has a price; otherwise the cost the service
     reported is used (0 for free models). Unpriced Master calls count as
     ``unpriced_calls`` so a cap can refuse to guess.
     """
-    master = worker = 0.0
+    master = worker = reviewer = 0.0
     unpriced = 0
     for e in history.events(types=[EventType.DECISION, EventType.RUN_STOPPED,
-                                   EventType.ATTEMPT_FINISHED, EventType.PLANNER_TURN]):
+                                   EventType.ATTEMPT_FINISHED, EventType.PLANNER_TURN,
+                                   EventType.VERIFICATION]):
         if e.created_at < since_iso:
+            continue
+        if e.type is EventType.VERIFICATION:
+            review = (e.payload.get("evidence") or {}).get("visual_review") or {}
+            if review.get("usage"):
+                cost = _price(add_usage([review["usage"]]), _model_of(review.get("reasoner")),
+                              prices)
+                if cost is None:
+                    unpriced += 1
+                else:
+                    reviewer += cost
             continue
         if e.type is EventType.ATTEMPT_FINISHED:
             usage = e.payload.get("worker_reported_usage") or {}
@@ -116,7 +127,8 @@ def spend_since(history: HistoryStore, since_iso: str, prices: Mapping,
             else:
                 master += cost
     return {"master_usd": round(master, 6), "worker_usd": round(worker, 6),
-            "total_usd": round(master + worker, 6), "unpriced_calls": unpriced}
+            "reviewer_usd": round(reviewer, 6),
+            "total_usd": round(master + worker + reviewer, 6), "unpriced_calls": unpriced}
 
 
 def _completes(payload) -> bool:
