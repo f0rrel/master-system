@@ -392,7 +392,8 @@ Every milestone, release or fix batch updates, in the same change:
 1. [CHANGELOG.md](../CHANGELOG.md): what changed.
 2. [DECISIONS.md](DECISIONS.md): each decision and its rationale.
 3. [TROUBLESHOOTING.md](TROUBLESHOOTING.md): new failure modes and known issues.
-4. This document and the README, when behaviour, commands or configuration change.
+4. This document, the README and [REFERENCE.md](REFERENCE.md), when behaviour, commands or
+   configuration change.
 
 Documentation stays project-agnostic. Information about a specific managed project lives
 in that project's `project.yaml` and repository; the README mentions the author's real
