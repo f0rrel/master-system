@@ -352,10 +352,10 @@ def render_draft(draft, check=None, width: int = 100) -> str:
     for task in draft.get("tasks") or []:
         header = f"── {task.get('id')}: {task.get('title')} "
         lines += ["", header + "─" * max(3, min(width, 60) - len(header))]
-        size = str(task.get("size"))
+        size = f"{task.get('size')}, {task.get('type') or 'no type'}"
         if task.get("depends_on"):
             size += f" (after {', '.join(task['depends_on'])})"
-        lines += _labelled("Size", size, width)
+        lines += _labelled("Size, type", size, width)
         files = task.get("files") or []
         lines += _labelled("Files", ", ".join(files) if files else "(not given)", width)
         lines += _labelled("What it does", task.get("description", ""), width)
@@ -363,6 +363,13 @@ def render_draft(draft, check=None, width: int = 100) -> str:
         tests = [f"{t.get('path')} ({len(str(t.get('content', '')).splitlines())} lines)"
                  for t in task.get("tests") or []]
         lines += _labelled("Tests", "; ".join(tests) or "(none)", width)
+        for asset in task.get("assets") or []:
+            count = asset.get("candidates", 1)
+            lines += _labelled("Image", f"{asset.get('name')} -> {asset.get('path')}"
+                               + (f" ({count} candidates, you pick)" if count != 1 else "")
+                               + f": {asset.get('prompt')}", width)
+        if task.get("screens"):
+            lines += _labelled("Review screens", ", ".join(task["screens"]), width)
         if task.get("test_commands"):
             lines += _labelled("Test commands", "; ".join(task["test_commands"]), width)
     if check:

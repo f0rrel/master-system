@@ -199,7 +199,7 @@ def test_the_chat_loop_drives_a_whole_conversation(env):
     assert "\n  Plan ready.\n" in text and "   1.  Bye too?" in text
     assert "draft updated: 1 task(s)" in text
     assert "EPIC epic-hi: Friendlier greetings" in text
-    assert "── t-2: Say hi ──" in text and "  Size:" in text and "How to check by hand:" in text
+    assert "── t-2: Say hi ──" in text and "  Size, type:" in text and "How to check by hand:" in text
     assert "All checks passed" in text and "Queued t-2" in text
     assert "[this chat: $" in text
 

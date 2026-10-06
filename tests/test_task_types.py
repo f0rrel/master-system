@@ -199,3 +199,13 @@ def test_visual_drafts_can_ask_for_images_and_screens():
     assert any("candidates must be 1 to 4" in p for p in problems)
     assert any("unknown screen 'boss'" in p for p in problems)
     assert "from: home, game" in system_prompt("App", ["t-1"], settings)
+
+
+def test_the_draft_shows_type_images_and_screens():
+    from core.planner import render_draft
+
+    asset = {"name": "blob", "prompt": "a blob", "path": "www/assets/blob.png", "candidates": 3}
+    text = render_draft(draft(assets=[asset], screens=["game"]))
+    assert "small, visual" in text
+    assert "blob -> www/assets/blob.png (3 candidates, you pick): a blob" in text
+    assert "Review screens:" in text and "game" in text
