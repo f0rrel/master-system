@@ -26,12 +26,16 @@ import yaml
 
 from core.project_state import write_yaml_atomically
 
-__all__ = ["LessonStore", "extract_lessons", "MAX_LESSONS_PER_ATTEMPT", "MAX_LESSON_CHARS"]
+__all__ = ["LessonStore", "extract_lessons", "lesson_evidence", "MAX_LESSONS_PER_ATTEMPT",
+           "MAX_LESSON_CHARS", "NEVER_PASSED_AFTER", "PROMPT_BUDGET"]
 
 FILENAME = "lessons.yaml"
 MAX_LESSONS_PER_ATTEMPT = 3
 MAX_LESSON_CHARS = 300
+#: Characters of approved lessons in one worker prompt. Fixed: not configurable.
 PROMPT_BUDGET = 2000
+#: Attempts without a pass after which a lesson is marked "never in a passing attempt".
+NEVER_PASSED_AFTER = 5
 _LINE = re.compile(r"^\s*[-*]?\s*LESSON:\s*(.+?)\s*$", re.IGNORECASE)
 
 
@@ -102,16 +106,25 @@ class LessonStore:
         return added
 
     def decide(self, approve: Iterable[str] = (), reject: Iterable[str] = ()) -> dict:
-        """Move pending lessons (by id) to approved or rejected. Returns what moved."""
+        """Move pending lessons (by id) to approved or rejected. Returns what moved.
+
+        ``reject`` may also name approved lessons: the owner retires them.
+        """
         approve, reject = set(approve), set(reject)
         if approve & reject:
             raise ValueError(f"both approved and rejected: {sorted(approve & reject)}")
         data = self._load()
         ids = {r["id"] for r in data["pending"]}
-        unknown = (approve | reject) - ids
+        retire = reject & {r["id"] for r in data["approved"]}
+        unknown = (approve | reject) - ids - retire
         if unknown:
             raise ValueError(f"not pending: {sorted(unknown)}")
         moved = {"approved": [], "rejected": []}
+        for record in [r for r in data["approved"] if r["id"] in retire]:
+            record = {**record, "decided_at": _now()}
+            data["rejected"].append(record)
+            moved["rejected"].append(record)
+        data["approved"] = [r for r in data["approved"] if r["id"] not in retire]
         keep = []
         for record in data["pending"]:
             target = ("approved" if record["id"] in approve
@@ -126,14 +139,66 @@ class LessonStore:
         self._save(data)
         return moved
 
-    def for_prompt(self, task_type: str, budget: int = PROMPT_BUDGET) -> list:
-        """Approved lessons for this type (or ``all``), newest first, within ``budget``."""
-        chosen, used = [], 0
+    def select(self, task_type: str, budget: int = PROMPT_BUDGET) -> dict:
+        """Approved lessons for this type (or ``all``), newest first, within ``budget``.
+
+        ``included`` are the records the prompt carries; ``dropped`` are the
+        approved ones of this type that the budget left out.
+        """
+        included, dropped, used = [], [], 0
         for record in reversed(self.approved()):
             if record.get("type") not in (task_type, "all"):
                 continue
-            if used + len(record["text"]) > budget:
-                break
-            chosen.append(record["text"])
+            if dropped or used + len(record["text"]) > budget:
+                dropped.append(record)
+                continue
+            included.append(record)
             used += len(record["text"])
-        return chosen
+        return {"included": included, "dropped": dropped}
+
+    def for_prompt(self, task_type: str, budget: int = PROMPT_BUDGET) -> list:
+        """The texts of :meth:`select`'s included lessons."""
+        return [record["text"] for record in self.select(task_type, budget)["included"]]
+
+    def fit(self, budget: int = PROMPT_BUDGET) -> dict:
+        """Approved lesson id → the task types whose prompt leaves it out (empty: it fits)."""
+        from core.project_state import TASK_TYPES
+
+        left_out = {record["id"]: [] for record in self.approved()}
+        for task_type in TASK_TYPES:
+            for record in self.select(task_type, budget)["dropped"]:
+                left_out[record["id"]].append(task_type)
+        return left_out
+
+
+def lesson_evidence(history, project_id: str) -> dict:
+    """Lesson id → ``{attempts, passed}`` from history alone.
+
+    Counts finished attempts whose ``attempt_started`` names the lesson in
+    ``lessons_used_ids``, and those of them with a ``pass`` verification.
+    Attempts a provider limit stopped never ran the lessons and do not count;
+    older attempts without ``lessons_used_ids`` do not count either.
+    """
+    from core.history import EventType
+
+    used, finished, passed = {}, set(), set()
+    for event in history.events(project_id=project_id, types=[
+            EventType.ATTEMPT_STARTED, EventType.ATTEMPT_FINISHED, EventType.VERIFICATION]):
+        if event.type is EventType.ATTEMPT_STARTED:
+            ids = event.payload.get("lessons_used_ids")
+            if isinstance(ids, list):
+                used[event.attempt_id] = ids
+        elif event.type is EventType.ATTEMPT_FINISHED:
+            if event.payload.get("outcome") != "limited":
+                finished.add(event.attempt_id)
+        elif event.payload.get("verdict") == "pass":
+            passed.add(event.attempt_id)
+    evidence = {}
+    for attempt_id, ids in used.items():
+        if attempt_id not in finished:
+            continue
+        for lesson_id in ids:
+            counts = evidence.setdefault(lesson_id, {"attempts": 0, "passed": 0})
+            counts["attempts"] += 1
+            counts["passed"] += attempt_id in passed
+    return evidence

@@ -5,6 +5,17 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Lessons: no silent drops, and evidence per lesson
+- `ms lessons` lists approved lessons with whether each fits in the worker prompt for its
+  type, how many attempts used it and how many of those passed, and marks "never in a
+  passing attempt" after 5 attempts without a pass (a suggestion; nothing changes
+  automatically). It ends with "N approved lessons don't fit in the 2,000-character budget
+  and aren't used; reject or shorten some" when lessons are dropped; the budget is fixed.
+- `ms status` shows that line under "Needs you" only while lessons are dropped.
+- `attempt_started` records `lessons_used_ids` next to the `lessons_used` count. Older
+  attempts have no ids and are not counted.
+- `ms lessons --reject` accepts approved lesson ids, to retire a lesson.
+
 ### Upgrading an existing installation
 - No migration: the history schema stays v4, and events from before the upgrade read as
   before (no held cancellations, no tampering findings).

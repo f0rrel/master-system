@@ -8,7 +8,8 @@
     ms chat <project> [--new]  talk to the planner: it drafts tasks with tests; `approve` queues them
     ms release <project>       release notes + a pull request develop -> main for you to merge
     ms backlog <project>       epics in priority order; `add "Title"`, `priority <epic> <N>`
-    ms lessons <project>       lessons workers proposed; --approve all|IDS, --reject IDS|rest
+    ms lessons <project>       lessons, whether they fit, how they did; --approve all|IDS,
+                               --reject IDS|rest (IDS may name approved lessons)
     ms pick <project> <task> <asset> <n>   choose one of a task's generated images
     ms limit <project> [wait|free|paid]    answer a worker limit (see ms status)
     ms telegram pair|status|test|unpair    the Telegram bot (the phone interface)
@@ -641,10 +642,14 @@ def owner_needs(master, history, config, project_id, *, stalled=(), pending_rele
                      f"(chat {split.get('chat_id')}). See it with ms chat {project_id} → show, "
                      f"then: ms split {project_id} {task_id} approve | reject"
                      + (" | escalate" if config.worker.ladder else ""))
-    pending_lessons = LessonStore(master.project_state(project_id).project_path).pending()
+    lessons = LessonStore(master.project_state(project_id).project_path)
+    pending_lessons = lessons.pending()
     if pending_lessons:
         needs.append(f"{len(pending_lessons)} lesson(s) from workers wait for your review: "
                      f"ms lessons {project_id}")
+    dropped = sum(1 for types in lessons.fit().values() if types)
+    if dropped:
+        needs.append(f"{_lessons_dropped(dropped)}: ms lessons {project_id}")
     view = project_overview(master, history, project_id)
     if view["groups"]["in develop"] and not pending_release:
         needs.append(f"{len(view['groups']['in develop'])} finished task(s) are in the "
@@ -1316,6 +1321,37 @@ def _command_backlog(args, out):
     return 0
 
 
+def _lessons_dropped(count: int) -> str:
+    from core.lessons import PROMPT_BUDGET
+
+    one = count == 1
+    return (f"{count} approved lesson{'' if one else 's'} {'doesn' if one else 'don'}'t fit "
+            f"in the {PROMPT_BUDGET:,}-character budget and {'isn' if one else 'aren'}'t used; "
+            "reject or shorten some")
+
+
+def _lesson_history():
+    from core.sqlite_history import SQLiteHistoryStore
+
+    return SQLiteHistoryStore(_paths().history_path)
+
+
+def _lesson_line(record, left_out, counts) -> str:
+    from core.lessons import NEVER_PASSED_AFTER
+
+    if not left_out:
+        fit = "in the prompt"
+    elif record.get("type") == "all" and len(left_out) < 4:
+        fit = f"does not fit for {', '.join(left_out)}"
+    else:
+        fit = "does not fit"
+    attempts, passed = counts.get("attempts", 0), counts.get("passed", 0)
+    use = f"used in {attempts} attempt{'' if attempts == 1 else 's'}, {passed} passed"
+    if attempts >= NEVER_PASSED_AFTER and not passed:
+        use += "; never in a passing attempt (consider rejecting it)"
+    return f"  {record['id']}  [{record['type']}] {fit}; {use}: {record['text']}"
+
+
 def _command_lessons(args, out):
     from core.history import EventType
     from core.lessons import LessonStore
@@ -1362,6 +1398,22 @@ def _command_lessons(args, out):
     approved = store.approved()
     print(f"Lessons for {args.project}: {len(pending)} pending, {len(approved)} approved "
           "(only approved lessons are used).", file=out)
+    if approved:
+        from core.lessons import lesson_evidence
+
+        fit = store.fit()
+        evidence = lesson_evidence(_lesson_history(), args.project)
+        print("Approved (newest first; attempts counted from history):", file=out)
+        for record in reversed(approved):
+            print(_lesson_line(record, fit.get(record["id"], []),
+                               evidence.get(record["id"], {})), file=out)
+        dropped = sum(1 for types in fit.values() if types)
+        if dropped:
+            print(f"{_lessons_dropped(dropped)}.", file=out)
+        print("The budget is fixed (not configurable). Reject a lesson: "
+              f"ms lessons {args.project} --reject IDS", file=out)
+    if pending:
+        print("Pending:", file=out)
     for record in pending:
         print(f"  {record['id']}  [{record['type']}] {record['text']}"
               f"  (from {record.get('task_id')})", file=out)
@@ -1814,7 +1866,8 @@ def build_parser():
     lessons = commands.add_parser("lessons", help="Review lessons workers proposed.")
     lessons.add_argument("project")
     lessons.add_argument("--approve", default=None, metavar="IDS|all")
-    lessons.add_argument("--reject", default=None, metavar="IDS|rest")
+    lessons.add_argument("--reject", default=None, metavar="IDS|rest",
+                         help="pending or approved lesson ids; rest: the other pending ones")
     lessons.set_defaults(handler=_command_lessons)
     github = commands.add_parser("github", help="Set up and check the GitHub App.")
     github.add_argument("action", choices=["setup", "check"])

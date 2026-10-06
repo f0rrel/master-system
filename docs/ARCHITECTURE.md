@@ -181,7 +181,8 @@ doc. On approval the type's paths are frozen into `acceptance.allowed_paths` (pa
 the spec hash); the acceptance verifier fails any change outside them
 (`outside_allowed_paths`). Each attempt of a typed task gets
 `OPENCODE_CONFIG_CONTENT` disabling, and denying in `permission`, every tool not
-allowed. `attempt_started` records `task_type`, `allowed_tools` and `lessons_used`.
+allowed. `attempt_started` records `task_type`, `allowed_tools`, `lessons_used` (a
+count, for older readers) and `lessons_used_ids`.
 
 **Briefing** (`TaskOrchestrator._briefing`): the worker prompt carries the type, the
 generic plus project skill doc, the direction and the approved lessons for the type,
@@ -189,8 +190,20 @@ and invites up to three `LESSON:` lines.
 
 **Lessons** (`core/lessons.py`): after a verified pass, `LESSON:` lines from the worker's
 reply are added to `lessons.yaml` → `pending` (bounded, deduplicated). `ms lessons`
-approves or rejects them; only `approved` lessons of the task's type (or `all`) are
-used, newest first, within 2000 characters.
+approves or rejects them, and can reject an approved one later; only `approved` lessons
+of the task's type (or `all`) are used, newest first, within a fixed 2000-character
+budget (`PROMPT_BUDGET`). The first lesson that does not fit ends the selection; it and
+every older one are *dropped* (`LessonStore.select`). Drops are never silent:
+`ms lessons` marks each approved lesson as in the prompt or not (per type for `all`
+lessons), and `ms status` lists "N approved lessons don't fit …" under "Needs you"
+while any are dropped.
+
+**Lesson evidence** (`core.lessons.lesson_evidence`): from history alone, per lesson,
+the finished attempts whose `lessons_used_ids` name it (attempts stopped by a provider
+limit, and older attempts without ids, do not count) and how many of them passed
+verification. `ms lessons` shows both, and marks a lesson "never in a passing attempt"
+after 5 such attempts without a pass. This is a suggestion only: nothing is evicted
+automatically; the owner rejects or keeps it.
 
 ## Visual review and images
 

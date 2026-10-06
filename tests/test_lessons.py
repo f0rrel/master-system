@@ -83,3 +83,147 @@ def test_only_a_verified_attempt_proposes_lessons(tmp_path):
     [lesson] = LessonStore(project).pending()
     assert lesson["type"] == "visual" and lesson["text"] == "Tiles are drawn in drawTile()"
     assert lesson["attempt_id"] == passed["attempt_id"]
+
+
+def approve(store, task_type, texts):
+    """Approve texts (proposed at most three at a time, like an attempt's)."""
+    ids = []
+    for start in range(0, len(texts), 3):
+        added = store.propose(task_type, texts[start:start + 3], "t0", "a0")
+        store.decide(approve=[r["id"] for r in added])
+        ids += [r["id"] for r in added]
+    return ids
+
+
+def test_selection_names_included_and_dropped_lessons(tmp_path):
+    store = LessonStore(tmp_path)
+    old, new = approve(store, "visual", ["o" * 150, "n" * 150])
+    [other] = approve(store, "logic", ["logic only"])
+    [shared] = approve(store, "all", ["s" * 100])
+    chosen = store.select("visual", budget=300)
+    assert [r["id"] for r in chosen["included"]] == [shared, new]
+    assert [r["id"] for r in chosen["dropped"]] == [old]
+    assert store.for_prompt("visual", budget=300) == ["s" * 100, "n" * 150]
+    assert store.select("logic", budget=300)["dropped"] == []
+
+    fits = store.fit(budget=300)
+    assert fits[old] == ["visual"] and fits[new] == [] and fits[other] == []
+    assert fits[shared] == []  # fits in the prompt of every type
+
+
+def test_an_all_lesson_can_be_dropped_for_one_type_only(tmp_path):
+    store = LessonStore(tmp_path)
+    [shared] = approve(store, "all", ["s" * 100])
+    approve(store, "visual", ["v" * 250])
+    assert store.fit(budget=300)[shared] == ["visual"]
+
+
+def test_attempt_started_records_the_ids_of_the_lessons_used(tmp_path):
+    from test_task_types import Capture, Pass, typed_project
+
+    from core.history import EventType, InMemoryHistoryStore
+    from core.master import Master
+    from core.task_orchestrator import TaskOrchestrator
+
+    project = typed_project(tmp_path)
+    store = LessonStore(project)
+    approve(store, "visual", [c * 300 for c in "abcdefg"])  # 2,100: the oldest is dropped
+    history = InMemoryHistoryStore()
+    TaskOrchestrator(Master(tmp_path / "projects"), Capture(), Pass(),
+                     history=history).orchestrate("p", "t1", run_id="r1")
+    [started] = history.events(types=[EventType.ATTEMPT_STARTED])
+    assert started.payload["lessons_used"] == 6
+    assert started.payload["lessons_used_ids"] == ["L-7", "L-6", "L-5", "L-4", "L-3", "L-2"]
+
+
+def history_with(attempts):
+    """attempts: [(lesson ids or None, verdict or None, outcome)]."""
+    from core.history import EventType, InMemoryHistoryStore
+
+    history = InMemoryHistoryStore()
+    for n, (ids, verdict, outcome) in enumerate(attempts):
+        payload = {"lessons_used": len(ids or [])}
+        if ids is not None:
+            payload["lessons_used_ids"] = ids
+        started = history.append(type=EventType.ATTEMPT_STARTED, run_id="r",
+                                 project_id="sample-project", task_id="t1", payload=payload)
+        attempt = started.attempt_id
+        history.append(type=EventType.ATTEMPT_FINISHED, run_id="r", project_id="sample-project",
+                       task_id="t1", attempt_id=attempt, payload={"outcome": outcome})
+        if verdict:
+            history.append(type=EventType.VERIFICATION, run_id="r",
+                           project_id="sample-project", task_id="t1", attempt_id=attempt,
+                           payload={"verdict": verdict})
+    return history
+
+
+def test_usefulness_counts_attempts_and_passes_from_history():
+    from core.lessons import lesson_evidence
+
+    history = history_with([
+        (["L-1", "L-2"], "pass", "finished"),
+        (["L-1"], "fail", "finished"),
+        (["L-1"], None, "limited"),       # the provider never ran it: not counted
+        (None, "pass", "finished"),       # an old attempt without ids: not counted
+    ])
+    evidence = lesson_evidence(history, "sample-project")
+    assert evidence["L-1"] == {"attempts": 2, "passed": 1}
+    assert evidence["L-2"] == {"attempts": 1, "passed": 1}
+    assert "L-3" not in evidence
+
+
+def test_ms_lessons_shows_fit_usefulness_and_drops(monkeypatch):
+    from core import ms
+    from core.lessons import NEVER_PASSED_AFTER
+
+    store = LessonStore(default_projects_root() / "sample-project")
+    approve(store, "visual", [c * 300 for c in "abcdefgh"])
+    history = history_with([(["L-8"], "fail", "finished")] * NEVER_PASSED_AFTER
+                           + [(["L-7"], "pass", "finished")])
+    monkeypatch.setattr(ms, "_lesson_history", lambda: history)
+    code, out = run_ms("lessons", "sample-project")
+    assert code == 0
+    assert "L-8  [visual] in the prompt" in out
+    assert f"used in {NEVER_PASSED_AFTER} attempts, 0 passed; never in a passing attempt" in out
+    assert "used in 1 attempt, 1 passed" in out
+    assert "L-1  [visual] does not fit" in out
+    assert ("2 approved lessons don't fit in the 2,000-character budget and aren't used; "
+            "reject or shorten some") in out
+    assert "The budget is fixed" in out
+
+
+def test_ms_status_mentions_dropped_lessons_only_when_some_are_dropped():
+    from core.master import Master
+    from core.ms import owner_needs
+    from core.run_config import load_config
+
+    from core.history import InMemoryHistoryStore
+
+    master = Master(default_projects_root())
+    store = LessonStore(default_projects_root() / "sample-project")
+
+    def needs():
+        return [n for n in owner_needs(master, InMemoryHistoryStore(),
+                                       load_config("/nonexistent"), "sample-project")
+                if "lesson" in n]
+
+    approve(store, "visual", ["a" * 300, "b" * 300])
+    assert needs() == []
+    approve(store, "logic", [c * 300 for c in "cdefghi"])
+    [line] = needs()
+    assert "1 approved lesson doesn't fit in the 2,000-character budget" in line
+    assert "ms lessons sample-project" in line
+
+
+def test_the_owner_can_reject_an_approved_lesson():
+    store = LessonStore(default_projects_root() / "sample-project")
+    approve(store, "visual", ["A", "B"])
+    store.propose("visual", ["C"], "t1", "a1")
+    code, out = run_ms("lessons", "sample-project", "--reject", "L-1")
+    assert code == 0 and "rejected 1" in out
+    assert [r["id"] for r in store.approved()] == ["L-2"]
+    assert [r["id"] for r in store.pending()] == ["L-3"]
+    assert "--reject L-2" in out or "--reject IDS" in out
+    # "rest" still means the pending lessons only.
+    code, out = run_ms("lessons", "sample-project", "--reject", "rest")
+    assert [r["id"] for r in store.approved()] == ["L-2"] and store.pending() == []

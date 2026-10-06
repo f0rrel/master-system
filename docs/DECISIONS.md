@@ -207,6 +207,16 @@ choice* — made during implementation and recorded here for review.
 | A Node binary's version is read by running `node --version` from `core/host.py`; the lookup in `core/worker_env.py` starts no process | Keeps the process-starting modules as they are (boundary test) | Implementation choice |
 | A quickstart project in `examples/quickstart/` with zero dependencies, whose `init.sh` writes only the target repository and prints the remaining steps | A new user can try the whole loop with nothing to install beyond Node; never touching `~/.config` keeps the script safe to run | Approved |
 
+## Lessons: visibility and evidence
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| Lessons the prompt budget leaves out are reported (`ms lessons` per lesson, `ms status` under "Needs you"); the 2,000-character budget stays fixed | Silent drops hid approved lessons from workers; making the budget configurable is a separate change | Approved |
+| `attempt_started` records `lessons_used_ids`; `lessons_used` stays the count | Evidence per lesson needs ids; older readers keep working | Approved |
+| Usefulness is computed from history only (attempts including a lesson, passes among them); provider-limited attempts and attempts without ids do not count | No new state to keep in sync; a limited attempt never ran the worker | Implementation choice |
+| Eviction is suggest-only: "never in a passing attempt" after 5 attempts without a pass; the owner rejects or keeps | Correlation is weak evidence (hard tasks fail with good lessons); memory changes stay the owner's decision, like approval | Approved (decided by the owner) |
+| `ms lessons --reject` also accepts approved ids | Without it, acting on the suggestion meant editing YAML | Implementation choice |
+
 ## Project hygiene
 
 | Decision | Rationale | Status |
