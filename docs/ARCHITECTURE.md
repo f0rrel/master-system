@@ -6,18 +6,23 @@ installation and usage, see the [README](../README.md).
 ## Components
 
 ```text
- human ──ms chat──▶ Planner ──approve──▶ tasks.yaml + tests on develop
+ human ──ms chat──▶ Planner (direction, backlog) ──approve──▶ typed tasks + tests on develop
                                            │
  systemd user service: ms daemon (core/daemon.py), every interval_s, within caps
+   AssetStep: images for visual tasks (commit, or wait for ms pick)
                                            ▼
    run_cli (child process) ─▶ AutonomousLoop ─▶ Master model proposes ONE operation
-                                   │                 │
+                                   │                 │ (backlog order, direction)
                                    │        policy + completion gate decide
                                    ▼
-   TaskOrchestrator ─▶ git worktree per attempt ─▶ worker (OpenCode CLI, allowlisted env)
-        │                                         ─▶ AcceptanceVerifier (frozen acceptance)
+   TaskOrchestrator ─▶ git worktree per attempt ─▶ worker (OpenCode CLI, allowlisted env,
+        │                                          type's tools, briefing)
+        │                                         ─▶ AcceptanceVerifier (frozen acceptance,
+        │                                            allowed paths) ─▶ VisualReviewVerifier
+        ├─ pass ─▶ lessons ─▶ pending list (owner approves)
         └─ pass ─▶ AutoIntegrator: rebase + re-verify ─▶ develop (fast-forward)
-   after the run: Publisher ─▶ push develop + gh-pages (GitHub App) ─▶ ntfy notification
+   after the run: Publisher ─▶ push develop + gh-pages (GitHub App)
+   work runs out: morning summary (core/summary.py) ─▶ one ntfy notification
  human ──ms release──▶ PR develop→main ──human merges──▶ tag, GitHub Release, live site
 ```
 
@@ -39,12 +44,13 @@ installation and usage, see the [README](../README.md).
 
 | Area | Modules |
 | --- | --- |
-| State | `master.py`, `work_manager.py`, `project_state.py`, `project_manager.py`, `human_edits.py` |
+| State | `master.py`, `work_manager.py`, `project_state.py`, `project_manager.py`, `human_edits.py`, `backlog.py` (epic order), `lessons.py` (shared project memory) |
+| Project guidance | `direction.py` (the direction document), `task_types.py` (types, skills, paths, tools); generic skill docs in `$MS_HOME/skills/` |
 | Loop | `autonomous_loop.py`, `reasoning.py` (operations, policy), `reasoning_engine.py`, `evidence.py` (completion gate, attempt facts), `session_runner.py`, `work_session.py`, `session_store.py`, `recovery.py`, `run_lock.py` |
-| Execution | `task_orchestrator.py`, `workspace.py` (worktrees, git), `worker_process.py`, `worker_env.py`, `opencode_backend.py`, `ollama_backend.py` (frozen), `worker_tiers.py`, `acceptance_verifier.py`, `verification.py`, `execution.py`, `execution_runner.py` |
+| Execution | `task_orchestrator.py`, `workspace.py` (worktrees, git), `worker_process.py`, `worker_env.py`, `opencode_backend.py`, `ollama_backend.py` (frozen), `worker_tiers.py`, `acceptance_verifier.py`, `visual_review.py`, `images.py`, `verification.py`, `execution.py`, `execution_runner.py` |
 | Integration and release | `attempts.py` (integrate), `auto_integrate.py`, `publish.py`, `github.py` (App auth, push), `release.py` |
-| Models | `provider.py` (interface), `deepseek_provider.py`, `ollama_provider.py`, `opencode_provider.py`, `usage.py` |
-| Operator tools | `ms.py` (the `ms` command), `daemon.py`, `host.py` (service processes), `notify.py`, `planner.py`, `planner_checks.py`, `report.py`, `run_cli.py` (lower-level CLI), `run_config.py`, `paths.py` |
+| Models | `provider.py` (interface), `deepseek_provider.py` (also `DeepSeekVision` for the reviewer), `ollama_provider.py`, `opencode_provider.py`, `usage.py` |
+| Operator tools | `ms.py` (the `ms` command), `daemon.py`, `summary.py` (morning summary), `host.py` (service processes), `notify.py`, `planner.py`, `planner_checks.py`, `report.py`, `run_cli.py` (lower-level CLI), `run_config.py`, `paths.py` |
 | History | `history.py` (event types, interface), `sqlite_history.py` (the only module that imports `sqlite3`) |
 
 ## Files and directories
@@ -52,12 +58,12 @@ installation and usage, see the [README](../README.md).
 | Location | Content |
 | --- | --- |
 | `$MS_HOME` | This repository. The service runs from it. |
-| `~/.config/master-system/projects/<id>/` | Project definitions and state: `project.yaml`, `milestones.yaml`, `tasks.yaml`. Runs update `tasks.yaml`. Private; never in this repository. `[run] projects_root` (or `--root` for the lower-level CLIs) points elsewhere. |
+| `~/.config/master-system/projects/<id>/` | Project definitions and state: `project.yaml`, `milestones.yaml`, `tasks.yaml`, `lessons.yaml`. Runs update `tasks.yaml`. Private; never in this repository. `[run] projects_root` (or `--root` for the lower-level CLIs) points elsewhere. |
 | `$MS_HOME/examples/projects/` | A fictional example project definition |
 | `$MS_HOME/docs/` | This document, troubleshooting, the decision log, the GitHub setup guide |
 | `$MS_HOME/archive/` | Early experiments and historical milestone plans; unused by the code |
 | `~/.config/master-system/` | `config.toml` (no secrets); `master.env` (model API key, mode 600); `github-app.pem` (600); `ntfy-topic` (600) |
-| `~/.local/share/master-system/` | `history.sqlite` (and `.bak-*` migration backups); `sessions/`; `logs/` (worker and verification logs; `runs/` per service run); `planner/` (chats); `daemon-state.json`; `paused` (flag); `run.pid`; `last-looked`; `release-check`; `git-askpass.sh` (contains no secret) |
+| `~/.local/share/master-system/` | `history.sqlite` (and `.bak-*` migration backups); `sessions/`; `logs/` (worker and verification logs; `runs/` per service run); `planner/` (chats); `artifacts/<project>/<task>/<result>/` (review screenshots); `assets/<project>/<task>/<asset>/` (image candidates, contact sheet); `reports/` (morning summaries, `latest.html`); `daemon-state.json`; `paused` (flag); `run.pid`; `last-looked`; `release-check`; `git-askpass.sh` (contains no secret) |
 | `~/.local/share/master-system-worktrees/<project>/` | One git worktree per attempt, rebase or planner check, kept for inspection |
 | `~/.local/share/master-system-worker/` | The worker's home and its only credential store |
 | A dedicated clone per managed project | The repository the system works in (`repository` in `project.yaml`). Its push URL should be disabled; pushes go through the GitHub App. `refs/ms-release/<branch>` records the remote release branch at the last check. |
@@ -70,17 +76,29 @@ All XDG locations honour `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME`.
 Every `[daemon] interval_s` seconds, unless paused or over the daily cap, the service:
 
 1. completes releases that were merged on GitHub;
-2. for each project with `auto_integrate: true` that is idle and has work, starts one run
-   (`core.run_cli start … --until-stopped`) in a child process, capped at
-   `min(run_usd, remaining daily budget)`;
-3. after the run, publishes and sends a notification.
+2. for each idle project with `auto_integrate: true`, prepares images for visual tasks
+   (`core.images.AssetStep`): generates missing ones, commits single images, and leaves
+   multi-candidate images waiting for the owner's pick;
+3. if the project has work, starts one run (`core.run_cli start … --until-stopped`) in a
+   child process, capped at `min(run_usd, remaining daily budget)`;
+4. after the run, publishes; with `batch_notifications`, it also notifies;
+5. when it has worked and then finds no work (or reaches the daily cap), it writes the
+   morning summary (`core.summary`) and sends one notification.
 
 A task counts as work when it:
 
 - is `planned` with all dependencies done, or is `in_progress`;
 - has acceptance commands;
 - has fewer than 3 failed attempts since the last human action (2 × ladder length when
-  worker tiers are enabled).
+  worker tiers are enabled);
+- does not wait for images.
+
+Work is taken in **backlog order**: epic `priority` (lower first; none = last), then the
+epic's position in `milestones.yaml`, then the task's position in `tasks.yaml`
+(`core.backlog`). The Master sees `ready_tasks` in that order and is told to follow it;
+the order is guidance, not a policy refusal. Epics with status `proposed` are unapproved
+backlog entries: they have no tasks, and only `ms backlog` or an approved planner draft
+changes them.
 
 A run that makes no progress marks the project **stalled** until a human acts on it.
 
@@ -88,8 +106,13 @@ A run that makes no progress marks the project **stalled** until a human acts on
 
 `ms chat <project>` opens a chat with the planner model. The planner may read files from
 the project's base branch (read-only, through git) and returns structured JSON: questions,
-files to read, or a draft epic with tasks. Each task has a title, size, description,
-manual-check steps, test files and acceptance commands.
+files to read, or a draft. A draft is an epic with up to 12 tasks, and/or `backlog`
+epics to add unplanned. Each task has a title, type, size, description, manual-check
+steps, test files and test commands; visual tasks may add `assets` and review `screens`.
+The planner's context holds the direction, the backlog (numbered by priority), the file
+list, the README and the existing tasks. "Plan epic N" drafts all tasks of backlog epic
+N, whose id the draft reuses; approving it turns the epic from `proposed` into `planned`
+and keeps its priority.
 
 One owner message is one *turn* of up to four model calls. Files the model lists in
 `read_files` are read and the model is asked again within the turn. If it names files in
@@ -110,10 +133,57 @@ in the planner assumes a language.
    containing a `broken_test_markers` entry means the test itself is broken);
 4. `base_checks` still pass.
 
-`approve` repeats the checks under the project lock, commits the tests to the base branch,
+A draft with only backlog epics needs no check. `approve` repeats the checks under the
+project lock, adds any backlog epics, commits the tests to the base branch,
 and writes the epic and tasks atomically through `Master.add_planned_work` (human-only),
 recording a `human_action` per task with the draft's hash. Acceptance edits therefore stay
 human-approved.
+
+## Direction, task types and lessons
+
+**Direction** (`core/direction.py`): `docs/DIRECTION.md` (configurable) is read from the
+base branch with a size budget (`max_chars`, default 6000) and given to the planner, the
+Master (`context["direction"]`, injected by the loop), the worker briefing and the
+visual reviewer. Planner and Master rules: judge every proposal against it; ask when a
+request conflicts. It is a protected path of every planned task.
+
+**Task types** (`core/task_types.py`): `developer`, `visual`, `logic`, `docs`. For each,
+`project.yaml` → `task_types` may set `allowed_paths`, `tools` and a project `skill`
+doc. On approval the type's paths are frozen into `acceptance.allowed_paths` (part of
+the spec hash); the acceptance verifier fails any change outside them
+(`outside_allowed_paths`). Each attempt of a typed task gets
+`OPENCODE_CONFIG_CONTENT` disabling, and denying in `permission`, every tool not
+allowed. `attempt_started` records `task_type`, `allowed_tools` and `lessons_used`.
+
+**Briefing** (`TaskOrchestrator._briefing`): the worker prompt carries the type, the
+generic plus project skill doc, the direction and the approved lessons for the type,
+and invites up to three `LESSON:` lines.
+
+**Lessons** (`core/lessons.py`): after a verified pass, `LESSON:` lines from the worker's
+reply are added to `lessons.yaml` → `pending` (bounded, deduplicated). `ms lessons`
+approves or rejects them; only `approved` lessons of the task's type (or `all`) are
+used, newest first, within 2000 characters.
+
+## Visual review and images
+
+**Visual reviewer** (`core/visual_review.py`): wraps the acceptance verifier. For a
+`visual` task whose acceptance passed (not on rebase re-verification), it captures the
+configured screens in the attempt worktree with the worker environment (the project's
+`capture` command, or `npx playwright screenshot` over `file://`), stores them under
+`artifacts/`, and asks the vision model (`[reviewer]`, default DeepSeek `deepseek-flash`)
+for `{verdict: ok|block, readability, change_visible, fits_style, notes}`. A block turns
+`pass` into `fail` with a `visual_review` finding, so the next attempt sees the notes; a
+failed capture or an unusable answer is recorded and changes nothing. The review's
+usage and cost are part of the verification evidence and count toward the daily cap.
+
+**Images** (`core/images.py`): a visual task may declare `assets` (name, prompt, path,
+candidates; part of the spec hash, and protected paths of the task). The service
+generates missing images with `images.style` in front of each prompt, through
+Pollinations with Cloudflare Workers AI as fallback (keys from `master.env`; workers
+never see them). One candidate is committed to the base branch as a system commit;
+several are stored with a contact sheet and the task waits: the daemon skips it, the
+Master sees `readiness: waiting_for_owner`, and `TaskOrchestrator.prepare` refuses it.
+`ms pick` commits the chosen candidate under the project lock and records a human action.
 
 ## Integration, publishing and releases
 
@@ -173,6 +243,8 @@ Master's context never names them. Reports show attempts, passes and cost per ti
 | Deadlines | Workers run under `timeout --kill-after` in their own process group; leftovers in the group are killed |
 | No secrets for workers | Allowlisted environment (`core/worker_env.py`): toolchain on `PATH`, the worker home, no keys; secret-looking extras are refused |
 | The release branch changes only by a human merge | The App has no Administration permission; a ruleset on `main` requires a PR with no bypass |
+| A task stays within its type | `acceptance.allowed_paths` (verifier) and a per-attempt OpenCode tool config |
+| Reviewers and memory cannot widen authority | The visual reviewer can only block; lessons are used only after approval; image keys never reach workers |
 | Only `worker_process.py`, `workspace.py`, `attempts.py` and `host.py` start processes | `tests/test_backend_boundaries.py` |
 | No provider or model names above the adapters | Boundary tests |
 | Spend | Daily, per-run, per-chat and per-task caps |
@@ -186,8 +258,11 @@ Master's context never names them. Reports show attempts, passes and cost per ti
 | H3 | Approvals for gated operations cannot be granted outside a run | Approval events and `ms approve` |
 | H4 | The service's per-task failure budget and the in-run attempt limit are separate | Unify |
 | M4 | Edits made directly in YAML are not recorded (`ms chat` and `run_cli task …` edits are) | Record every write with an actor |
-| H6 | Homemade durable execution | DBOS evaluation (milestone 4) |
+| H6 | Homemade durable execution | DBOS evaluation (milestone 5) |
 | L6 | Old attempt worktrees and branches accumulate | Periodic cleanup |
+| B1 | Backlog order is guidance for the Master, not enforced by policy | Enforce with transition policy (H2) if it is ignored |
+| T2 | Type isolation is only as fine as the project's file layout (a single-file app cannot separate visual from logic work by path) | Split such files; tool limits still apply |
+| S1 | Screenshots and the summary page are local files, not viewable from a phone | Optionally publish them with the preview |
 
 ## Developing
 

@@ -5,6 +5,31 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Milestone 4: From direction to overnight work
+- **Direction:** a project's `docs/DIRECTION.md` (configurable path and size budget) is
+  read by the planner, the Master, workers and the visual reviewer, who judge proposals
+  against it; planned tasks protect it.
+- **Backlog:** epics with `priority` and `summary`; `proposed` epics are unapproved.
+  `ms backlog` lists, adds and reorders; the planner adds epics and plans a whole epic
+  ("plan epic 1 from the backlog", up to 12 tasks). Ready tasks are taken in backlog order.
+- **Task types:** `developer`, `visual`, `logic`, `docs`, each with a skill doc
+  (`skills/`), allowed paths (frozen into `acceptance.allowed_paths`, enforced by the
+  verifier) and allowed tools (enforced through a per-attempt OpenCode config).
+- **Shared project memory:** `LESSON:` lines from verified attempts go to a pending list;
+  `ms lessons` approves them in a batch; only approved lessons reach later workers.
+- **Visual reviewer:** phone-sized screenshots of visual tasks, judged by DeepSeek
+  `deepseek-flash` against the task and the direction; it can block, never pass.
+  Screenshots are kept as task artifacts; review cost counts toward the daily cap.
+- **Images:** visual tasks can declare assets generated in the project's fixed style
+  (Pollinations, then Cloudflare Workers AI); several candidates wait for `ms pick`.
+- **Morning summary:** one notification and one report page (`ms report --summary`) with
+  tasks done, blocked, screenshots, cost and what needs the owner, when the work runs out
+  or the daily cap is reached. Per-run notifications are off by default.
+- `ms status` lists image picks and pending lessons under "needs you".
+- New configuration: `[reviewer]`, `[images]`, `[daemon] batch_notifications`,
+  `[planner] max_output_tokens`; project keys `direction`, `task_types`, `visual_review`,
+  `images`; task fields `type`, `assets`, `screens`.
+
 ### Changed
 - Project definitions moved out of the repository to
   `~/.config/master-system/projects/` (or `[run] projects_root`). The repository's

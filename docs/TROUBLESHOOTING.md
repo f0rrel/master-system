@@ -22,6 +22,14 @@ Paths: `$MS_HOME` is the repository; `<clone>` is a managed project's dedicated 
 | The planner drafts tests in the wrong language or location | The project's planner conventions are not configured | Set `planner.test_suffixes`, `test_command_examples` and, optionally, `syntax_check` and `test_guidance` in `project.yaml` |
 | `Projects root not found` | No project definitions at the configured root | Create `~/.config/master-system/projects/<id>/`, or set `[run] projects_root` |
 | No preview link in `ms status` | The project has no `github.site_dir` | Add `site_dir` if the project has a static site to preview |
+| A task "waits for images" and nothing generates them | No image provider key | Add `POLLINATIONS_API_KEY` (free key from enter.pollinations.ai) or `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` to `master.env`, then restart the service |
+| "pick an image for …" in `ms status` | A visual task asked for several candidates | Open the contact sheet link, then `ms pick <project> <task> <asset> <n>` |
+| A visual task fails with "the visual review blocked it" | The reviewer judged the screenshots unreadable, the change invisible, or off-style | Read the notes in `ms report`; the next attempt sees them. If the review is wrong, adjust the task, the direction, or set `[reviewer] provider = "none"` |
+| Visual review "unavailable" | Screenshot capture failed, or the model answer was unusable | Check `visual_review.screens` / `capture` in `project.yaml`; capture needs Playwright in the project (`npm ci`) |
+| An attempt fails with "outside the task type's allowed paths" | The worker changed files its type may not touch | Change the task's type in a new plan, or widen `task_types.<type>.allowed_paths` |
+| The planner says an epic id "is already used" | The epic already has tasks, or is not a proposed backlog epic | Check `ms backlog <project>`; plan only `proposed` epics |
+| No notification after runs | Per-run notifications are off by default | Read the morning summary (`ms report --summary`), or set `[daemon] batch_notifications = true` |
+| `ms lessons` shows nothing | No verified attempt has proposed lessons yet | Nothing to do |
 | `check` fails during a `setup` command | Dependency installation or network failure | Run the setup command manually in `<clone>`; check connectivity |
 | The preview did not update after "batch done" | GitHub Pages builds take 1–2 minutes, or publishing failed | Wait and reload; `ms publish <project>` shows any error; `ms github check` |
 | "Publishing is not set up yet (GitHub App)" | App id or private key missing | `ms github check`; [GITHUB-SETUP.md](GITHUB-SETUP.md) |

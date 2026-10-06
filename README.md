@@ -28,12 +28,25 @@ code:
 
 ## Features
 
-- **Planner chat** (`ms chat`): turns a request into an epic of small tasks, each with
-  test files, acceptance commands and manual-check steps. Drafts are validated in a fresh
-  worktree (tests must be valid and must fail on the current code) before they can be
-  approved.
+- **Project direction**: each project's `docs/DIRECTION.md` (vision, audience, feel, what
+  never changes) is read by the planner, the orchestrating model, the workers and the
+  visual reviewer, which judge every proposal against it.
+- **Backlog**: epics in priority order (`ms backlog`). The planner adds epics and plans a
+  whole epic in one draft; the service works through approved tasks in backlog order.
+- **Planner chat** (`ms chat`): turns a request into an epic of small, typed tasks, each
+  with test files, acceptance commands and manual-check steps. Drafts are validated in a
+  fresh worktree (tests must be valid and must fail on the current code) before they can
+  be approved.
+- **Task types**: `developer`, `visual`, `logic`, `docs`, each with a skill doc, allowed
+  paths and allowed tools that the orchestrator enforces.
+- **Shared project memory**: workers propose lessons after verified tasks; approved
+  lessons (`ms lessons`) reach future workers of the same type.
+- **Visual reviewer**: for visual tasks, a vision model judges phone-sized screenshots
+  against the task and the direction; it can block a task, never pass one.
+- **Generated images**: visual tasks can request images in the project's fixed style; the
+  owner picks among candidates (`ms pick`).
 - **Background service**: a systemd user service that runs approved tasks within daily,
-  per-run and per-task cost caps.
+  per-run and per-task cost caps, and sends one morning summary when the work runs out.
 - **Isolated attempts**: one git worktree per attempt, process-group deadlines, and an
   allowlisted environment with no secrets for workers.
 - **Independent verification**: the orchestrator runs each task's acceptance commands and
@@ -57,18 +70,21 @@ code:
 ## Architecture overview
 
 ```text
- human ──ms chat──▶ Planner model ──approve──▶ tasks + tests committed to develop
-                                                   │
+ DIRECTION.md + backlog ─▶ human ──ms chat──▶ Planner model ──approve──▶ typed tasks + tests
+                                                                          on develop
  background service (systemd user unit), every N minutes, within cost caps
+   images for visual tasks ─▶ committed, or candidates wait for the owner's pick
                                                    ▼
    run (child process) ─▶ autonomous loop ─▶ Master model proposes ONE operation
-                                │                    │
+                                │                    │ (backlog order, direction)
                                 │          policy + completion gate decide
                                 ▼
-   task orchestrator ─▶ git worktree per attempt ─▶ coding worker (allowlisted env)
-        │                                        ─▶ acceptance verifier
+   task orchestrator ─▶ git worktree per attempt ─▶ coding worker (type: paths + tools,
+        │                                            skill, approved lessons)
+        │                                        ─▶ acceptance verifier ─▶ visual reviewer
         └─ pass ─▶ auto-integrator: rebase + re-verify ─▶ develop (fast-forward)
-   after the run: publisher ─▶ push develop + preview site (GitHub App) ─▶ notification
+   after the run: publisher ─▶ push develop + preview site (GitHub App)
+   when the work runs out: one morning summary (done, blocked, screenshots, cost, needs you)
  human ──ms release──▶ PR develop → main ──human merges──▶ tag, GitHub Release, live site
 ```
 
@@ -135,7 +151,11 @@ complete, fictional example is in [`examples/projects/example-app/`](examples/pr
    cd ~/managed/example-app && git switch -c develop && git push -u origin develop
    ```
 
-2. **Describe the project** in `~/.config/master-system/projects/example-app/`:
+2. **Write the direction** (optional, recommended): `docs/DIRECTION.md` in the project's
+   repository on `develop`: vision, audience, the feel every change is judged against,
+   and what must never change.
+
+3. **Describe the project** in `~/.config/master-system/projects/example-app/`:
 
    ```bash
    cp -r "$MS_HOME/examples/projects/example-app" ~/.config/master-system/projects/
@@ -172,17 +192,41 @@ complete, fictional example is in [`examples/projects/example-app/`](examples/pr
        - package-lock.json
    ```
 
+   Optional sections (all project-specific content stays here or in the project's
+   repository):
+
+   ```yaml
+   direction: {path: docs/DIRECTION.md, max_chars: 6000}
+   task_types:                       # narrow what each type may change and use
+     visual:
+       allowed_paths: ["public/css/*", "public/assets/*", "public/index.html"]
+       tools: [read, edit, write, grep, glob, list, bash]
+       skill: docs/skills/visual.md  # project skill doc, added to the generic one
+     docs:
+       allowed_paths: ["*.md", "docs/*"]
+   visual_review:
+     viewport: [390, 844]
+     screens:
+       - {name: home, url: index.html}
+     capture: "node tests/screens/capture.js {out_dir} {screens} {width} {height}"
+   images:
+     style: "flat vector illustration, soft shadows, pastel background"
+     width: 768
+     height: 768
+   ```
+
    For a Python project the planner keys would be, for example,
    `test_suffixes: [".py"]`, `syntax_check: "python -m py_compile {path}"` and
    `test_command_examples: ["python -m pytest -q {path}"]`. Other optional keys:
    `broken_test_markers` (output that means a drafted test is itself broken) and
    `ignore_paths` (directories hidden from the planner's file list).
 
-3. **Connect GitHub**: create the GitHub App, protect `main` and, if the project has a
+4. **Connect GitHub**: create the GitHub App, protect `main` and, if the project has a
    `site_dir`, enable Pages, as described in [docs/GITHUB-SETUP.md](docs/GITHUB-SETUP.md).
    Then run `ms github check`.
 
-4. **Plan the first work**: `ms chat example-app`.
+5. **Fill the backlog and plan**: `ms backlog example-app add "First epic"`, then
+   `ms chat example-app` and "plan epic 1 from the backlog".
 
 A project without `auto_integrate: true` is never run by the service. A project without
 `github.site_dir` gets no preview site; only `develop` is pushed.
@@ -191,11 +235,14 @@ A project without `auto_integrate: true` is never run by the service. A project 
 
 | Step | Action | Command |
 | --- | --- | --- |
-| 1. Plan | Describe the change, answer the planner's questions, run `check`, then `approve` | `ms chat <project>` |
-| 2. Wait | The service runs approved tasks; notifications report batches and blockers | — |
-| 3. Review | Open the preview and follow each task's manual-check steps | the preview URL |
-| 4. Release | Open the release pull request, review it, merge it on GitHub | `ms release <project>` |
-| 5. Monitor | What needs attention, what finished, what is next, today's spend | `ms status` |
+| 1. Plan | Add epics to the backlog; ask the planner to plan one; answer its questions, run `check`, then `approve` | `ms backlog <project>`, `ms chat <project>` |
+| 2. Overnight | The service works through approved tasks in backlog order until the backlog or the daily cap runs out, then sends one summary | — |
+| 3. Morning | Read the summary (done, blocked, screenshots, cost, what needs you) | `ms report --summary` |
+| 4. Decide | Pick generated images, approve lessons, revise blocked tasks | `ms pick …`, `ms lessons <project>`, `ms chat <project>` |
+| 5. Review | Open the preview and follow each task's manual-check steps | the preview URL |
+| 6. Release | Open the release pull request, review it, merge it on GitHub | `ms release <project>` |
+
+`ms status` shows the same "needs you" list at any time.
 
 The loop is the same for any software project. For a web app or game, the review step is
 the deployed preview; for a CLI tool or library, it is the diff on `develop` and the run
@@ -209,6 +256,10 @@ report (`ms report`).
 | `ms chat <project> [--new] [--file <path>]` | Talk to the planner. Continues the last open chat unless `--new`; `--file` sends a file as the first message. In-chat commands: `show`, `check`, `approve`, `discard`, `release`, `help`, `quit`. For multi-line input, paste it or put it between two lines containing only `"""`. |
 | `ms release <project>` | Commits a changelog entry to `develop` and opens a pull request `develop` → release branch with generated notes. Merging it approves the release. |
 | `ms report [<session>]` | A run's report: steps, attempts, verdicts, tokens and cost. Defaults to the latest run. |
+| `ms report --summary` | The latest morning summary, with a link to its HTML page (screenshot thumbnails). |
+| `ms backlog <project> [add "<title>" [--summary …] [--priority N] \| priority <epic> <N>]` | List the backlog in priority order; add a proposed epic; change an epic's priority (lower runs first). |
+| `ms lessons <project> [--approve all\|IDS] [--reject IDS\|rest]` | Review lessons workers proposed; only approved lessons are used. |
+| `ms pick <project> <task> <asset> <n>` | Choose one of a task's generated image candidates; it is committed and the task can run. |
 | `ms publish <project>` | Push `develop` and the preview site now (the service also does this after every run). |
 | `ms pause` / `ms resume` | Start no new work (a running task finishes) / allow new work. |
 | `ms stop` | Stop the current run now, keeping its work, and pause. |
@@ -224,13 +275,18 @@ resume, integrate, task edits) are available through `python -m core.run_cli --h
 
 ### Notifications
 
+By default the service sends one **Morning summary** when its work runs out (the
+backlog is done or waits for you, or the daily cap is reached). With
+`[daemon] batch_notifications = true` it also notifies after every run and item:
+
 | Title | Meaning | Action |
 | --- | --- | --- |
-| `<project>: batch done` | Tasks finished and are in the preview | Review the preview |
-| `<project>: run finished` | A run ended without finishing a task | None, unless it repeats |
-| `<project>: needs you` | A run made no progress; the project is stalled until a human acts | `ms status`, then revise the task in `ms chat` |
-| `<project>: <task-id> needs you` | A task used up its attempt budget | Revise or split the task in `ms chat` |
-| `Daily budget reached` | The daily cap was hit; work resumes the next day | None, or raise the cap |
+| `Morning summary` | Done, blocked, screenshots, cost and what needs you since the service started working | `ms report --summary` |
+| `<project>: batch done` (batch mode) | Tasks finished and are in the preview | Review the preview |
+| `<project>: run finished` (batch mode) | A run ended without finishing a task | None, unless it repeats |
+| `<project>: needs you` (batch mode) | A run made no progress, or images wait for your pick | `ms status` |
+| `<project>: <task-id> needs you` (batch mode) | A task used up its attempt budget | Revise or split the task in `ms chat` |
+| `Daily budget reached` | The daily cap was hit without work to summarise; work resumes the next day | None, or raise the cap |
 | `<project>: release` | A release was published, or a release pull request was closed | None |
 | `Master System service stopped` | The service exited; systemd restarts it | If it repeats: `ms doctor` |
 
@@ -247,6 +303,7 @@ Settings live in `~/.config/master-system/config.toml`. Every key is optional.
 | `[planner]` | `provider`, `model`, `base_url` | as `[master]` | Planner model |
 | | `timeout_s` | `300` | Per-call timeout (seconds) |
 | | `chat_usd` | `0.30` | Cost cap per planner chat |
+| | `max_output_tokens` | `16000` | Output tokens per planner reply (a whole epic with tests) |
 | `[worker]` | `opencode_bin` | `~/.opencode/bin/opencode` | Worker binary |
 | | `model` | the worker home's default | Passed to the worker as `--model` |
 | | `home` | `~/.local/share/master-system-worker` | The worker's `HOME` and only credential store |
@@ -265,9 +322,22 @@ Settings live in `~/.config/master-system/config.toml`. Every key is optional.
 | | `run_usd` | `0.20` | Cap per service run |
 | `[daemon]` | `interval_s` | `300` | Service polling interval (seconds) |
 | | `ntfy_server` | `https://ntfy.sh` | Notification server |
+| | `batch_notifications` | `false` | Notify after every run and item; off: one summary when the work runs out |
+| `[reviewer]` | `provider` | `deepseek` | Visual reviewer: `deepseek`, or `none` to switch it off |
+| | `model` | `deepseek-flash` | A vision-capable model |
+| | `base_url`, `timeout_s` | adapter default, `120` | |
+| | `detail` | `high` | Image detail: `high`, or `low` (512 px, cheaper) |
+| `[images]` | `providers` | `["pollinations", "cloudflare"]` | Image providers, tried in order |
+| | `pollinations_model` | `zimage` | Pollinations model |
+| | `cloudflare_model` | `@cf/black-forest-labs/flux-1-schnell` | Workers AI model |
+| | `timeout_s` | `120` | Per-image timeout |
 | `[github]` | `app_id` | — | GitHub App id |
 | | `key_path` | `~/.config/master-system/github-app.pem` | GitHub App private key |
-| `[prices]` | `"<model>" = { input, output, cached_input }` | DeepSeek V4 prices | USD per million tokens, used for caps and reports |
+| `[prices]` | `"<model>" = { input, output, cached_input }` | DeepSeek prices (peak) | USD per million tokens, used for caps and reports |
+
+**Visual review cost.** With `deepseek-flash`, a review of three phone screenshots plus
+the task and a 6000-character direction is about 6–8k input and 300 output tokens:
+about $0.002–0.003 at peak prices, half that off-peak. Reviews count toward the daily cap.
 
 **Caps.** The service stops working on a task after 3 failed attempts since the last
 human change to it (2 per tier when tiers are enabled), starts no run once the daily cap
@@ -279,13 +349,14 @@ the configuration, restart the service once `ms status` reports Idle:
 
 | File | Content |
 | --- | --- |
-| `~/.config/master-system/master.env` (mode 600) | `DEEPSEEK_API_KEY=…` for the Master and planner |
+| `~/.config/master-system/master.env` (mode 600) | `DEEPSEEK_API_KEY=…` for the Master, planner and reviewer; `POLLINATIONS_API_KEY=…` and/or `CLOUDFLARE_ACCOUNT_ID=…`, `CLOUDFLARE_API_TOKEN=…` for images |
 | `~/.config/master-system/github-app.pem` (mode 600) | The GitHub App private key |
 | `~/.config/master-system/ntfy-topic` (mode 600) | The private notification topic |
 | The worker home | The worker's own, ideally spend-limited, model credential |
 
-Per-project options (`repository`, `base_branch`, `auto_integrate`, `github`, `planner`)
-are shown in [Adding a project](#adding-a-project).
+Per-project options (`repository`, `base_branch`, `auto_integrate`, `github`, `planner`,
+`direction`, `task_types`, `visual_review`, `images`) are shown in
+[Adding a project](#adding-a-project).
 
 ## Safety model and trust boundaries
 
@@ -301,7 +372,12 @@ are shown in [Adding a project](#adding-a-project).
 | Intent before side effects | Decisions and attempt starts are recorded before they act; interrupted attempts are never replayed |
 | The release branch is human-only | The GitHub App has no Administration permission; a ruleset on `main` requires a pull request and allows no bypass |
 | Least-privilege publishing | One-hour installation tokens, passed only to the `git push` that needs them |
-| Spend | Daily, per-run, per-chat and per-task caps |
+| Work stays within its type | A task's type freezes `allowed_paths` into its acceptance (the verifier fails changes elsewhere) and limits the worker's tools through a per-attempt OpenCode config |
+| The direction is not the worker's to change | The direction document is a protected path of every planned task |
+| Reviewers can only say no | The visual reviewer can turn a pass into a fail, never the reverse; an unavailable reviewer changes nothing |
+| Nothing unapproved is remembered | Lessons from workers are used only after the owner approves them |
+| Image keys stay with the orchestrator | Images are generated by the service, not by workers; a multi-candidate image is committed only after the owner's pick |
+| Spend | Daily, per-run, per-chat and per-task caps; reviews count toward the daily cap |
 
 **Known limitation:** workers run as the same OS user as the system. Worktrees isolate
 files, not authority; an OS-level sandbox is on the roadmap. See
@@ -320,9 +396,10 @@ else, run `ms doctor` and include its output when asking for help.
 | 1. Contain and verify | Worktree per attempt, locking, deadlines, acceptance verifier, spec-bound evidence | Done |
 | 2. Run it for real | Run CLI, real worker, reports from history, cost accounting | Done |
 | 3. Hands-off | Background service, auto-integration, preview publishing, planner, releases, worker tiers | Done |
+| 4. From direction to overnight work | Project direction, backlog, task types, shared lessons, visual reviewer, generated images, morning summary, whole-epic planning | Done |
 | Next | Policy by state transition, out-of-run approvals, unified attempt budgets | Planned |
-| 4. Durable runtime | Evaluate DBOS in place of homemade durable execution | Planned |
-| 5. Focused context | Per-task digests, project notes, versioned prompts | Partly done |
+| 5. Durable runtime | Evaluate DBOS in place of homemade durable execution | Planned |
+| 6. Focused context | Per-task digests, versioned prompts | Partly done (direction, lessons) |
 | Later | OS-level worker sandbox; self-hosting | Planned |
 
 Changes are listed in [CHANGELOG.md](CHANGELOG.md), design decisions in

@@ -1,5 +1,7 @@
 # Milestone 4 plan: From direction to overnight work
 
+Status: implemented.
+
 Goal: the owner states a direction and a prioritised backlog once; the service works
 through approved backlog items overnight, with typed tasks, shared lessons, a visual
 reviewer and generated images, and reports once in the morning. Everything is
@@ -105,8 +107,10 @@ project-agnostic: project content lives in the project's repository and `project
   (Master, planner, workers, reviewer), and what needs the owner (exhausted or blocked
   tasks, image picks, pending lessons, release ready).
 - `ms report --summary` prints the latest summary and its HTML path.
-- Per-run "batch done" notifications are off by default (`[daemon] batch_notifications`);
-  "needs you" notifications stay immediate.
+- Per-run and per-item notifications ("batch done", "needs you") are off by default
+  (`[daemon] batch_notifications`): everything goes into the one summary, and `ms status`
+  shows the same "needs you" list at any time. (Changed during the build: keeping
+  "needs you" immediate would have meant notifications during the night.)
 
 ## 8. Planner: whole epics from the backlog
 
