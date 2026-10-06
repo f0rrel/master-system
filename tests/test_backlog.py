@@ -108,7 +108,7 @@ def test_draft_problems_for_backlog_drafts():
 
 
 def test_slug():
-    assert slug("Monster tiles!") == "epic-monster-tiles"
+    assert slug("Search page!") == "epic-search-page"
     assert len(slug("x " * 60)) <= 40
 
 
@@ -119,13 +119,13 @@ def run_ms(*argv):
 
 
 def test_ms_backlog_adds_lists_and_reorders():
-    code, out = run_ms("backlog", "sample-project", "add", "Monster", "tiles",
+    code, out = run_ms("backlog", "sample-project", "add", "Search", "page",
                        "--summary", "Six tiles.")
-    assert code == 0 and "Added epic-monster-tiles" in out
-    code, out = run_ms("backlog", "sample-project", "priority", "epic-monster-tiles", "0")
+    assert code == 0 and "Added epic-search-page" in out
+    code, out = run_ms("backlog", "sample-project", "priority", "epic-search-page", "0")
     assert code == 0 and "priority 0" in out
     code, out = run_ms("backlog", "sample-project")
-    assert out.splitlines()[1].strip().startswith("1. [p0] epic-monster-tiles: Monster tiles")
+    assert out.splitlines()[1].strip().startswith("1. [p0] epic-search-page: Search page")
     assert 'plan epic 1 from the backlog' in out
     code, out = run_ms("backlog", "sample-project", "priority", "nope", "1")
     assert code == 1 and "error" in out

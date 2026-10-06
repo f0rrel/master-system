@@ -98,7 +98,7 @@ def test_providers_fall_back_in_order_and_need_keys():
 
 
 def asset(name, count):
-    return {"name": name, "prompt": f"a {name} monster", "path": f"www/assets/{name}.png",
+    return {"name": name, "prompt": f"a {name} icon", "path": f"www/assets/{name}.png",
             "candidates": count}
 
 
@@ -151,7 +151,7 @@ def test_a_single_image_is_committed_and_candidates_wait_for_a_pick(project):
     repo = project["repo"]
     assert blob(repo, "develop:www/assets/sky.png") == PNG
     assert "t-1: image sky" in git(repo, "log", "-1", "--format=%s", "develop")
-    assert provider.prompts[0] == "cute cartoon, bright colours. a sky monster"
+    assert provider.prompts[0] == "cute cartoon, bright colours. a sky icon"
     state_dir = project["paths"].state_dir
     files = candidates(state_dir, "app", "t-2", "blob")
     assert [f.name for f in files] == ["candidate-1.png", "candidate-2.png", "candidate-3.png"]

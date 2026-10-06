@@ -3,9 +3,9 @@
 A visual task may declare the images it needs (part of its spec)::
 
     assets:
-      - name: blob-portrait
-        prompt: "a round green blob monster with one big eye, smiling"
-        path: www/assets/avatars/blob.png
+      - name: robot-portrait
+        prompt: "a friendly round robot waving, front view"
+        path: public/assets/avatars/robot.png
         candidates: 3          # 1: committed directly; 2-4: the owner picks one
 
 Before such a task can run, its images must exist on the base branch. The

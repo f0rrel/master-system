@@ -183,7 +183,7 @@ def test_an_unknown_task_type_is_invalid_state(tmp_path):
 def test_visual_drafts_can_ask_for_images_and_screens():
     project = {**PROJECT, "visual_review": {"screens": [{"name": "home"}, {"name": "game"}]}}
     settings = planner_settings(project)
-    asset = {"name": "blob", "prompt": "a blob monster", "path": "www/assets/blob.png",
+    asset = {"name": "blob", "prompt": "a blob icon", "path": "www/assets/blob.png",
              "candidates": 3}
     good = draft(assets=[asset], screens=["game"])
     assert draft_problems(good, set(), set(), settings) == []
