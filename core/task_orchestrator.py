@@ -144,6 +144,18 @@ class TaskOrchestrator:
     def worktrees(self) -> GitWorktrees:
         return self._worktrees
 
+    def _propose_lessons(self, project_id, task, attempt_id, reply) -> list:
+        """A verified attempt's LESSON lines go to the owner's pending list, nowhere else."""
+        from core.lessons import LessonStore, extract_lessons
+
+        texts = extract_lessons(reply if isinstance(reply, str) else None)
+        if not texts:
+            return []
+        store = LessonStore(self._master.project_state(project_id).project_path)
+        added = store.propose(task.get("type") or "developer", texts, task.get("id"),
+                              attempt_id)
+        return [r["id"] for r in added]
+
     def _briefing(self, project_id, task):
         """What the worker is told besides the spec, and the type's tool limits.
 
@@ -449,6 +461,9 @@ class TaskOrchestrator:
             "findings": [dict(f) for f in ver_res.findings],
             "evidence": dict(ver_res.evidence),
         }
+        if ver_res.verdict == "pass":
+            result["lessons_proposed"] = self._propose_lessons(
+                project_id, task, attempt_id, exec_res.artifacts.get("summary"))
         if (ver_res.verdict == "pass" and self._auto_integrate is not None
                 and self._auto_integrate.applies(project_id)):
             result["integration"] = self._auto_integrate(project_id, attempt_id, lock_fd)

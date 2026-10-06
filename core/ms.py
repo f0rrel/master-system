@@ -7,6 +7,7 @@
     ms chat <project> [--new]  talk to the planner: it drafts tasks with tests; `approve` queues them
     ms release <project>       release notes + a pull request develop -> main for you to merge
     ms backlog <project>       epics in priority order; `add "Title"`, `priority <epic> <N>`
+    ms lessons <project>       lessons workers proposed; --approve all|IDS, --reject IDS|rest
     ms pause | resume          stop or allow new work (a running task finishes)
     ms stop                    stop the current run now, and pause
     ms daemon                  the background service loop (run by systemd)
@@ -1036,6 +1037,61 @@ def _command_backlog(args, out):
     return 0
 
 
+def _command_lessons(args, out):
+    from core.history import EventType
+    from core.lessons import LessonStore
+    from core.master import EXPECTED_ERRORS, Master
+    from core.run_lock import ProjectBusyError, ProjectLock
+    from core.sqlite_history import SQLiteHistoryStore
+
+    master = Master(_config(args).run.projects_root)
+    try:
+        state = master.project_state(args.project)
+    except EXPECTED_ERRORS as error:
+        print(f"error: {error}", file=out)
+        return 1
+    store = LessonStore(state.project_path)
+    if args.approve or args.reject:
+        pending = [r["id"] for r in store.pending()]
+
+        def ids(text):
+            if not text:
+                return []
+            if text in ("all", "rest"):
+                return None
+            return [part.strip() for part in text.split(",") if part.strip()]
+
+        approve, reject = ids(args.approve), ids(args.reject)
+        if approve is None:
+            approve = list(pending)
+        if reject is None:
+            reject = [i for i in pending if i not in approve]
+        try:
+            with ProjectLock(state.project_path, holder="ms lessons"):
+                moved = store.decide(approve, reject)
+        except (ValueError, ProjectBusyError) as error:
+            print(f"error: {error}", file=out)
+            return 1
+        SQLiteHistoryStore(_paths().history_path).append(
+            type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex, project_id=args.project,
+            payload={"actor": "owner", "action": "lessons_decided",
+                     "approved": [r["id"] for r in moved["approved"]],
+                     "rejected": [r["id"] for r in moved["rejected"]]})
+        print(f"Approved {len(moved['approved'])}, rejected {len(moved['rejected'])}.",
+              file=out)
+    pending = store.pending()
+    approved = store.approved()
+    print(f"Lessons for {args.project}: {len(pending)} pending, {len(approved)} approved "
+          "(only approved lessons are used).", file=out)
+    for record in pending:
+        print(f"  {record['id']}  [{record['type']}] {record['text']}"
+              f"  (from {record.get('task_id')})", file=out)
+    if pending:
+        print(f"\nApprove: ms lessons {args.project} --approve all  (or --approve L-1,L-3 "
+              "--reject rest)", file=out)
+    return 0
+
+
 def _command_release(args, out):
     result = build_releaser(_config(args)).prepare(args.project)
     print(result["message"], file=out)
@@ -1200,6 +1256,11 @@ def build_parser():
     backlog.add_argument("--priority", type=int, default=None)
     backlog.add_argument("--id", default=None)
     backlog.set_defaults(handler=_command_backlog)
+    lessons = commands.add_parser("lessons", help="Review lessons workers proposed.")
+    lessons.add_argument("project")
+    lessons.add_argument("--approve", default=None, metavar="IDS|all")
+    lessons.add_argument("--reject", default=None, metavar="IDS|rest")
+    lessons.set_defaults(handler=_command_lessons)
     github = commands.add_parser("github", help="Set up and check the GitHub App.")
     github.add_argument("action", choices=["setup", "check"])
     github.add_argument("--app-id", default=None)
