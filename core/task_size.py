@@ -42,13 +42,21 @@ _NOT_ITEMS = {"lines", "times", "seconds", "minutes", "ms", "pixels", "px", "per
               "kinds", "levels"}
 
 
+#: A count after these words refers to existing things ("all six", "the other four").
+_REFERENCES = {"all", "other", "remaining", "existing", "previous", "those", "these"}
+
+
 def _items(text: str) -> int:
     """The largest count of things a description asks to create ("six monster faces")."""
     best = 0
-    for match in _COUNT.finditer(str(text or "")):
+    text = str(text or "")
+    for match in _COUNT.finditer(text):
         word, noun = match.group(1).lower(), match.group(3).lower()
         if noun in _NOT_ITEMS:
             continue
+        before = text[:match.start()].split()[-1:]
+        if before and before[0].lower().strip(",.;:(") in _REFERENCES:
+            continue  # "all six types", "the other four": things that already exist
         count = int(word) if word.isdigit() else _NUMBERS.get(word, 0)
         if 2 <= count <= 50:
             best = max(best, count)

@@ -287,7 +287,7 @@ ever run as a command.
 | `ms backlog <project> [add "<title>" [--summary …] [--priority N] \| priority <epic> <N>]` | List the backlog in priority order; add a proposed epic; change an epic's priority (lower runs first). |
 | `ms lessons <project> [--approve all\|IDS] [--reject IDS\|rest]` | Review lessons workers proposed; only approved lessons are used. |
 | `ms pick <project> <task> <asset> <n>` | Choose one of a task's generated image candidates; it is committed and the task can run. |
-| `ms split <project> <task> draft ["guidance"] \| approve [anyway] \| reject \| escalate` | Ask the planner to split a too-big task, or decide a pending split (also offered in Telegram). Approving replaces the task in place; its dependents wait for all new tasks. |
+| `ms split <project> <task> draft ["guidance"] \| recheck \| approve [anyway] \| reject \| escalate` | Ask the planner to split a too-big task (again: it continues the pending split), re-run its checks without the model, or decide it (also offered in Telegram). Approving replaces the task in place; its dependents wait for all new tasks. |
 | `ms reopen <project> <task> [--reason …]` | Put a blocked task back in the queue (spec unchanged, recorded); its attempt budget starts over. |
 | `ms telegram pair\|status\|test\|unpair` | Pair the Telegram bot with your account (one-time code), check it, send a test message, or forget the owner. |
 | `ms limit <project> [wait\|free\|paid]` | Show or answer a worker limit: wait for the reset, switch to the next free worker profile, or use the paid one (counts toward the daily cap). |

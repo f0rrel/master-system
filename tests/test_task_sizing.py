@@ -32,6 +32,10 @@ def test_a_small_task_passes_and_big_ones_are_flagged_with_a_split():
     assert "creates about 6 things at once" in size_findings(six)[0]
     assert size_findings(task(description="Keep the six --tile-1..6 variables; the ml-14 "
                                           "test checks this; 20 moves; 400 ms.")) == []
+    assert size_findings(task(description="Add the last two monsters, completing all six "
+                                          "types, like the other four monsters.")) == []
+    assert "6 things" in size_findings(task(description="For each of the six ids, draw a "
+                                                        "monster."))[0]
     assert "changes 5 files" in size_findings(task(files=list("abcde")))[0]
     assert size_findings(task(estimate_lines=180), max_lines=200) == []
 
@@ -332,3 +336,14 @@ def test_a_draft_with_problems_goes_back_to_the_planner_once(root, tmp_path):
     assert "task a-3: bad file" in chats[-1].messages[-1]
     assert notes.sent[-1]["actions"] is not None
     assert SplitStore(tmp_path).get("app", "a-2")["check_ok"] is True
+
+
+def test_recheck_offers_a_pending_split_again_without_the_model(root, tmp_path):
+    notes, chat = Notes(), FakeChat(SPLIT)
+    step = SplitStep(Master(root), InMemoryHistoryStore(), tmp_path, lambda p, c: chat, notes)
+    step.draft("app", "a-2")
+    turns = len(chat.messages)
+    step.recheck("app", "a-2")
+    assert len(chat.messages) == turns and notes.sent[-1]["actions"]
+    with pytest.raises(ValueError):
+        step.recheck("app", "a-1")

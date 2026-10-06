@@ -1467,7 +1467,7 @@ def _command_split(args, out):
 
     config = _config(args)
     try:
-        if args.decision == "draft":
+        if args.decision in ("draft", "recheck"):
             for key, value in __import__("core.daemon", fromlist=["load_env_file"]) \
                     .load_env_file(default_config_path().parent / "master.env").items():
                 os.environ.setdefault(key, value)
@@ -1476,7 +1476,11 @@ def _command_split(args, out):
             step = SplitStep(master, SQLiteHistoryStore(paths.history_path), paths.state_dir,
                              lambda p, c: build_planner(config, p, c), build_notifier(config),
                              escalate=bool(config.worker.ladder))
-            print(step.draft(args.project, args.task, " ".join(args.text) or None), file=out)
+            if args.decision == "recheck":
+                print(step.recheck(args.project, args.task), file=out)
+            else:
+                print(step.draft(args.project, args.task, " ".join(args.text) or None),
+                      file=out)
             return 0
         print(split_decision(config, args.project, args.task, args.decision, args.actor,
                              size_override=args.text == ["anyway"]), file=out)
@@ -1657,7 +1661,8 @@ def build_parser():
     split = commands.add_parser("split", help="Draft or decide a split of a too-big task.")
     split.add_argument("project")
     split.add_argument("task")
-    split.add_argument("decision", choices=["draft", "approve", "reject", "escalate"])
+    split.add_argument("decision", choices=["draft", "recheck", "approve", "reject",
+                                            "escalate"])
     split.add_argument("text", nargs="*", help="draft: guidance; approve: 'anyway'")
     split.set_defaults(handler=_command_split)
     reopen = commands.add_parser("reopen", help="Put a blocked task back in the queue.")

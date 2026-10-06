@@ -169,6 +169,11 @@ class SplitStep:
             result = chat.turn("The split draft has these problems; fix them and send the "
                                f"complete corrected draft:\n{error}")
             check, error = self._check(chat, task_id)
+        return self._offer(project_id, task_id, chat, check, error, result)
+
+    def _offer(self, project_id, task_id, chat, check, error, result) -> str:
+        """Save the split's state and send it to the owner (with buttons when checked)."""
+        task = self._master.project_state(project_id).get_task(task_id)
         state = {"task_id": task_id, "chat_id": chat.state.chat_id, "at": _now(),
                  "reply": result["reply"], "questions": result["questions"]}
         if check is not None:
@@ -197,6 +202,17 @@ class SplitStep:
         self._notifier.send(f"{project_id}: needs you", message, tags="scissors",
                             priority="high", actions=actions)
         return f"{task_id}: split drafted for the owner ({chat.state.chat_id})"
+
+    def recheck(self, project_id: str, task_id: str) -> str:
+        """Run a pending split's checks again (no model call) and offer it again."""
+        pending = self._store.get(project_id, task_id)
+        if not pending.get("chat_id"):
+            raise ValueError(f"no split of {task_id} waits for a decision")
+        chat = self._planner(project_id, pending["chat_id"])
+        check, error = self._check(chat, task_id)
+        return self._offer(project_id, task_id, chat, check, error,
+                           {"reply": pending.get("reply", ""),
+                            "questions": pending.get("questions", [])})
 
     @staticmethod
     def _check(chat, task_id):
