@@ -4,6 +4,7 @@
     ms publish <project>       push develop and the preview site now
     ms doctor                  a paste-ready diagnostic block for any AI helper (no secrets)
     ms report [session]        a session's report (default: the latest)
+    ms report --summary        the latest morning summary: done, blocked, screenshots, cost
     ms chat <project> [--new]  talk to the planner: it drafts tasks with tests; `approve` queues them
     ms release <project>       release notes + a pull request develop -> main for you to merge
     ms backlog <project>       epics in priority order; `add "Title"`, `priority <epic> <N>`
@@ -141,7 +142,32 @@ def build_daemon(config, config_path):
         preview_url=publisher.preview_url, watchers=[releaser.watch],
         prepare=[asset_step(config, master, paths, env_file)],
         waiting=lambda project_id: waiting_tasks(master, project_id),
+        summarize=morning_summary(config, master, history, paths, releaser, publisher),
     )
+
+
+def morning_summary(config, master, history, paths, releaser, publisher):
+    """The service's summary hook: write the report page, return the notification."""
+    def summarize(since, reason, stalled):
+        from core.summary import build_summary, headline, write_summary
+
+        projects = [p for p in master.list_projects()
+                    if master.project_state(p).project().get("auto_integrate") is True]
+        summary = build_summary(
+            master, history, since, config.prices, config.master.model,
+            needs_you=lambda project_id: owner_needs(
+                master, history, config, project_id, stalled=stalled,
+                pending_release=releaser.open_pending(project_id)),
+            max_failures=max(3, 2 * len(config.worker.ladder)), reason=reason,
+            project_ids=projects)
+        written = write_summary(summary, paths.state_dir / "reports")
+        message = (f"{headline(summary)}\nThe service stopped: {reason}.\n"
+                   f"Details: ms report --summary ({written['html'].as_uri()})")
+        click = next((publisher.preview_url(p) for p in projects if publisher.preview_url(p)),
+                     None)
+        return "Morning summary", message, click
+
+    return summarize
 
 
 def asset_step(config, master, paths, env_file):
@@ -465,6 +491,39 @@ def _ago(iso: str, now=None) -> str:
     return f"{hours} h {minutes % 60} min ago" if hours < 24 else _local(iso)
 
 
+def owner_needs(master, history, config, project_id, *, stalled=(), pending_release=None,
+                status=None, exhausted=None) -> list:
+    """What needs the owner in one project, in plain words (ms status, the summary)."""
+    from core.daemon import work_for
+    from core.lessons import LessonStore
+
+    status = status or master.status(project_id)
+    tasks = [t for t in status["tasks"] if t.get("status") != "cancelled"]
+    titles = {t["id"]: t.get("title") or t["id"] for t in tasks}
+    if exhausted is None:
+        _, exhausted = work_for(status, history, max(3, 2 * len(config.worker.ladder)))
+    needs = [f"{t['id']} {titles[t['id']]}: it is blocked; tell the planner what to change "
+             "(ms chat)" for t in tasks if t.get("status") == "blocked"]
+    needs += [f"{t} {titles[t]}: failed several attempts; change its description "
+              "(ms chat)" for t in exhausted]
+    if project_id in stalled:
+        needs.append("The last run made no progress; the service waits for a change.")
+    if pending_release:
+        needs.append(f"Release {pending_release['version']} waits for your merge: "
+                     f"{pending_release.get('pr_url')}")
+    needs += image_picks(master, project_id, _paths().state_dir)
+    pending_lessons = LessonStore(master.project_state(project_id).project_path).pending()
+    if pending_lessons:
+        needs.append(f"{len(pending_lessons)} lesson(s) from workers wait for your review: "
+                     f"ms lessons {project_id}")
+    view = project_overview(master, history, project_id)
+    if view["groups"]["in develop"] and not pending_release:
+        needs.append(f"{len(view['groups']['in develop'])} finished task(s) are in the "
+                     "preview but not released; when you like them: ms release "
+                     f"{project_id}")
+    return needs
+
+
 def friendly_status(master, history, config, *, paused, last_looked, is_busy, spend,
                     pending_release=None, stalled=(), now=None) -> str:
     """`ms status` for the owner: a headline, then what needs them, news, what's next."""
@@ -483,27 +542,10 @@ def friendly_status(master, history, config, *, paused, last_looked, is_busy, sp
         done = sum(1 for t in tasks if t.get("status") == "completed")
         runnable, exhausted = work_for(status, history, max(3, 2 * len(config.worker.ladder)))
 
-        needs = [f"{t['id']} {titles[t['id']]}: it is blocked; tell the planner what to change "
-                 "(ms chat)" for t in tasks if t.get("status") == "blocked"]
-        needs += [f"{t} {titles[t]}: failed several attempts; change its description "
-                  "(ms chat)" for t in exhausted]
-        if project_id in stalled:
-            needs.append("The last run made no progress; the service waits for a change.")
-        if pending_release:
-            needs.append(f"Release {pending_release['version']} waits for your merge: "
-                         f"{pending_release.get('pr_url')}")
-        needs += image_picks(master, project_id, _paths().state_dir)
-        from core.lessons import LessonStore
-
-        pending_lessons = LessonStore(master.project_state(project_id).project_path).pending()
-        if pending_lessons:
-            needs.append(f"{len(pending_lessons)} lesson(s) from workers wait for your review: "
-                         f"ms lessons {project_id}")
+        needs = owner_needs(master, history, config, project_id, stalled=stalled,
+                            pending_release=pending_release, status=status,
+                            exhausted=exhausted)
         view = project_overview(master, history, project_id)
-        if view["groups"]["in develop"] and not pending_release:
-            needs.append(f"{len(view['groups']['in develop'])} finished task(s) are in the "
-                         "preview but not released; when you like them: ms release "
-                         f"{project_id}")
 
         # Headline.
         started = history.events(project_id=project_id, types=[EventType.ATTEMPT_STARTED])
@@ -778,6 +820,14 @@ def _command_report(args, out):
 
     config = _config(args)
     paths = _paths()
+    if args.summary:
+        latest = paths.state_dir / "reports" / "latest.txt"
+        if not latest.exists():
+            print("No summary yet: the service writes one when its work runs out.", file=out)
+            return 0
+        print(latest.read_text(), file=out, end="")
+        print(f"\nWith screenshots: {(latest.parent / 'latest.html').as_uri()}", file=out)
+        return 0
     session_id = args.session
     if session_id is None:
         sessions = sorted(FileSessionStore(paths.sessions_dir).list_sessions(),
@@ -1313,6 +1363,8 @@ def build_parser():
     publish.set_defaults(handler=_command_publish)
     report = commands.add_parser("report", help="A session's report (default: the latest).")
     report.add_argument("session", nargs="?")
+    report.add_argument("--summary", action="store_true",
+                        help="The latest morning summary (with screenshots).")
     report.set_defaults(handler=_command_report)
     commands.add_parser("pause", help="Start nothing new.").set_defaults(handler=_command_pause)
     commands.add_parser("resume", help="Allow new work.").set_defaults(handler=_command_resume)

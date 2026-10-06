@@ -148,6 +148,9 @@ class Daemon:
     prepare: list = field(default_factory=list)
     #: project_id -> {task id: why it waits for the owner}; such tasks are not run.
     waiting: Callable[[str], dict] = lambda project_id: {}
+    #: (since_iso, reason, stalled project ids) -> (title, message, click URL): writes
+    #: the morning summary (core.summary) once the work runs out; None: no summary.
+    summarize: Optional[Callable] = None
 
     # --- files the service and `ms` share ---
 
@@ -196,11 +199,17 @@ class Daemon:
         spent = self.spent_today()
         daily = self.config.budget.daily_usd
         if spent >= daily:
-            self._notify_once(memory, f"cap:{today}", "Daily budget reached",
-                              f"Spent ${spent:.3f} of ${daily:.2f} today. Work resumes "
-                              "tomorrow, or raise [budget] daily_usd.", tags="money_with_wings")
+            log = [f"daily cap reached (${spent:.4f} of ${daily:.2f})"]
+            if memory.get("work_since") and self.summarize is not None:
+                log += self._summary(memory, "today's budget is used up")
+            else:
+                self._notify_once(memory, f"cap:{today}", "Daily budget reached",
+                                  f"Spent ${spent:.3f} of ${daily:.2f} today. Work resumes "
+                                  "tomorrow, or raise [budget] daily_usd.",
+                                  tags="money_with_wings")
             self._remember(memory)
-            return [f"daily cap reached (${spent:.4f} of ${daily:.2f})"]
+            return log
+        ran = False
 
         for project_id in self.master.list_projects():
             for watcher in self.watchers:
@@ -228,7 +237,7 @@ class Daemon:
                 except Exception as error:  # a failed step must not stop the service
                     lines = [f"preparing failed: {error}"]
                 log += [f"{project_id}: {line}" for line in lines]
-                for line in lines:
+                for line in lines if self._batch else ():
                     if "to pick from" in line or "failed" in line:
                         self._notify_once(memory, f"prepare:{project_id}:{line}",
                                           f"{project_id}: needs you", line,
@@ -237,7 +246,7 @@ class Daemon:
             runnable, exhausted = work_for(before, self.history, self.max_failures)
             waiting = self.waiting(project_id) or {}
             runnable = [t for t in runnable if t not in waiting]
-            for task_id in exhausted:
+            for task_id in exhausted if self._batch else ():
                 self._notify_once(
                     memory, f"exhausted:{project_id}:{task_id}:{self._last_human(project_id, task_id)}",
                     f"{project_id}: {task_id} needs you",
@@ -251,6 +260,8 @@ class Daemon:
             if budget <= 0:
                 break
             session_id = f"{project_id}-auto-{self.now().strftime('%Y%m%d-%H%M%S')}"
+            ran = True
+            memory.setdefault("work_since", self.now().isoformat())
             memory["current"] = {"project_id": project_id, "session_id": session_id,
                                  "started_at": self.now().isoformat()}
             self._remember(memory)
@@ -271,7 +282,8 @@ class Daemon:
                 # The same run would happen again in five minutes: wait for a
                 # human action (a task edit, a new task, a reopen) instead.
                 memory.setdefault("stalled", {})[project_id] = self._human_mark(project_id)
-                self.notifier.send(f"{project_id}: needs you",
+                if self._batch:
+                    self.notifier.send(f"{project_id}: needs you",
                                    "The last run made no progress (no attempt, no task "
                                    "finished). The service waits until a task is changed or "
                                    "added; see `ms status` and `ms report`.",
@@ -279,8 +291,27 @@ class Daemon:
             spent = self.spent_today()
             if spent >= daily:
                 break
+        if not ran and memory.get("work_since") and self.summarize is not None:
+            log += self._summary(memory, "the backlog is done or waits for you")
         self._remember(memory)
         return log
+
+    @property
+    def _batch(self) -> bool:
+        """Per-run and per-item notifications; otherwise one summary when work runs out."""
+        return bool(getattr(self.config.daemon, "batch_notifications", True))
+
+    def _summary(self, memory, reason) -> list:
+        since = memory.pop("work_since")
+        try:
+            title, message, click = self.summarize(since, reason,
+                                                   set(memory.get("stalled", {})))
+        except Exception as error:  # the summary must not stop the service
+            memory["work_since"] = since
+            return [f"summary failed: {error}"]
+        self.notifier.send(title, message, tags="sunrise", click=click)
+        memory["last_summary"] = self.now().isoformat()
+        return [f"summary sent: {message.splitlines()[0] if message else title}"]
 
     def _human_mark(self, project_id) -> int:
         events = self.history.events(project_id=project_id, types=[EventType.HUMAN_ACTION])
@@ -317,8 +348,9 @@ class Daemon:
             lines.append(f"Preview: {link}")
         title = f"{project_id}: batch done" if done else f"{project_id}: run finished"
         tags = "white_check_mark" if done and not blocked else ("warning" if blocked else "")
-        self.notifier.send(title, "\n".join(lines), tags=tags, click=link,
-                           priority="high" if blocked else "default")
+        if self._batch:
+            self.notifier.send(title, "\n".join(lines), tags=tags, click=link,
+                               priority="high" if blocked else "default")
         for task_id in blocked:
             memory.setdefault("notified", {})[f"blocked:{project_id}:{task_id}:{session_id}"] = \
                 self.now().isoformat()

@@ -69,8 +69,10 @@ def env(tmp_path):
         runs.append(request)
         return 0
 
+    # These tests cover per-run notifications; the summary mode has its own tests.
+    (tmp_path / "batch.toml").write_text("[daemon]\nbatch_notifications = true\n")
     daemon = Daemon(master=Master(root), history=history,
-                    config=load_config(tmp_path / "none.toml"), state_dir=tmp_path / "state",
+                    config=load_config(tmp_path / "batch.toml"), state_dir=tmp_path / "state",
                     notifier=notifier, run=run, now=lambda: NOW)
     return SimpleNamespace(root=root, project=project, history=history, notifier=notifier,
                            runs=runs, daemon=daemon)
@@ -468,3 +470,60 @@ def test_prepare_steps_run_first_and_waiting_tasks_are_not_run(env):
     assert sent["title"] == "alpha: needs you" and "pick" in sent["message"]
     env.daemon.cycle()
     assert len(env.notifier.sent) == 1  # once per line
+
+
+# --- summary mode (the default): one summary when the work runs out ---
+
+
+def summary_mode(env, tmp_path):
+    env.daemon.config = load_config(tmp_path / "none.toml")
+    calls = []
+
+    def summarize(since, reason, stalled):
+        calls.append((since, reason, stalled))
+        return "Morning summary", "1 done, 0 blocked, 0 need you. Spent $0.010.", "https://p/"
+
+    env.daemon.summarize = summarize
+    return calls
+
+
+def test_runs_are_quiet_and_one_summary_follows_when_the_work_runs_out(env, tmp_path):
+    calls = summary_mode(env, tmp_path)
+
+    def run(request):
+        write_project(env.root, [task("t1", status="completed"), task("t2", depends_on=["t1"]),
+                                 task("t3", status="completed")])
+        return 0
+
+    env.daemon.run = run
+    env.daemon.cycle()  # runs t1: no notification
+    assert env.notifier.sent == [] and calls == []
+    env.daemon.run = lambda request: write_project(env.root, [
+        task("t1", status="completed"), task("t2", status="completed", depends_on=["t1"]),
+        task("t3", status="completed")]) or 0
+    env.daemon.cycle()  # runs t2
+    log = env.daemon.cycle()  # nothing left: the summary
+    [(since, reason, stalled)] = calls
+    assert since == NOW.isoformat() and reason == "the backlog is done or waits for you"
+    [sent] = env.notifier.sent
+    assert sent["title"] == "Morning summary" and sent["click"] == "https://p/"
+    assert any(line.startswith("summary sent") for line in log)
+    env.daemon.cycle()
+    assert len(calls) == 1  # only once until the service works again
+
+
+def test_the_daily_cap_sends_the_summary_instead_of_the_cap_notice(env, tmp_path):
+    calls = summary_mode(env, tmp_path)
+    env.daemon.cycle()
+    env.daemon.spent_today = lambda: 99.0
+    env.daemon.cycle()
+    assert calls[0][1] == "today's budget is used up"
+    assert [s["title"] for s in env.notifier.sent] == ["Morning summary"]
+
+
+def test_without_work_there_is_no_summary(env, tmp_path):
+    calls = summary_mode(env, tmp_path)
+    write_project(env.root, [task("t1", status="completed")])
+    env.daemon.cycle()
+    env.daemon.cycle()
+    assert calls == [] and env.notifier.sent == []
