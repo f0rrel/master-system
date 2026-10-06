@@ -176,7 +176,7 @@ def test_without_a_draft_the_owner_is_pointed_to_the_chat(root, tmp_path):
     step = SplitStep(Master(root), InMemoryHistoryStore(), tmp_path, lambda p, c: Asks(None),
                      notes)
     step.draft("app", "a-2", "skeleton first")
-    assert notes.sent[0]["actions"] is None and "Continue in ms chat app" in \
+    assert notes.sent[0]["actions"] is None and "Continue with ms chat app" in \
         notes.sent[0]["message"]
 
 
@@ -311,3 +311,24 @@ def test_telegram_asks_to_confirm_a_split_approval(tmp_path):
     assert ops.calls[-1] == ["split", "approve"]
     b.handle(press(OWNER, b._buttons(split_buttons("app", "a-2"))[0][1]["callback_data"]))
     assert ops.calls[-1] == ["split", "reject"]  # reject needs no confirmation
+
+
+def test_a_draft_with_problems_goes_back_to_the_planner_once(root, tmp_path):
+    from core.planner import DraftProblem
+
+    class Fixable(FakeChat):
+        checks = 0
+
+        def check(self):
+            Fixable.checks += 1
+            if Fixable.checks == 1:
+                raise DraftProblem("the draft is incomplete:\n  - task a-3: bad file")
+            return super().check()
+
+    notes, chats = Notes(), []
+    step = SplitStep(Master(root), InMemoryHistoryStore(), tmp_path,
+                     lambda p, c: chats.append(Fixable(SPLIT)) or chats[-1], notes)
+    step.draft("app", "a-2")
+    assert "task a-3: bad file" in chats[-1].messages[-1]
+    assert notes.sent[-1]["actions"] is not None
+    assert SplitStore(tmp_path).get("app", "a-2")["check_ok"] is True

@@ -126,6 +126,10 @@ def summarize_draft(draft: dict, check: Optional[dict]) -> str:
     return "\n".join(lines)
 
 
+def _first_lines(text: str, count: int = 6) -> str:
+    return "\n".join(str(text).splitlines()[:count])
+
+
 class SplitStep:
     """Service step: draft a split for tasks cut off twice; hand it to the owner."""
 
@@ -150,19 +154,27 @@ class SplitStep:
         return lines
 
     def draft(self, project_id: str, task_id: str, guidance: Optional[str] = None) -> str:
-        """Ask the planner for a split, check it, and hand it to the owner."""
+        """Ask the planner for a split (or continue a pending one), check it, and hand it
+        to the owner. A draft with problems goes back to the planner once to be fixed."""
         task = self._master.project_state(project_id).get_task(task_id)
-        chat = self._planner(project_id, None)
-        result = chat.turn(split_request(task, guidance))
+        pending = self._store.get(project_id, task_id)
+        chat = self._planner(project_id, pending["chat_id"]) if pending.get("chat_id") else None
+        if chat is not None and getattr(chat.state, "status", "open") == "open":
+            result = chat.turn(guidance or "Fix the split draft so that it passes its checks.")
+        else:
+            chat = self._planner(project_id, None)
+            result = chat.turn(split_request(task, guidance))
+        check, error = self._check(chat, task_id)
+        if error and check is None:
+            result = chat.turn("The split draft has these problems; fix them and send the "
+                               f"complete corrected draft:\n{error}")
+            check, error = self._check(chat, task_id)
         state = {"task_id": task_id, "chat_id": chat.state.chat_id, "at": _now(),
                  "reply": result["reply"], "questions": result["questions"]}
-        check = None
-        if chat.state.draft and chat.state.draft.get("replaces") == task_id:
-            try:
-                check = chat.check()
-                state.update(check_ok=bool(check.get("ok")), size_ok=bool(check.get("size_ok")))
-            except Exception as error:  # an unusable draft goes to the owner as it is
-                state.update(check_ok=False, check_error=str(error))
+        if check is not None:
+            state.update(check_ok=bool(check.get("ok")), size_ok=bool(check.get("size_ok")))
+        elif error:
+            state.update(check_ok=False, check_error=error)
         self._store.save(project_id, task_id, state)
         if check is not None:
             message = (f"{task_id} ({task.get('title')}) was too big for the worker. The "
@@ -175,11 +187,23 @@ class SplitStep:
                 actions.append(("Escalate", {"op": "split", "project": project_id,
                                              "task": task_id, "decision": "escalate"}))
         else:
-            message = (f"{task_id} was too big for the worker, and the planner did not draft "
-                       f"a split yet: {result['reply']} "
-                       + " ".join(result["questions"])
-                       + f" Continue in ms chat {project_id}.")
+            why = (f"its draft still has problems: {error}" if error
+                   else f"the planner did not draft a split yet: {result['reply']} "
+                   + " ".join(result["questions"]))
+            message = (f"{task_id} was too big for the worker, and {why}\nContinue with "
+                       f"ms chat {project_id}, or ms split {project_id} {task_id} draft "
+                       "\"<what to change>\".")
             actions = None
         self._notifier.send(f"{project_id}: needs you", message, tags="scissors",
                             priority="high", actions=actions)
         return f"{task_id}: split drafted for the owner ({chat.state.chat_id})"
+
+    @staticmethod
+    def _check(chat, task_id):
+        """(check result, None) or (None, the problems)."""
+        if not chat.state.draft or chat.state.draft.get("replaces") != task_id:
+            return None, None
+        try:
+            return chat.check(), None
+        except Exception as error:  # DraftProblem, or a check that could not run
+            return None, _first_lines(error)
