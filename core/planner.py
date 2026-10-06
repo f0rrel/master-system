@@ -830,12 +830,37 @@ def stalled(answer) -> bool:
 
 
 def _parse(raw) -> dict:
+    """The model's JSON answer. Several JSON objects in one reply (models sometimes
+    split the answer, e.g. around a stray tag) are merged, later keys winning."""
     text = str(raw or "").strip()
     if text.startswith("```"):
         text = text.strip("`")
         text = text[text.find("{"):]
     try:
         value = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        if isinstance(value, dict):
+            return value
     except ValueError:
-        return {"reply": text[:2000], "questions": [], "read_files": [], "draft": None}
-    return value if isinstance(value, dict) else {"reply": str(value), "draft": None}
+        pass
+    merged = _json_objects(text)
+    if merged:
+        return merged
+    return {"reply": text[:2000], "questions": [], "read_files": [], "draft": None}
+
+
+def _json_objects(text: str) -> dict:
+    """Every top-level JSON object in ``text``, merged into one dict."""
+    decoder = json.JSONDecoder()
+    merged, index = {}, 0
+    while True:
+        start = text.find("{", index)
+        if start < 0:
+            return merged
+        try:
+            value, end = decoder.raw_decode(text, start)
+        except ValueError:
+            index = start + 1
+            continue
+        if isinstance(value, dict):
+            merged.update(value)
+        index = end

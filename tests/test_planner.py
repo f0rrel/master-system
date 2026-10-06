@@ -453,3 +453,15 @@ def test_a_missing_module_the_task_does_not_create_is_still_broken(env):
     result = chat.check()
     assert not result["ok"]
     assert any("Cannot find module" in i["note"] for i in result["items"] if not i["ok"])
+
+
+def test_a_reply_split_into_several_json_objects_is_merged():
+    from core.planner import _parse
+
+    raw = ('{"reply": "Split into three."}\n</br>\n{"questions": [], "read_files": [], '
+           '"draft": {"replaces": "ml-15", "tasks": [{"id": "ml-19"}]}}')
+    value = _parse(raw)
+    assert value["reply"] == "Split into three."
+    assert value["draft"]["replaces"] == "ml-15"
+    assert _parse("no json at all")["reply"] == "no json at all"
+    assert _parse('{"reply": "x", "draft": null}') == {"reply": "x", "draft": None}
