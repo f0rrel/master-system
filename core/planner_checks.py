@@ -7,13 +7,14 @@ logs under the state dir), never in the owner's checkout.
 
 from __future__ import annotations
 
+import shlex
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from core.evidence import spec_hash
 from core.history import EventType
-from core.planner import ACTOR, BROKEN_TEST_MARKERS, DraftProblem, planner_settings
+from core.planner import ACTOR, DraftProblem, planner_settings
 from core.run_lock import ProjectLock
 from core.task_orchestrator import default_worktrees
 from core.workspace import AttemptWorkspace, branch_tip, fast_forward
@@ -67,13 +68,15 @@ def make_checker(master, paths, worker_env, timeout_s: float = 1800):
                         f"exit {outcome.returncode}"):
                 return {"ok": False, "items": items, "base_sha": tip, "worktree": str(path)}
         for task in draft["tasks"]:
-            for test in task["tests"]:
-                outcome, output = run(f"node --check {test['path']}")
-                item(f"{task['id']}: {test['path']} is valid JavaScript",
-                     outcome.returncode == 0, output.strip()[-300:])
+            if settings["syntax_check"]:
+                for test in task["tests"]:
+                    outcome, output = run(settings["syntax_check"].format(
+                        path=shlex.quote(test["path"])))
+                    item(f"{task['id']}: {test['path']} passes the syntax check",
+                         outcome.returncode == 0, output.strip()[-300:])
             for command in task["test_commands"]:
                 outcome, output = run(command)
-                broken = [m for m in BROKEN_TEST_MARKERS if m in output]
+                broken = [m for m in settings["broken_test_markers"] if m in output]
                 if outcome.timed_out:
                     item(f"{task['id']}: {command}", False, "timed out")
                 elif outcome.returncode == 0:

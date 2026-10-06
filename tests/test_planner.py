@@ -13,7 +13,8 @@ from core.history import EventType, InMemoryHistoryStore
 from core.master import Master
 from core.ms import chat_loop
 from core.paths import RuntimePaths
-from core.planner import DraftProblem, PlannerChat, draft_problems, planner_settings
+from core.planner import (DraftProblem, PlannerChat, draft_problems, planner_settings,
+                          system_prompt)
 from core.planner_checks import make_approver, make_checker
 from core.project_state import ProjectState
 
@@ -59,8 +60,10 @@ def env(tmp_path, monkeypatch):
     (project / "project.yaml").write_text(yaml.safe_dump({
         "id": "toy", "name": "Toy", "status": "active", "repository": str(repo),
         "base_branch": "develop",
-        "planner": {"test_dir": "tests/tasks", "setup": [], "base_checks": ["true"],
-                    "protected_paths": ["tests/*"]}}))
+        "planner": {"test_dir": "tests/tasks", "test_suffixes": [".test.js"],
+                    "syntax_check": "node --check {path}",
+                    "test_command_examples": ["node --test {path}"],
+                    "setup": [], "base_checks": ["true"], "protected_paths": ["tests/*"]}}))
     (project / "milestones.yaml").write_text(yaml.safe_dump(
         {"milestones": [{"id": "m1", "name": "M1", "status": "in_progress"}]}))
     (project / "tasks.yaml").write_text(yaml.safe_dump({"tasks": [
@@ -114,13 +117,14 @@ def test_the_chat_cap_stops_turns(env):
 
 
 def test_draft_problems_catch_bad_drafts(env):
-    settings = planner_settings({"planner": {"test_dir": "tests/tasks"}})
+    settings = planner_settings({"planner": {"test_dir": "tests/tasks",
+                                             "test_suffixes": [".test.js", ".spec.js"]}})
     assert draft_problems(draft(), {"t-1"}, {"m1"}, settings) == []
     bad = draft(size="huge", test_commands=["npm test"],
                 tests=[{"path": "src/x.js", "content": "x"}])
     problems = draft_problems(bad, {"t-1"}, {"m1"}, settings)
     assert any("size" in p for p in problems)
-    assert any("must be a .js file under tests/tasks/" in p for p in problems)
+    assert any("must be a .test.js or .spec.js file under tests/tasks/" in p for p in problems)
     assert any("must run one of its test files" in p for p in problems)
     assert any("already used" in p for p in draft_problems(draft(id="t-1"), {"t-1"}, {"m1"},
                                                             settings))
@@ -146,7 +150,7 @@ def test_a_broken_test_is_refused(env):
     chat.turn("go")
     result = chat.check()
     assert not result["ok"]
-    assert any(not i["ok"] and "valid JavaScript" in i["what"] for i in result["items"])
+    assert any(not i["ok"] and "syntax check" in i["what"] for i in result["items"])
 
 
 def test_approve_needs_a_passing_check_of_the_current_draft(env):
@@ -251,3 +255,43 @@ def test_replies_wrap_to_the_width_and_are_indented(env):
     reply_lines = [l for l in out.getvalue().splitlines() if l.startswith("  word")]
     assert len(reply_lines) >= 3
     assert "\x1b[2m" not in out.getvalue()  # not a terminal: no colour codes
+
+
+def test_without_test_suffixes_any_file_under_the_test_dir_is_accepted():
+    settings = planner_settings({"planner": {"test_dir": "tests/tasks"}})
+    python = draft("def test_x():\n    assert False\n",
+                   tests=[{"path": "tests/tasks/t-2-greet.py", "content": "x"}],
+                   test_commands=["python -m pytest -q tests/tasks/t-2-greet.py"])
+    assert draft_problems(python, {"t-1"}, {"m1"}, settings) == []
+    outside = draft(tests=[{"path": "src/t-2.py", "content": "x"}],
+                    test_commands=["python -m pytest src/t-2.py"])
+    assert any("must be a file under tests/tasks/" in p
+               for p in draft_problems(outside, {"t-1"}, {"m1"}, settings))
+
+
+def test_the_prompt_follows_the_projects_test_conventions():
+    python = planner_settings({"planner": {
+        "test_dir": "tests/tasks", "test_suffixes": [".py"],
+        "test_command_examples": ["python -m pytest -q {path}"],
+        "test_guidance": "Use pytest fixtures from tests/conftest.py."}})
+    prompt = system_prompt("Example App", ["app-3", "app-4"], python)
+    assert '"python -m pytest -q tests/tasks/app-3-x.py"' in prompt
+    assert '<suffix> is ".py"' in prompt
+    assert "Use pytest fixtures from tests/conftest.py." in prompt
+    for js_only in ("node", "Playwright", ".js", "phone"):
+        assert js_only not in prompt
+    generic = system_prompt("Example App", ["app-3"], planner_settings({}))
+    assert "the project's existing test runner" in generic
+    assert "{" not in generic.split("Answer with ONE JSON")[0]
+
+
+def test_without_a_syntax_check_the_check_runs_only_the_commands(env):
+    project_yaml = env["project"] / "project.yaml"
+    data = yaml.safe_load(project_yaml.read_text())
+    del data["planner"]["syntax_check"]
+    project_yaml.write_text(yaml.safe_dump(data))
+    chat = env["chat"]([answer(draft())])
+    chat.turn("go")
+    result = chat.check()
+    assert result["ok"]
+    assert not any("syntax" in i["what"] for i in result["items"])

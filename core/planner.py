@@ -11,7 +11,7 @@ changes anything: only the owner's ``approve`` does (owner decision H-D6).
 Before a draft can be approved it must pass deterministic checks in a fresh
 worktree of the development branch (``check``):
 
-* every test file is valid JavaScript (``node --check``);
+* every test file passes the project's syntax check, if it has one;
 * each task's own test commands FAIL on the current code, and not because the
   test itself is broken (no syntax error, missing module, or "no tests found");
 * the project's base checks still pass with the new tests present.
@@ -21,13 +21,24 @@ the development branch, writes the epic and its tasks (all or nothing), and
 records one ``human_action`` per task (actor ``owner via planner``) with the
 draft's hash. Nothing is queued before that.
 
-project.yaml::
+Everything about the project's test stack comes from project.yaml, so any
+language works::
 
     planner:
-      test_dir: tests/tasks
-      setup: ["npm ci --prefer-offline --no-audit --no-fund"]
-      base_checks: ["node --test tests/unit/*.test.js", "npx playwright test tests/smoke"]
-      protected_paths: ["tests/*", "package.json", ...]
+      test_dir: tests/tasks                      # where drafted tests go
+      test_suffixes: [".test.js"]                # allowed file name endings (any if unset)
+      syntax_check: "node --check {path}"        # run per drafted test file (optional)
+      test_command_examples: ["node --test {path}"]   # shown to the planner (optional)
+      test_guidance: "Use node:test and the helpers in tests/helpers."   # optional
+      broken_test_markers: ["SyntaxError"]       # output meaning "the test is broken"
+      setup: ["npm ci --no-audit --no-fund"]     # before every check
+      base_checks: ["npm test"]                  # must keep passing
+      protected_paths: ["tests/*", "package.json"]
+      ignore_paths: ["node_modules/"]            # left out of the file list shown to the planner
+
+A Python project would use, for example, ``test_suffixes: [".py"]``,
+``syntax_check: "python -m py_compile {path}"`` and
+``test_command_examples: ["python -m pytest -q {path}"]``.
 """
 
 from __future__ import annotations
@@ -53,7 +64,9 @@ MAX_TASKS = 8
 MAX_TEST_CHARS = 20000
 MAX_FILE_CHARS = 20000
 BROKEN_TEST_MARKERS = ("SyntaxError", "Cannot find module", "ERR_MODULE_NOT_FOUND",
-                       "No tests found", "Error: No test files found")
+                       "No tests found", "Error: No test files found", "no tests ran",
+                       "IndentationError")
+IGNORE_PATHS = ("node_modules/", "vendor/", "dist/", "build/", ".venv/")
 ACTOR = "owner via planner"
 
 SCHEMA = {
@@ -76,6 +89,13 @@ def planner_settings(project: dict) -> dict:
     planner = project.get("planner") if isinstance(project.get("planner"), dict) else {}
     return {
         "test_dir": planner.get("test_dir", "tests/tasks").rstrip("/"),
+        "test_suffixes": [str(x) for x in planner.get("test_suffixes") or []],
+        "syntax_check": planner.get("syntax_check") or None,
+        "test_command_examples": [str(x) for x in planner.get("test_command_examples") or []],
+        "test_guidance": str(planner.get("test_guidance") or "").strip(),
+        "broken_test_markers": [str(x) for x in planner.get("broken_test_markers")
+                                or BROKEN_TEST_MARKERS],
+        "ignore_paths": [str(x) for x in planner.get("ignore_paths") or IGNORE_PATHS],
         "setup": list(planner.get("setup") or []),
         "base_checks": list(planner.get("base_checks") or []),
         "protected_paths": list(planner.get("protected_paths") or ["tests/*"]),
@@ -106,6 +126,8 @@ def draft_problems(draft, existing_task_ids, existing_milestone_ids, settings) -
     ids = [t.get("id") for t in tasks if isinstance(t, dict)]
     known = set(existing_task_ids) | set(ids)
     test_dir = settings["test_dir"] + "/"
+    suffixes = tuple(settings.get("test_suffixes") or ())
+    kind = (" or ".join(suffixes) + " file") if suffixes else "file"
     for task in tasks:
         if not isinstance(task, dict):
             problems.append("a task is not an object")
@@ -134,9 +156,10 @@ def draft_problems(draft, existing_task_ids, existing_milestone_ids, settings) -
         for test in tests:
             path = str((test or {}).get("path", ""))
             paths.append(path)
-            if (not path.startswith(test_dir) or ".." in path or not path.endswith(".js")
+            if (not path.startswith(test_dir) or ".." in path
+                    or (suffixes and not path.endswith(suffixes))
                     or not re.match(r"^[\w./-]+$", path)):
-                problems.append(f"{where}: test path {path!r} must be a .js file under {test_dir}")
+                problems.append(f"{where}: test path {path!r} must be a {kind} under {test_dir}")
             content = (test or {}).get("content")
             if not isinstance(content, str) or not content.strip():
                 problems.append(f"{where}: test {path} is empty")
@@ -233,8 +256,8 @@ coding agent can each finish in one attempt (a focused change, usually under ~20
 with acceptance TESTS that you write.
 
 Rules:
-- When something is unclear or is the owner's decision (look and feel, where art or sounds \
-come from, scope, priorities), ask in "questions" instead of guessing. Keep questions few \
+- When something is unclear or is the owner's decision (look and feel, external assets \
+and where they come from, scope, priorities), ask in "questions" instead of guessing. Keep questions few \
 and concrete; offer options.
 - Prefer independent tasks; use depends_on only when one task truly needs another.
 - Task ids: continue the project's numbering; the next free ids are {next_ids}. The epic id \
@@ -243,17 +266,18 @@ is a short slug like "epic-avatars".
 (new mechanics, tricky logic). Be honest; it picks the coding model.
 - description: what to build and where in the code, written for the coding agent. End it \
 with: "Replace old code; don't leave the previous implementation behind as a fallback."
-- tests: files under {test_dir}/ named "<task id>-<short-name>.test.js" (logic, node:test) \
-or ".spec.js" (browser, Playwright), following the existing tests and helpers (read them \
-with read_files first). Each test must FAIL on the current code and PASS once the task is \
-done. Test observable behaviour, not implementation details.
-- test_commands: 1-3 commands that run only this task's tests, e.g. \
-"node --test {test_dir}/ml-9-x.test.js" or "npx playwright test {test_dir}/ml-9-x.spec.js". \
-The project's setup and base checks are added automatically.
-- manual_check: short numbered steps the owner follows on the preview link (a browser or \
-phone) to see the result by hand.
-- To look at code, list paths in "read_files" (at most 6 per turn, from the file list); you \
-will get their contents and can answer again. Don't invent file contents.
+- tests: files under {test_dir}/ named "<task id>-<short-name><suffix>"{suffix_rule}, \
+following the project's existing tests and helpers (read them with read_files first). Each \
+test must FAIL on the current code and PASS once the task is done. Test observable \
+behaviour, not implementation details.{guidance}
+- test_commands: 1-3 commands that run only this task's tests{examples}. The project's \
+setup and base checks are added automatically.
+- manual_check: short numbered steps the owner follows to see the result by hand (on the \
+preview, or by running the program).
+- To look at code, list paths in "read_files" (at most 6 per turn, from the file list). The \
+system reads them and asks you again IN THE SAME TURN, before the owner sees anything, so \
+never answer "I'll read/check the files" without listing them in read_files: the owner \
+would only see that sentence. Don't invent file contents.
 
 Answer with ONE JSON object only:
 {{"reply": "what you say to the owner (short, plain words)",
@@ -267,6 +291,22 @@ Answer with ONE JSON object only:
                         "test_commands": ["..."]}}]}}}}
 "draft" is the COMPLETE current draft whenever you change it (it replaces the previous one), \
 or null to keep the previous one unchanged."""
+
+
+def system_prompt(name, next_ids, settings) -> str:
+    """The planner's instructions, with the project's own test conventions."""
+    suffixes = settings.get("test_suffixes") or []
+    suffix_rule = (" where <suffix> is " + " or ".join(f'"{x}"' for x in suffixes)
+                   if suffixes else " (use the project's existing test file naming)")
+    example_path = (f"{settings['test_dir']}/{next_ids[0] if next_ids else 't-1'}-x"
+                    + (suffixes[0] if suffixes else ""))
+    examples = settings.get("test_command_examples") or []
+    examples = (", e.g. " + " or ".join(f'"{e.format(path=example_path)}"' for e in examples)
+                if examples else ", using the project's existing test runner")
+    guidance = f"\n  {settings['test_guidance']}" if settings.get("test_guidance") else ""
+    return SYSTEM.format(name=name, next_ids=", ".join(next_ids),
+                         test_dir=settings["test_dir"], suffix_rule=suffix_rule,
+                         examples=examples, guidance=guidance)
 
 
 @dataclass
@@ -362,7 +402,8 @@ class PlannerChat:
                               repo).splitlines()
         except RuntimeError:
             files = []
-        files = [f for f in files if not f.startswith(("android/", "node_modules/"))][:400]
+        ignored = tuple(planner_settings(self._project())["ignore_paths"])
+        files = [f for f in files if not f.startswith(ignored)][:400]
         readme = self.read_file("README.md")[:6000]
         tasks = "\n".join(f"- {t['id']} [{t.get('status')}] {t.get('title')}"
                           for t in self._tasks())
@@ -388,9 +429,8 @@ class PlannerChat:
         self.state.messages.append({"role": "owner", "text": text})
         project = self._project()
         settings = planner_settings(project)
-        system = SYSTEM.format(name=project.get("name") or self.project_id,
-                               next_ids=", ".join(self.next_ids()),
-                               test_dir=settings["test_dir"])
+        system = system_prompt(project.get("name") or self.project_id, self.next_ids(),
+                               settings)
         extra_files: list = []
         answer = None
         for _round in range(3):

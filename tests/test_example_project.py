@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from core.evidence import spec_hash
+from core.planner import planner_settings
 from core.project_state import ProjectState
 
 PROJECT = Path(__file__).resolve().parent.parent / "examples" / "projects" / "example-app"
@@ -33,3 +34,8 @@ def test_the_specs_are_distinct():
     tasks = ProjectState(PROJECT).tasks()
     assert len({spec_hash(t) for t in tasks}) == len(tasks)
 
+def test_the_planner_settings_are_read_from_the_project():
+    settings = planner_settings(ProjectState(PROJECT).project())
+    assert settings["test_dir"] == "tests/tasks"
+    assert settings["test_suffixes"] == [".test.js"]
+    assert settings["syntax_check"] == "node --check {path}"
