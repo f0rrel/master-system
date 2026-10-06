@@ -166,3 +166,21 @@ def test_prepare_commits_a_changelog_entry_to_develop(env):
     assert git(repo, "rev-parse", "develop^") == before
     env["releaser"].prepare("ml")  # updating the PR does not duplicate the entry
     assert git(repo, "show", "develop:CHANGELOG.md").count("## v0.1 (") == 1
+
+
+def test_prepare_refuses_a_develop_the_system_did_not_set(env):
+    from core.workspace import accept_tip
+
+    accept_tip(env["repo"], "develop")
+    git(env["repo"], "checkout", "-q", "develop")
+    (env["repo"] / "www" / "sneak.js").write_text("x\n")
+    git(env["repo"], "add", "-A")
+    git(env["repo"], "commit", "-qm", "outside the system")
+    git(env["repo"], "checkout", "-q", "main")
+    before = git(env["repo"], "rev-parse", "develop")
+
+    result = env["releaser"].prepare("ml")
+
+    assert not result["opened"] and "--accept-tip" in result["message"]
+    assert env["pushes"] == [] and env["app"].calls == []
+    assert git(env["repo"], "rev-parse", "develop") == before  # no changelog commit

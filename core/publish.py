@@ -72,11 +72,25 @@ def build_site_commit(git, repository: Path, release_sha: str, develop_sha: str,
     return git(args, repository, extra_env=ident)
 
 
+def refuse_foreign_tip(repository, branch: str, project_id: str) -> Optional[str]:
+    """Why ``branch`` must not be pushed (a tip the system did not set), or None."""
+    from core.workspace import foreign_tip
+
+    foreign = foreign_tip(repository, branch)
+    if foreign is None:
+        return None
+    return (f"{branch} was not published: it is at {foreign[:12]}, which the system did not "
+            f"set (a change made outside Master System). If you made it on purpose: "
+            f"ms publish {project_id} --accept-tip")
+
+
 class Publisher:
     """The service's after-run hook: push develop and the preview site when they changed."""
 
-    def __init__(self, master, history, app_factory, askpass_dir: Path, git=None, push=None):
+    def __init__(self, master, history, app_factory, askpass_dir: Path, git=None, push=None,
+                 notifier=None):
         self._master = master
+        self._notifier = notifier
         self._history = history
         self._app_factory = app_factory  # repo -> GitHubApp, or None when not set up
         self._askpass_dir = Path(askpass_dir)
@@ -86,6 +100,33 @@ class Publisher:
             from core.github import push
         self._git = git
         self._push = push
+
+    def _tell_once(self, project_id, sha, message) -> None:
+        """A "needs you" notification, once per foreign tip."""
+        marker = self._askpass_dir / f"publish-refused-{project_id}"
+        try:
+            if marker.read_text() == sha:
+                return
+        except OSError:
+            pass
+        if self._notifier is not None:
+            self._notifier.send(f"{project_id}: needs you", message)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(sha)
+
+    def accept_tip(self, project_id: str, actor: str = "owner") -> Optional[str]:
+        """The owner accepts the base branch's current tip as if the system had set it."""
+        from core.workspace import accept_tip, system_tip
+
+        project = self._master.project_state(project_id).project()
+        repository = Path(project["repository"]).expanduser()
+        previous = system_tip(repository, project["base_branch"])
+        sha = accept_tip(repository, project["base_branch"])
+        self._history.append(
+            type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex, project_id=project_id,
+            payload={"actor": actor, "action": "accept_base_tip",
+                     "branch": project["base_branch"], "sha": sha, "previous": previous})
+        return sha
 
     def preview_url(self, project_id: str) -> Optional[str]:
         return site_urls(self._github(project_id))[1]
@@ -114,6 +155,10 @@ class Publisher:
         last = published[-1].payload if published else {}
         if last.get("develop_sha") == develop_sha and last.get("release_sha") == release_sha:
             return []
+        refused = refuse_foreign_tip(repository, develop, project_id)
+        if refused:
+            self._tell_once(project_id, develop_sha, refused)
+            return [refused]
         app = self._app_factory(github["repo"])
         if app is None:
             return ["Publishing is not set up yet (GitHub App): the preview link is not updated."]

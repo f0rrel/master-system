@@ -135,11 +135,11 @@ def build_daemon(config, config_path):
         return _lock_holder(master.project_state(project_id).project_path) is not None
 
     env_file = default_config_path().parent / "master.env"
+    notifier = build_notifier(config)
     publisher = Publisher(master, history, lambda repo: github_app(config, repo),
-                          paths.state_dir)
+                          paths.state_dir, notifier=notifier)
     releaser = Releaser(master, history, lambda repo: github_app(config, repo),
                         askpass_dir=paths.state_dir, prices=config.prices, publisher=publisher)
-    notifier = build_notifier(config)
     return Daemon(
         master=master, history=history, config=config, state_dir=paths.state_dir,
         notifier=notifier,
@@ -911,6 +911,9 @@ def _command_publish(args, out):
 
     try:
         with ProjectLock(master.project_state(args.project).project_path, holder="ms publish"):
+            if args.accept_tip:
+                sha = publisher.accept_tip(args.project)
+                print(f"Accepted {sha[:12]} as the system's develop tip.", file=out)
             lines = publisher(args.project)
     except ProjectBusyError:
         print("A run is in progress; the service publishes after it.", file=out)
@@ -1647,6 +1650,8 @@ def build_parser():
         .set_defaults(handler=_command_doctor)
     publish = commands.add_parser("publish", help="Push develop and the preview site now.")
     publish.add_argument("project")
+    publish.add_argument("--accept-tip", action="store_true",
+                         help="Accept a develop you changed outside Master System, then publish.")
     publish.set_defaults(handler=_command_publish)
     report = commands.add_parser("report", help="A session's report (default: the latest).")
     report.add_argument("session", nargs="?")

@@ -195,6 +195,11 @@ class Releaser:
             return {"opened": False, "notes": notes["markdown"],
                     "message": "The GitHub App is not set up yet (docs/GITHUB-SETUP.md); "
                     "here are the notes."}
+        from core.publish import refuse_foreign_tip
+
+        refused = refuse_foreign_tip(repo, develop, project_id)
+        if refused:
+            return {"opened": False, "message": refused}
         self.add_changelog(project_id, repo, develop, version, notes["tasks"])
         self._push(app, repo, [develop], self._askpass_dir)
         title = f"Release {version}: " + ", ".join(t["task_id"] for t in notes["tasks"])[:200]

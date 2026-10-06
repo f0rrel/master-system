@@ -29,7 +29,10 @@ __all__ = [
     "AttemptWorkspace",
     "branch_tip",
     "checkout_of",
+    "accept_tip",
     "fast_forward",
+    "foreign_tip",
+    "system_tip",
     "has_tracked_changes",
     "record_repository",
     "restore_repository",
@@ -387,6 +390,38 @@ def has_tracked_changes(path) -> bool:
     return bool(status.stdout.strip())
 
 
+def _system_ref(branch: str) -> str:
+    return f"refs/ms-system/heads/{branch}"
+
+
+def system_tip(repository, branch: str) -> Optional[str]:
+    """The tip the system last set on ``branch`` (None before its first write)."""
+    done = _git(["rev-parse", "--verify", "--quiet", _system_ref(branch)], repository,
+                check=False)
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
+def accept_tip(repository, branch: str) -> Optional[str]:
+    """Record ``branch``'s current tip as the system's (the owner's decision); returns it."""
+    tip = branch_tip(repository, branch)
+    if tip:
+        _git(["update-ref", _system_ref(branch), tip], repository)
+    return tip
+
+
+def foreign_tip(repository, branch: str) -> Optional[str]:
+    """``branch``'s tip if the system did not set it, else None.
+
+    Before the system has written the branch, the current tip is trusted and recorded.
+    """
+    recorded = system_tip(repository, branch)
+    if recorded is None:
+        accept_tip(repository, branch)
+        return None
+    tip = branch_tip(repository, branch)
+    return tip if tip != recorded else None
+
+
 def fast_forward(repository, branch: str, expected_tip: str, result_sha: str) -> str:
     """Advance ``branch`` from ``expected_tip`` to ``result_sha``; never merge.
 
@@ -394,7 +429,12 @@ def fast_forward(repository, branch: str, expected_tip: str, result_sha: str) ->
     (refused if it has uncommitted changes), so its files stay consistent.
     Otherwise the ref is moved atomically, only if it still points at
     ``expected_tip``. Returns the method used.
+
+    The new tip is recorded as the system's (``refs/ms-system/heads/<branch>``)
+    only when the branch moved from a tip the system set, so building on a
+    change made elsewhere does not make it the system's.
     """
+    recorded = system_tip(repository, branch)
     checkout = checkout_of(repository, branch)
     if checkout is not None:
         if has_tracked_changes(checkout):
@@ -404,9 +444,13 @@ def fast_forward(repository, branch: str, expected_tip: str, result_sha: str) ->
         if branch_tip(repository, branch) != expected_tip:
             raise WorkspaceError(f"{branch!r} moved while integrating")
         _git(["merge", "--ff-only", "-q", result_sha], checkout)
-        return "ff_merge"
-    _git(["update-ref", f"refs/heads/{branch}", result_sha, expected_tip], repository)
-    return "update_ref"
+        method = "ff_merge"
+    else:
+        _git(["update-ref", f"refs/heads/{branch}", result_sha, expected_tip], repository)
+        method = "update_ref"
+    if recorded in (None, expected_tip):
+        _git(["update-ref", _system_ref(branch), result_sha], repository)
+    return method
 
 
 @dataclass(frozen=True)

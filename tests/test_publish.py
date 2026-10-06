@@ -46,6 +46,28 @@ def site(tmp_path):
             "root": root}
 
 
+def system_commit(repo, text):
+    """A commit on develop made the way the system makes them (workspace.fast_forward)."""
+    from core.workspace import fast_forward
+
+    tip = git(repo, "rev-parse", "develop")
+    git(repo, "checkout", "-q", "--detach", "develop")
+    (repo / "www" / "index.html").write_text(text)
+    git(repo, "commit", "-qam", "system change")
+    commit = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "main")
+    fast_forward(repo, "develop", tip, commit)
+    return commit
+
+
+def owner_commit(repo, text):
+    git(repo, "checkout", "-q", "develop")
+    (repo / "www" / "index.html").write_text(text)
+    git(repo, "commit", "-qam", "by hand")
+    git(repo, "checkout", "-q", "main")
+    return git(repo, "rev-parse", "develop")
+
+
 def show(repo, ref, path):
     return git(repo, "show", f"{ref}:{path}")
 
@@ -94,10 +116,7 @@ def test_a_new_develop_commit_republishes_on_top_of_the_old_site(site):
     site["publisher"]("app")
     first = git(site["repo"], "rev-parse", "gh-pages")
     repo = site["repo"]
-    git(repo, "checkout", "-q", "develop")
-    (repo / "www" / "index.html").write_text("preview 2\n")
-    git(repo, "commit", "-qam", "more")
-    git(repo, "checkout", "-q", "main")
+    system_commit(repo, "preview 2\n")
 
     site["publisher"]("app")
     assert show(repo, "gh-pages", "develop/index.html") == "preview 2"
@@ -234,3 +253,70 @@ def test_push_puts_the_token_only_in_the_environment(tmp_path):
     assert seen["env"]["MS_GITHUB_TOKEN"] == "ghs_secret"
     helper = (tmp_path / "askpass" / "git-askpass.sh").read_text()
     assert "ghs_secret" not in helper and "MS_GITHUB_TOKEN" in helper
+
+
+# --- the publish guard: develop is pushed only at a tip the system set -----------------
+
+
+class Sent:
+    def __init__(self):
+        self.sent = []
+
+    def send(self, title, message, **kwargs):
+        self.sent.append((title, message))
+
+
+def guarded(site, tmp_path):
+    notifier = Sent()
+    publisher = Publisher(Master(site["root"]), site["history"], lambda repo_name: "APP",
+                          tmp_path / "state", push=site["publisher"]._push, notifier=notifier)
+    return publisher, notifier
+
+
+def test_a_develop_moved_outside_the_system_is_not_pushed(site, tmp_path):
+    publisher, notifier = guarded(site, tmp_path)
+    publisher("app")
+    foreign = owner_commit(site["repo"], "by hand\n")
+
+    lines = publisher("app")
+
+    assert len(site["pushes"]) == 1
+    assert "not published" in lines[0] and foreign[:12] in lines[0]
+    assert "ms publish app --accept-tip" in lines[0]
+    assert notifier.sent == [("app: needs you", lines[0])]
+    publisher("app")
+    assert len(notifier.sent) == 1  # once per foreign tip
+
+
+def test_a_system_write_on_top_of_a_foreign_tip_does_not_launder_it(site, tmp_path):
+    publisher, _ = guarded(site, tmp_path)
+    publisher("app")
+    owner_commit(site["repo"], "by hand\n")
+    system_commit(site["repo"], "integrated on top\n")
+
+    assert "not published" in publisher("app")[0]
+    assert len(site["pushes"]) == 1
+
+
+def test_the_owner_accepts_a_deliberate_change_and_it_is_published(site, tmp_path):
+    publisher, _ = guarded(site, tmp_path)
+    publisher("app")
+    foreign = owner_commit(site["repo"], "by hand\n")
+    publisher("app")
+
+    publisher.accept_tip("app")
+    lines = publisher("app")
+
+    assert lines[0].startswith("Preview updated") and len(site["pushes"]) == 2
+    [accepted] = site["history"].events(types=[EventType.HUMAN_ACTION])
+    assert accepted.payload["action"] == "accept_base_tip"
+    assert accepted.payload["sha"] == foreign
+
+
+def test_system_writes_keep_publishing_unchanged(site, tmp_path):
+    publisher, notifier = guarded(site, tmp_path)
+    publisher("app")
+    for text in ("one\n", "two\n"):
+        system_commit(site["repo"], text)
+        assert publisher("app")[0].startswith("Preview updated")
+    assert len(site["pushes"]) == 3 and notifier.sent == []
