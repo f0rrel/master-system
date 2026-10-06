@@ -146,8 +146,10 @@ def build_daemon(config, config_path):
         run=subprocess_runner(config_path, env_file, paths.state_dir / "logs" / "runs",
                               paths.state_dir),
         max_failures=max(3, 2 * len(config.worker.ladder)),
-        after_run=[publisher, release_ready_notice(releaser)], is_busy=is_busy,
-        preview_url=publisher.preview_url, watchers=[releaser.watch],
+        after_run=[under_project_lock(master, "publish", publisher),
+                   release_ready_notice(releaser)], is_busy=is_busy,
+        preview_url=publisher.preview_url,
+        watchers=[under_project_lock(master, "release check", releaser.watch)],
         prepare=[asset_step(config, master, paths, env_file),
                  SplitStep(master, history, paths.state_dir,
                            lambda project_id, chat_id: build_planner(config, project_id,
@@ -730,6 +732,23 @@ def _command_status(args, out):
     return 0
 
 
+def under_project_lock(master, holder: str, action):
+    """``action(project_id, ...)`` holding the project's lock; no lines while it is busy.
+
+    For ref writers outside a run (release check, publishing): while a run holds the
+    lock, a change to the repository's refs is the worker's and is undone as tampering.
+    """
+    from core.run_lock import ProjectBusyError, ProjectLock
+
+    def call(project_id, *args):
+        try:
+            with ProjectLock(master.project_state(project_id).project_path, holder=holder):
+                return action(project_id, *args)
+        except ProjectBusyError:
+            return []
+    return call
+
+
 def check_releases(config, master, history, paths, *, max_age_s: float = 60, now=None,
                    releaser=None, notifier=None) -> list:
     """Finish any release whose PR the owner merged (cheap; at most once a minute).
@@ -759,9 +778,10 @@ def check_releases(config, master, history, paths, *, max_age_s: float = 60, now
     if notifier is None:
         notifier = build_notifier(config)
     lines = []
+    watch = under_project_lock(master, "release check", releaser.watch)
     for project_id in master.list_projects():
         try:
-            done = releaser.watch(project_id)
+            done = watch(project_id)
         except Exception as error:  # GitHub unreachable: say so, keep the status
             done = [f"(could not check the release on GitHub: {error})"]
         if done and not done[0].startswith("(could not"):
@@ -887,7 +907,14 @@ def _command_publish(args, out):
     master = Master(config.run.projects_root)
     publisher = Publisher(master, SQLiteHistoryStore(paths.history_path),
                           lambda repo: github_app(config, repo), paths.state_dir)
-    lines = publisher(args.project)
+    from core.run_lock import ProjectBusyError, ProjectLock
+
+    try:
+        with ProjectLock(master.project_state(args.project).project_path, holder="ms publish"):
+            lines = publisher(args.project)
+    except ProjectBusyError:
+        print("A run is in progress; the service publishes after it.", file=out)
+        return 1
     print("\n".join(lines) if lines else "Already published; nothing changed.", file=out)
     return 0
 

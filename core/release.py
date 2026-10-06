@@ -167,12 +167,17 @@ class Releaser:
 
     def prepare(self, project_id) -> dict:
         """Write the notes, push develop, open or update the release PR."""
+        from core.run_lock import ProjectBusyError, ProjectLock
+
         repo, develop, release, repo_name = self._setup(project_id)
         try:
-            self._git(["fetch", "-q", self._remote_url(repo_name),
-                       f"+refs/heads/{release}:refs/ms-release/{release}"], repo)
-        except RuntimeError:
-            pass  # offline: judge by the last fetch
+            # Under the lock: during a run, ref changes are the worker's (tamper check).
+            with ProjectLock(self._master.project_state(project_id).project_path,
+                             holder="release fetch"):
+                self._git(["fetch", "-q", self._remote_url(repo_name),
+                           f"+refs/heads/{release}:refs/ms-release/{release}"], repo)
+        except (RuntimeError, ProjectBusyError):
+            pass  # offline or busy: judge by the last fetch
         pending = self.open_pending(project_id)
         version = pending["version"] if pending else self.next_version(project_id, repo)
         since = None

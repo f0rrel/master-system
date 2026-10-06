@@ -446,6 +446,9 @@ def test_status_finishes_merged_releases_at_most_once_a_minute(tmp_path):
         def list_projects(self):
             return ["ml"]
 
+        def project_state(self, project_id):
+            return SimpleNamespace(project_path=tmp_path)
+
     paths = SimpleNamespace(state_dir=tmp_path)
     notifier = Notifier(topic=None)
     lines = check_releases(None, Master(), None, paths, now=1000.0, releaser=Releaser(),
@@ -527,3 +530,19 @@ def test_without_work_there_is_no_summary(env, tmp_path):
     env.daemon.cycle()
     env.daemon.cycle()
     assert calls == [] and env.notifier.sent == []
+
+
+def test_ref_writers_outside_a_run_skip_a_busy_project(tmp_path):
+    """Release checks and publishing change refs; while a run holds the lock only its
+    worker may (and the tamper check undoes that), so they wait for the next cycle."""
+    from core.run_lock import ProjectLock
+
+    calls = []
+    master = SimpleNamespace(project_state=lambda p: SimpleNamespace(project_path=tmp_path))
+    watch = ms.under_project_lock(master, "release check",
+                                  lambda project_id, *rest: calls.append(project_id) or ["x"])
+
+    with ProjectLock(tmp_path, holder="run"):
+        assert watch("ml") == []
+    assert watch("ml") == ["x"]
+    assert calls == ["ml"]
