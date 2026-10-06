@@ -217,6 +217,15 @@ choice* — made during implementation and recorded here for review.
 | Eviction is suggest-only: "never in a passing attempt" after 5 attempts without a pass; the owner rejects or keeps | Correlation is weak evidence (hard tasks fail with good lessons); memory changes stay the owner's decision, like approval | Approved (decided by the owner) |
 | `ms lessons --reject` also accepts approved ids | Without it, acting on the suggestion meant editing YAML | Implementation choice |
 
+## Planner: what must not happen
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| Every drafted task has 1–3 `must_not` conditions in the owner's terms; a draft without them is a draft problem; at least one test command must check one (an instruction, not machine-checked) | Test quality is the weakest point: a test can fail first for the right reason and later pass for a trivial one; the owner can judge "what must not break" in their own words | Approved |
+| They are stored in the task description as a `Must not:` section, not as a new field | The description is already in the spec hash and in the worker's prompt; old tasks keep their hashes | Approved |
+| Their meaning is not verified automatically | A model cannot reliably judge a test against a condition; the human approval covers it | Approved |
+| `task_records` tolerates a draft task without `must_not` (description unchanged); `draft_problems` is what enforces it | Validation lives in one place; record building stays total | Implementation choice |
+
 ## Project hygiene
 
 | Decision | Rationale | Status |

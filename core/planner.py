@@ -66,6 +66,8 @@ __all__ = ["PlannerChat", "DraftProblem", "draft_hash", "draft_problems", "rende
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,40}$")
 SIZES = ("small", "medium", "hard")
 MAX_TASKS = 12
+MAX_MUST_NOT = 3
+MAX_MUST_NOT_CHARS = 200
 MAX_BACKLOG = 12
 MAX_TEST_CHARS = 20000
 MAX_FILE_CHARS = 40000
@@ -220,6 +222,13 @@ def draft_problems(draft, existing_task_ids, existing_milestone_ids, settings,
                 problems.append(f"{where}: {name} is longer than 4000 characters")
         if task.get("size") not in SIZES:
             problems.append(f"{where}: size must be small, medium or hard")
+        must_not = task.get("must_not")
+        if (not isinstance(must_not, list) or not 1 <= len(must_not) <= MAX_MUST_NOT
+                or not all(isinstance(m, str) and 0 < len(m.strip()) <= MAX_MUST_NOT_CHARS
+                           for m in must_not)):
+            problems.append(f"{where}: must_not needs 1 to {MAX_MUST_NOT} short conditions "
+                            f"(at most {MAX_MUST_NOT_CHARS} characters each) that must not "
+                            "happen, in the owner's terms")
         task_type = task.get("type")
         if (task.get("assets") or task.get("screens")) and task_type != "visual":
             problems.append(f"{where}: only visual tasks have assets or screens")
@@ -268,6 +277,14 @@ def draft_problems(draft, existing_task_ids, existing_milestone_ids, settings,
     return problems
 
 
+def with_must_not(description: str, must_not) -> str:
+    """The description with a "Must not:" section (stored there, so no new spec field)."""
+    if not must_not:
+        return description.strip()
+    return (description.strip() + "\n\nMust not:\n"
+            + "\n".join(f"- {m.strip()}" for m in must_not))
+
+
 def task_records(draft, settings) -> list:
     """The task records an approved draft becomes."""
     records = []
@@ -275,7 +292,7 @@ def task_records(draft, settings) -> list:
         record = {
             "id": task["id"], "milestone": draft["epic"]["id"], "title": task["title"].strip(),
             "status": "planned", "size": task["size"], "type": task["type"],
-            "description": task["description"].strip(),
+            "description": with_must_not(task["description"], task.get("must_not")),
             "acceptance": {
                 "commands": [*settings["setup"], *task["test_commands"],
                              *settings["base_checks"]],
@@ -377,6 +394,8 @@ def render_draft(draft, check=None, width: int = 100) -> str:
         files = task.get("files") or []
         lines += _labelled("Files", ", ".join(files) if files else "(not given)", width)
         lines += _labelled("What it does", task.get("description", ""), width)
+        lines += _labelled("Must not", "; ".join(str(m) for m in task.get("must_not") or [])
+                           or "(none: the planner must add 1 to 3)", width)
         lines += _labelled("How to check by hand", task.get("manual_check", ""), width)
         tests = [f"{t.get('path')} ({len(str(t.get('content', '')).splitlines())} lines)"
                  for t in task.get("tests") or []]
@@ -457,6 +476,11 @@ test must FAIL on the current code and PASS once the task is done. Test observab
 behaviour, not implementation details.{guidance}
 - test_commands: 1-3 commands that run only this task's tests{examples}. The project's \
 setup and base checks are added automatically.
+- must_not: 1-3 short conditions that must NOT happen when the task is done, in the \
+owner's terms (for example "the existing levels still load", "no other tile changes \
+colour"). A test can fail today for the right reason and later pass for a trivial one; \
+these guard against that. At least one of the task's test commands must check at least \
+one of them.
 - manual_check: short numbered steps the owner follows to see the result by hand (on the \
 preview, or by running the program).
 - To look at code, list paths in "read_files" (at most 6 per turn, from the file list); a \
@@ -477,7 +501,7 @@ Answer with ONE JSON object only:
                         "estimate_lines": 80,
                         "size": "small|medium|hard",
                         "depends_on": [], "files": ["files it will change"],
-                        "description": "...", "manual_check": "...",
+                        "description": "...", "must_not": ["..."], "manual_check": "...",
                         "tests": [{{"path": "...", "content": "..."}}],
                         "test_commands": ["..."], "assets": [], "screens": []}}]}}}}
 "draft" is the COMPLETE current draft whenever you change it (it replaces the previous one), \

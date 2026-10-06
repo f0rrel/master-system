@@ -42,6 +42,7 @@ Paths: `$MS_HOME` is the repository; `<clone>` is a managed project's dedicated 
 | A button says "This button has expired." | Buttons work once and expire after 48 hours | Run the command again (`/lessons`, `/pick`, `/limit`) |
 | Telegram notifications stopped, ntfy still works | Telegram send failed or the bot was unpaired; ntfy is the fallback | `ms telegram test` |
 | An attempt is `stalled` in `ms report` | The worker changed nothing: cut off while thinking (`finish_reason: length`) or busy for minutes without writing | Usually nothing; it is not a failure and is retried. After 3 stalls the task waits: split it or describe a smaller first step, then `ms reopen <project> <task>` |
+| `show` says "(incomplete) task …: must_not needs 1 to 3 short conditions" | Every task needs 1–3 "must not" conditions; drafts saved before the upgrade have none | Tell the planner "add must-not conditions to every task" (or name them yourself), then `check` again |
 | `check` shows `[!!] too big` | A task asks for too much at once (estimate, items, files) | Ask the planner to split it as suggested, or `approve anyway` |
 | "N task(s) are too big … approve anyway" on approve | The size check flagged tasks | Split them in the chat, or type `approve anyway` |
 | A task "waits for your decision on a split" | The worker was cut off twice; the planner drafted a split | Telegram buttons, or `ms split <project> <task> approve \| reject` (see the draft with `ms chat`, `show`) |

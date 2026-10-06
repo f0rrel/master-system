@@ -111,7 +111,19 @@ A run that makes no progress marks the project **stalled** until a human acts on
 the project's base branch (read-only, through git) and returns structured JSON: questions,
 files to read, or a draft. A draft is an epic with up to 12 tasks, and/or `backlog`
 epics to add unplanned. Each task has a title, type, size, description, manual-check
-steps, test files and test commands; visual tasks may add `assets` and review `screens`.
+steps, 1–3 `must_not` conditions, test files and test commands; visual tasks may add
+`assets` and review `screens`.
+
+**Must not.** A test can fail today for the right reason and still pass later for a
+trivial one; the fail-first check cannot see that. So every drafted task states 1–3 short
+conditions that must not happen, in the owner's terms ("the existing levels still load",
+"no other tile changes colour"), and the planner is told that at least one test command
+must check at least one of them. A task without them (or with more than 3, or one over
+200 characters) is a draft problem the planner is asked to fix, like any other; `show`
+lists them per task. Their meaning is not checked automatically: the owner's approval
+covers it. `approve` appends them to the description as a `Must not:` section, which
+the worker sees and the spec hash covers; there is no new spec field, so tasks approved
+earlier keep their hashes and run unchanged.
 The planner's context holds the direction, the backlog (numbered by priority), the file
 list, the README and the existing tasks. "Plan epic N" drafts all tasks of backlog epic
 N, whose id the draft reuses; approving it turns the epic from `proposed` into `planned`

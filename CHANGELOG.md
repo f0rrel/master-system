@@ -5,6 +5,14 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Planner: what must not happen
+- Every drafted task states 1–3 short "must not" conditions in the owner's terms, and the
+  planner is told that at least one test command must check one of them. A draft task
+  without them is a draft problem the planner is asked to fix (also in split drafts).
+- `show` lists them per task; `approve` appends them to the task description as a
+  "Must not:" section. No new spec field: tasks approved earlier keep their spec hashes
+  and run unchanged. A draft saved before upgrading needs them before it can be approved.
+
 ### Lessons: no silent drops, and evidence per lesson
 - `ms lessons` lists approved lessons with whether each fits in the worker prompt for its
   type, how many attempts used it and how many of those passed, and marks "never in a
