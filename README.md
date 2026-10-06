@@ -441,4 +441,7 @@ Releases: <https://github.com/f0rrel/Match_Legends_mobile_game/releases>
 - Managed clone: `~/AI/managed/match-legends`. Its push URL is disabled; pushes go through
   the GitHub App.
 - Daily cap: `$0.60`. Worker: OpenCode's free default model only (tiers off).
+- Match Legends: direction in its repository (`docs/DIRECTION.md`), screenshots by
+  `tests/screens/capture.js`, backlog of eight epics. Image generation waits for a
+  Pollinations key in `master.env`.
 - Node.js 22 for workers is installed through nvm; the system Node.js is left untouched.
