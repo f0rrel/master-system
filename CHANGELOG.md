@@ -5,6 +5,16 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Upgrading an existing installation
+- No migration: the history schema stays v4, and events from before the upgrade read as
+  before (no held cancellations, no tampering findings).
+- The publish guard trusts the current `develop` the first time it checks (the first
+  publish or integration after the upgrade) and records it in
+  `refs/ms-system/heads/develop`. To record it yourself right after restarting, run
+  `ms publish <project> --accept-tip` (recorded as a human action).
+- Edit the `main` ruleset to require one approval (docs/GITHUB-SETUP.md, step 6).
+- Control-plane git no longer uses your `~/.gitconfig`: release fetches are anonymous.
+
 ### Project hygiene
 - Continuous integration: `.github/workflows/tests.yml` runs the offline suite on
   Python 3.12 and 3.13 with Node 22 (exposed in nvm's layout, as workers find it);

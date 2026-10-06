@@ -320,3 +320,20 @@ def test_system_writes_keep_publishing_unchanged(site, tmp_path):
         system_commit(site["repo"], text)
         assert publisher("app")[0].startswith("Preview updated")
     assert len(site["pushes"]) == 3 and notifier.sent == []
+
+
+def test_an_installation_upgraded_from_before_the_guard_keeps_publishing(site, tmp_path):
+    """Old code published and integrated without recording a system tip. The first check
+    after the upgrade trusts and records the current tip; nothing is refused."""
+    from core.workspace import system_tip
+
+    publisher, notifier = guarded(site, tmp_path)
+    publisher("app")                                   # stands for the old code's publish
+    repo = site["repo"]
+    git(repo, "update-ref", "-d", "refs/ms-system/heads/develop")   # nothing recorded
+    tip = owner_commit(repo, "integrated by the old code\n")         # no ref recorded
+
+    lines = publisher("app")
+
+    assert lines[0].startswith("Preview updated") and notifier.sent == []
+    assert system_tip(repo, "develop") == tip
