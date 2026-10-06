@@ -5,6 +5,17 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Telegram bot
+- A Telegram bot is the phone interface: status, summary with screenshots, report,
+  backlog, spend (with the DeepSeek balance), the planner chat (messages and .md/.txt
+  files, /show, /check, /approve, /discard), release, pause/resume/stop, image picks,
+  lessons and worker-limit choices with buttons, and a redacted doctor.
+- Pairing with a one-time code (`ms telegram pair`); everyone else is ignored. Approve,
+  release and limit choices ask for confirmation. Actions are recorded with
+  `actor: telegram`. No payment actions.
+- Notifications go to Telegram (summary photos, limit buttons), with ntfy as fallback.
+- Setup guide: `docs/TELEGRAM-SETUP.md`.
+
 ### Worker limits
 - Provider limits (HTTP 429, quota, model gone or no longer free, missing credential)
   end an attempt as `limited`: not verified, never counted against budgets, no cost.

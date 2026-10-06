@@ -45,6 +45,9 @@ code:
   against the task and the direction; it can block a task, never pass one.
 - **Generated images**: visual tasks can request images in the project's fixed style; the
   owner picks among candidates (`ms pick`).
+- **Telegram bot**: the phone interface (status, planner chat, approvals with
+  confirmation buttons, image picks, lessons, worker-limit choices, notifications with
+  screenshots), paired to one owner; ntfy remains an optional fallback.
 - **Worker limits handled calmly**: provider rate limits and disappearing free models
   never count as task failures; short limits are waited out automatically, longer ones
   pause the project and ask the owner (`ms limit`); a weekly check confirms free worker
@@ -252,6 +255,22 @@ The loop is the same for any software project. For a web app or game, the review
 the deployed preview; for a CLI tool or library, it is the diff on `develop` and the run
 report (`ms report`).
 
+## Phone workflow (Telegram)
+
+After [setting up the bot](docs/TELEGRAM-SETUP.md) (`ms telegram pair`), the whole
+loop works from a phone:
+
+| When | In Telegram |
+| --- | --- |
+| Evening | Send the request as a message or a `.md` file; answer the planner; `/show`, `/check`, `/approve` (confirm) |
+| Night | Nothing. Only a worker limit that needs a decision arrives, with **Wait / Free / Paid** buttons |
+| Morning | The summary arrives with the preview link and the reviewer's screenshots; `/pick` images, `/lessons` |
+| Any time | `/status`, `/spend`, `/backlog`, `/pause`, `/resume` |
+| Release | `/release` (confirm) sends the pull request link; merge it on GitHub |
+
+The bot answers only the paired owner and only offers fixed actions: nothing typed is
+ever run as a command.
+
 ## Command reference
 
 | Command | Description |
@@ -264,6 +283,7 @@ report (`ms report`).
 | `ms backlog <project> [add "<title>" [--summary …] [--priority N] \| priority <epic> <N>]` | List the backlog in priority order; add a proposed epic; change an epic's priority (lower runs first). |
 | `ms lessons <project> [--approve all\|IDS] [--reject IDS\|rest]` | Review lessons workers proposed; only approved lessons are used. |
 | `ms pick <project> <task> <asset> <n>` | Choose one of a task's generated image candidates; it is committed and the task can run. |
+| `ms telegram pair\|status\|test\|unpair` | Pair the Telegram bot with your account (one-time code), check it, send a test message, or forget the owner. |
 | `ms limit <project> [wait\|free\|paid]` | Show or answer a worker limit: wait for the reset, switch to the next free worker profile, or use the paid one (counts toward the daily cap). |
 | `ms publish <project>` | Push `develop` and the preview site now (the service also does this after every run). |
 | `ms pause` / `ms resume` | Start no new work (a running task finishes) / allow new work. |
@@ -280,7 +300,8 @@ resume, integrate, task edits) are available through `python -m core.run_cli --h
 
 ### Notifications
 
-By default the service sends one **Morning summary** when its work runs out (the
+Notifications go to Telegram when a bot is set up and paired, otherwise (or if a
+Telegram send fails) to ntfy. By default the service sends one **Morning summary** when its work runs out (the
 backlog is done or waits for you, or the daily cap is reached). With
 `[daemon] batch_notifications = true` it also notifies after every run and item:
 
@@ -392,7 +413,7 @@ the configuration, restart the service once `ms status` reports Idle:
 
 | File | Content |
 | --- | --- |
-| `~/.config/master-system/master.env` (mode 600) | `DEEPSEEK_API_KEY=…` for the Master, planner and reviewer; `POLLINATIONS_API_KEY=…` and/or `CLOUDFLARE_ACCOUNT_ID=…`, `CLOUDFLARE_API_TOKEN=…` for images |
+| `~/.config/master-system/master.env` (mode 600) | `DEEPSEEK_API_KEY=…` for the Master, planner and reviewer; `TELEGRAM_BOT_TOKEN=…` for the bot; `POLLINATIONS_API_KEY=…` and/or `CLOUDFLARE_ACCOUNT_ID=…`, `CLOUDFLARE_API_TOKEN=…` for images |
 | `~/.config/master-system/github-app.pem` (mode 600) | The GitHub App private key |
 | `~/.config/master-system/ntfy-topic` (mode 600) | The private notification topic |
 | The worker home | The worker's own, ideally spend-limited, model credential |
@@ -414,6 +435,7 @@ Per-project options (`repository`, `base_branch`, `auto_integrate`, `github`, `p
 | Bounded execution | `timeout --kill-after` in a separate process group; one run per project (`flock`) |
 | Intent before side effects | Decisions and attempt starts are recorded before they act; interrupted attempts are never replayed |
 | The release branch is human-only | The GitHub App has no Administration permission; a ruleset on `main` requires a pull request and allows no bypass |
+| One phone owner, fixed actions | The Telegram bot answers only the user paired with a one-time code, offers fixed operations behind single-use buttons, asks to confirm approvals, releases and limit choices, and has no payment actions |
 | Least-privilege publishing | One-hour installation tokens, passed only to the `git push` that needs them |
 | Work stays within its type | A task's type freezes `allowed_paths` into its acceptance (the verifier fails changes elsewhere) and limits the worker's tools through a per-attempt OpenCode config |
 | The direction is not the worker's to change | The direction document is a protected path of every planned task |

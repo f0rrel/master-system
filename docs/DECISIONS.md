@@ -139,3 +139,15 @@ choice* — made during implementation and recorded here for review.
 | Second free worker: OpenCode `space-bunny-free` (zero data retention per OpenCode Zen; verified on a real edit). `longcat-2.5-preview-free` also qualifies | Zero retention was requested; both passed a test edit | Approved |
 | Paid worker: DeepSeek `deepseek/deepseek-flash` through OpenCode in its own worker home with a spend-limited key; the Master's key is not reused | Workers hold no control-plane secrets | Approved |
 | A weekly check lists the providers' models and notifies when a free profile's model is gone, inactive or no longer free | Free models change without notice | Approved |
+
+## Telegram
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| Telegram is the main phone interface; ntfy stays as a notification fallback | Two-way control (buttons, chat, files) from the phone | Approved |
+| Long polling from a thread in the service, stdlib HTTP, no webhook and no open port | No inbound exposure, no new dependency | Approved |
+| One owner, paired with a single-use 15-minute code; other users get no answer | No information leaks to strangers | Approved |
+| Only fixed operations; buttons carry random ids of actions the bot stored itself, single use, 48-hour expiry | Nothing typed or forged can name a command | Implementation choice |
+| Approve, release and worker-limit choices need a confirmation button; there are no payment actions at all | Consequential actions need a deliberate second tap; money stays manual | Approved |
+| Bot actions reuse the `ms` commands with `--actor telegram`; others are recorded directly; system-wide actions use project `_service` | Same behaviour and audit trail as the terminal | Implementation choice |
+| `/spend` shows DeepSeek's balance from its read-only `GET /user/balance` | Information only | Approved |

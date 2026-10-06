@@ -35,6 +35,11 @@ Paths: `$MS_HOME` is the repository; `<clone>` is a managed project's dedicated 
 | "the project waits until 14:02 (automatic)" | A short limit; the same worker continues after the reset | Nothing |
 | Attempts show outcome `limited` in `ms report` | The provider refused; the attempt was not verified and does not count | Nothing |
 | Notification "Worker models need you" | The weekly check found a free model gone or no longer free | Edit `[worker] workers` and the profiles in `config.toml` |
+| The bot does not answer | Not paired, the service is not running, or the token is missing | `ms telegram status`; `journalctl --user -u master-system.service -n 20` should show `telegram on`; see [TELEGRAM-SETUP.md](TELEGRAM-SETUP.md) |
+| `/pair` is ignored | The code expired (15 minutes) or was already used | `ms telegram pair` again and send the new code |
+| Log: `telegram: getUpdates: HTTP 409 Conflict` | Another program polls the same bot (two services, or a webhook) | Stop the other poller; `curl …/deleteWebhook` if a webhook was set elsewhere |
+| A button says "This button has expired." | Buttons work once and expire after 48 hours | Run the command again (`/lessons`, `/pick`, `/limit`) |
+| Telegram notifications stopped, ntfy still works | Telegram send failed or the bot was unpaired; ntfy is the fallback | `ms telegram test` |
 | `ms lessons` shows nothing | No verified attempt has proposed lessons yet | Nothing to do |
 | `check` fails during a `setup` command | Dependency installation or network failure | Run the setup command manually in `<clone>`; check connectivity |
 | The preview did not update after "batch done" | GitHub Pages builds take 1–2 minutes, or publishing failed | Wait and reload; `ms publish <project>` shows any error; `ms github check` |

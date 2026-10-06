@@ -216,6 +216,29 @@ automatic wait is pending. `record_success` clears the limit when the worker wor
 --refresh` in each free profile's home every `model_check_days` and notifies the owner
 when a model is no longer offered, no longer active, or no longer free.
 
+## Telegram (`core/telegram.py`, `core/telegram_bot.py`)
+
+`ms daemon` starts a thread that long-polls `getUpdates` (30 s) when
+`TELEGRAM_BOT_TOKEN` is set; there is no webhook and no listening socket. The client is
+stdlib `urllib`; every error has the token replaced by `<token>`.
+
+- **State** (`<state dir>/telegram.json`, 600): the paired user and chat, the pairing
+  code's hash and expiry (15 minutes, single use), the update offset, the active
+  project, and pending button actions (random ids, 48 hours, single use).
+- **Security:** updates from anyone but the paired user are dropped without an answer;
+  the only unpaired input handled is `/pair <code>`. Callback data is `a:<id>`, mapping
+  to an action the bot stored itself, so a forged button cannot name an operation.
+- **Operations** (`BotOps`): fixed methods. Most call the `ms` commands in-process with
+  `--actor telegram`, so behaviour and history records match the terminal; the others
+  record a `human_action` with `actor: telegram` themselves (system-wide actions under
+  project `_service`). Planner messages and `.md`/`.txt` files go to `PlannerChat.turn`.
+  Approve, release and limit choices go through a confirmation button.
+- **Replies:** HTML, split at 4096 characters on paragraph boundaries; long reports and
+  drafts are sent as documents.
+- **Notifications:** `build_notifier` returns a `FallbackNotifier` (Telegram first, ntfy
+  second). Notifications may carry button actions (worker limits) and photos (the morning
+  summary's screenshots); ntfy ignores both.
+
 ## Integration, publishing and releases
 
 **Integration into `develop`** happens right after an attempt passes, under the run's lock:
