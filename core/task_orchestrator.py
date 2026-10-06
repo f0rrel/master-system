@@ -144,6 +144,30 @@ class TaskOrchestrator:
     def worktrees(self) -> GitWorktrees:
         return self._worktrees
 
+    def _briefing(self, project_id, task):
+        """What the worker is told besides the spec, and the type's tool limits.
+
+        Returns ``(briefing, facts for attempt_started, OpenCode config or None)``.
+        Everything comes from the project's files and the owner's approvals.
+        """
+        from core.direction import read_direction
+        from core.lessons import LessonStore
+        from core.task_types import opencode_config, skill_text, type_settings
+
+        project = self._master.project_state(project_id).project()
+        direction = read_direction(project)
+        briefing = {"direction": direction.text if direction else None}
+        task_type = task.get("type")
+        if not task_type:
+            return briefing, {}, None
+        settings = type_settings(project, task_type)
+        lessons = LessonStore(self._master.project_state(project_id).project_path)
+        briefing.update(type=task_type, skill=skill_text(project, settings),
+                        lessons=lessons.for_prompt(task_type))
+        facts = {"task_type": task_type, "allowed_tools": settings["tools"],
+                 "lessons_used": len(briefing["lessons"])}
+        return briefing, facts, opencode_config(settings["tools"])
+
     def prepare(self, project_id: str, task_id: str):
         """Check that task_id may be executed now, with its project's repository.
 
@@ -199,6 +223,8 @@ class TaskOrchestrator:
 
         prepared = self.prepare(project_id, task_id)
         task, context = prepared["task"], prepared["context"]
+        briefing, type_facts, tools_config = self._briefing(project_id, task)
+        context = {**context, "briefing": briefing}
         base_sha = prepared["base_sha"]
 
         attempt_id = new_event_id()
@@ -224,6 +250,9 @@ class TaskOrchestrator:
             worker = describe_worker(backend)
         else:
             worker = describe_worker(self._execution_backend)
+        if tools_config is not None:
+            # The task type's allowed tools, enforced by the worker's own config.
+            worker_env = {**worker_env, "OPENCODE_CONFIG_CONTENT": tools_config}
         deadline, deadline_at = _deadline(self._attempt_timeout_s)
         ids = {
             "run_id": run_id,
@@ -266,6 +295,7 @@ class TaskOrchestrator:
                     "timeout_s": self._attempt_timeout_s,
                     "deadline_at": deadline_at,
                     **tier_facts,
+                    **type_facts,
                 },
                 **ids,
             )

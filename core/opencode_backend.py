@@ -63,15 +63,30 @@ def parse_events(stdout: str):
     return summary, usage, counts
 
 
-def build_prompt(task: Mapping) -> str:
-    """The instruction given to the worker: the task's human-written spec."""
+def build_prompt(task: Mapping, briefing: Optional[Mapping] = None) -> str:
+    """The instruction given to the worker: the task's human-written spec.
+
+    ``briefing`` (from the orchestrator, never from a worker) adds the task type,
+    its skill doc, the project's direction and the owner-approved lessons.
+    """
+    briefing = briefing or {}
     task_id = task.get("id")
     parts = []
     if task_id:
         parts.append(f"Task ID: {task_id}")
     parts.append(f"Title: {task.get('title') or task_id or 'task'}")
+    if briefing.get("type"):
+        parts.append(f"Task type: {briefing['type']}")
     if task.get("description"):
         parts.append(f"Description:\n{task['description']}")
+    if briefing.get("skill"):
+        parts.append(f"How to do {briefing.get('type', 'this')} work here:\n{briefing['skill']}")
+    if briefing.get("direction"):
+        parts.append("Project direction (judge your work against it):\n"
+                     + briefing["direction"])
+    if briefing.get("lessons"):
+        parts.append("Lessons from earlier tasks, approved by the owner:\n"
+                     + "\n".join(f"- {lesson}" for lesson in briefing["lessons"]))
     acceptance = task.get("acceptance") if isinstance(task.get("acceptance"), Mapping) else None
     if acceptance:
         commands = "\n".join(f"  - {c}" for c in acceptance.get("commands") or [])
@@ -82,9 +97,18 @@ def build_prompt(task: Mapping) -> str:
             parts.append("Do not create, modify, rename or delete any path matching these "
                          "patterns; any change to them fails the task:\n"
                          + "\n".join(f"  - {g}" for g in protected))
+    if acceptance and acceptance.get("allowed_paths"):
+        parts.append("Change only paths matching these patterns; a change anywhere else "
+                     "fails the task:\n"
+                     + "\n".join(f"  - {g}" for g in acceptance["allowed_paths"]))
     parts.append("Work only inside the current directory. Do not push, do not switch "
                  "branches, and do not modify project-management files. When you are done, "
                  "reply with a concise summary of what you changed.")
+    if briefing.get("type"):
+        parts.append(f"If you learned something that future {briefing['type']} tasks in this "
+                     "project should know (a convention, a pitfall, where things live), add "
+                     "at most 3 lines at the very end of your reply, each starting with "
+                     "'LESSON: '. The owner reviews them before anyone uses them.")
     return "\n\n".join(parts)
 
 
@@ -123,7 +147,8 @@ class OpenCodeCliBackend(ExecutionBackend):
             raise OpenCodeBackendError("task must be a mapping")
 
         project_id = context.get("project_id") if isinstance(context, Mapping) else None
-        prompt = build_prompt(task)
+        briefing = context.get("briefing") if isinstance(context, Mapping) else None
+        prompt = build_prompt(task, briefing)
         cmd = self.command(workspace.path, prompt)
 
         try:

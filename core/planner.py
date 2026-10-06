@@ -44,6 +44,7 @@ A Python project would use, for example, ``test_suffixes: [".py"]``,
 from __future__ import annotations
 
 import hashlib
+from fnmatch import fnmatchcase
 import json
 import re
 import time
@@ -55,6 +56,7 @@ from typing import Callable, Optional
 
 from core.direction import direction_settings, read_direction
 from core.history import EventType
+from core.task_types import TYPES, frozen_allowed_paths, type_settings
 
 __all__ = ["PlannerChat", "DraftProblem", "draft_hash", "draft_problems", "render_draft",
            "planner_settings"]
@@ -92,6 +94,14 @@ SCHEMA = {
 }
 
 
+TYPE_HINTS = {
+    "developer": "features that span structure, behaviour and presentation",
+    "visual": "what the user sees: layout, styling, graphics, animation",
+    "logic": "rules, state, data and algorithms, no presentation changes",
+    "docs": "documentation only",
+}
+
+
 class DraftProblem(ValueError):
     pass
 
@@ -111,6 +121,7 @@ def planner_settings(project: dict) -> dict:
         "base_checks": list(planner.get("base_checks") or []),
         "protected_paths": list(planner.get("protected_paths") or ["tests/*"]),
         "direction_path": direction_settings(project)["path"],
+        "types": {t: type_settings(project, t) for t in TYPES},
     }
 
 
@@ -196,6 +207,15 @@ def draft_problems(draft, existing_task_ids, existing_milestone_ids, settings,
                 problems.append(f"{where}: {name} is longer than 4000 characters")
         if task.get("size") not in SIZES:
             problems.append(f"{where}: size must be small, medium or hard")
+        task_type = task.get("type")
+        if task_type not in TYPES:
+            problems.append(f"{where}: type must be one of {', '.join(TYPES)}")
+        else:
+            allowed = settings["types"][task_type]["allowed_paths"]
+            for path in task.get("files") or []:
+                if not any(fnmatchcase(str(path), glob) for glob in allowed):
+                    problems.append(f"{where}: {path} is outside what a {task_type} task may "
+                                    f"change ({', '.join(allowed)})")
         for dep in task.get("depends_on") or []:
             if dep not in known or dep == tid:
                 problems.append(f"{where}: unknown dependency {dep}")
@@ -234,7 +254,7 @@ def task_records(draft, settings) -> list:
     for task in draft["tasks"]:
         record = {
             "id": task["id"], "milestone": draft["epic"]["id"], "title": task["title"].strip(),
-            "status": "planned", "size": task["size"],
+            "status": "planned", "size": task["size"], "type": task["type"],
             "description": task["description"].strip(),
             "acceptance": {
                 "commands": [*settings["setup"], *task["test_commands"],
@@ -243,6 +263,9 @@ def task_records(draft, settings) -> list:
             },
             "manual_check": task["manual_check"].strip(),
         }
+        allowed = frozen_allowed_paths(settings["types"][task["type"]])
+        if allowed:
+            record["acceptance"]["allowed_paths"] = allowed
         if task.get("depends_on"):
             record["depends_on"] = list(task["depends_on"])
         records.append(record)
@@ -347,6 +370,9 @@ draft.epic.id set to that epic's id and its title; read the relevant code first.
 - Prefer independent tasks; use depends_on only when one task truly needs another.
 - Task ids: continue the project's numbering; the next free ids are {next_ids}. The epic id \
 is a short slug like "epic-search".
+- type: what kind of work the task is: {types}. Each type may change only its allowed \
+paths; an attempt that changes anything else fails. Pick the type whose paths cover the \
+task's "files"; split work that needs two types into two tasks.
 - size: "small" (one function or one screen element), "medium" (several parts), "hard" \
 (new mechanics, tricky logic). Be honest; it picks the coding model.
 - description: what to build and where in the code, written for the coding agent. End it \
@@ -371,7 +397,8 @@ Answer with ONE JSON object only:
   "draft": null or {{"backlog": [{{"id": "epic-...", "title": "...", "summary": "...",
                          "priority": 1}}],
             "epic": {{"id": "...", "title": "...", "description": "..."}},
-            "tasks": [{{"id": "...", "title": "...", "size": "small|medium|hard",
+            "tasks": [{{"id": "...", "title": "...", "type": "developer|visual|logic|docs",
+                        "size": "small|medium|hard",
                         "depends_on": [], "files": ["files it will change"],
                         "description": "...", "manual_check": "...",
                         "tests": [{{"path": "...", "content": "..."}}],
@@ -393,9 +420,12 @@ def system_prompt(name, next_ids, settings) -> str:
     examples = (", e.g. " + " or ".join(f'"{e}"' for e in examples)
                 if examples else ", using the project's existing test runner")
     guidance = f"\n  {settings['test_guidance']}" if settings.get("test_guidance") else ""
+    types = "; ".join(
+        f"{t} ({TYPE_HINTS[t]}; paths: {', '.join(s['allowed_paths'])})"
+        for t, s in (settings.get("types") or {}).items())
     return SYSTEM.format(name=name, next_ids=", ".join(next_ids),
                          test_dir=settings["test_dir"], suffix_rule=suffix_rule,
-                         examples=examples, guidance=guidance)
+                         examples=examples, guidance=guidance, types=types or "developer")
 
 
 @dataclass

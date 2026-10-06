@@ -10,6 +10,8 @@ comes from the worker.
 * The diff ``base_sha..result_sha`` touches a protected path -> ``fail``. A
   worker cannot make the checks pass by editing the checks. Renames count as
   both paths; deletions count.
+* With ``allowed_paths`` (frozen from the task's type), the diff changing any path
+  that matches none of them -> ``fail``: an attempt stays within its type.
 * Every acceptance command runs (``/bin/sh -c``) in the worktree, bounded by a
   per-command timeout and the verification deadline. ``pass`` only if no
   protected path was touched and every command exited 0.
@@ -75,6 +77,12 @@ class AcceptanceVerifier:
             path for path in changed if any(fnmatchcase(path, glob) for glob in protected)
         )
         findings = [{"kind": "protected_path", "path": path} for path in violations]
+        allowed = acceptance.get("allowed_paths")
+        outside = sorted(
+            path for path in changed
+            if allowed and not any(fnmatchcase(path, glob) for glob in allowed)
+        )
+        findings += [{"kind": "outside_allowed_paths", "path": path} for path in outside]
 
         commands_run = []
         for command in acceptance.get("commands") or []:
@@ -96,6 +104,9 @@ class AcceptanceVerifier:
             parts = []
             if violations:
                 parts.append(f"{len(violations)} protected path(s) changed")
+            if outside:
+                parts.append(f"{len(outside)} path(s) outside the task type's allowed paths "
+                             "changed")
             if failed_commands:
                 parts.append(f"{failed_commands} of {len(commands_run)} command(s) failed")
             verdict, summary = "fail", "; ".join(parts)
@@ -111,5 +122,6 @@ class AcceptanceVerifier:
                 "result_sha": result,
                 "commands_run": commands_run,
                 "protected_violations": violations,
+                "outside_allowed_paths": outside,
             },
         )

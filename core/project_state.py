@@ -25,7 +25,10 @@ VALID_MILESTONE_STATUSES = {
 }
 
 
-ACCEPTANCE_KEYS = frozenset({"commands", "protected_paths"})
+#: Task types (core.task_types.TYPES).
+TASK_TYPES = ("developer", "visual", "logic", "docs")
+
+ACCEPTANCE_KEYS = frozenset({"commands", "protected_paths", "allowed_paths"})
 #: A human-written task description is bounded so it stays a spec, not a dump.
 MAX_DESCRIPTION_CHARS = 4000
 
@@ -43,8 +46,9 @@ def acceptance_problems(acceptance):
     """Why a task's ``acceptance`` is malformed, as a list of messages.
 
     ``acceptance`` is the human-written definition of done:
-    ``{commands: [str, ...], protected_paths: [glob, ...]}``. ``commands`` is
-    required and non-empty; ``protected_paths`` is optional. Globs are
+    ``{commands: [str, ...], protected_paths: [glob, ...], allowed_paths: [glob, ...]}``.
+    ``commands`` is required and non-empty; ``protected_paths`` is optional;
+    ``allowed_paths`` (optional) limits which paths an attempt may change. Globs are
     repository-relative: no absolute paths and no ``..``.
     """
     if not isinstance(acceptance, dict):
@@ -60,18 +64,21 @@ def acceptance_problems(acceptance):
         or not all(isinstance(c, str) and c.strip() for c in commands)
     ):
         problems.append("acceptance.commands must be a non-empty list of non-empty strings")
-    protected = acceptance.get("protected_paths", [])
-    if not isinstance(protected, list) or not all(
-        isinstance(g, str) and g.strip() for g in protected
-    ):
-        problems.append("acceptance.protected_paths must be a list of non-empty strings")
-    else:
-        for glob in protected:
+    for key in ("protected_paths", "allowed_paths"):
+        globs = acceptance.get(key, [])
+        if not isinstance(globs, list) or not all(
+            isinstance(g, str) and g.strip() for g in globs
+        ):
+            problems.append(f"acceptance.{key} must be a list of non-empty strings")
+            continue
+        for glob in globs:
             if glob.startswith("/") or ".." in Path(glob).parts:
                 problems.append(
-                    f"acceptance.protected_paths entry {glob!r} must be relative "
+                    f"acceptance.{key} entry {glob!r} must be relative "
                     "and must not contain '..'"
                 )
+    if "allowed_paths" in acceptance and not acceptance["allowed_paths"]:
+        problems.append("acceptance.allowed_paths, when given, must not be empty")
     return problems
 
 
@@ -357,6 +364,13 @@ class ProjectState:
                     f"task {task_id} has unknown status "
                     f"'{status}'; valid statuses: "
                     f"{sorted(VALID_TASK_STATUSES)}"
+                )
+
+            task_type = task.get("type")
+            if task_type is not None and task_type not in TASK_TYPES:
+                problems.append(
+                    f"task {task_id} has unknown type '{task_type}'; valid types: "
+                    f"{list(TASK_TYPES)}"
                 )
 
             milestone_id = task.get("milestone")
