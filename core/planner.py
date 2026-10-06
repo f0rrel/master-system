@@ -61,7 +61,8 @@ __all__ = ["PlannerChat", "DraftProblem", "draft_hash", "draft_problems", "rende
 
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,40}$")
 SIZES = ("small", "medium", "hard")
-MAX_TASKS = 8
+MAX_TASKS = 12
+MAX_BACKLOG = 12
 MAX_TEST_CHARS = 20000
 MAX_FILE_CHARS = 20000
 MAX_ROUNDS = 4  # model calls per owner message: reads, at most one re-ask, the answer
@@ -117,15 +118,53 @@ def draft_hash(draft) -> str:
     return hashlib.sha256(json.dumps(draft, sort_keys=True).encode()).hexdigest()
 
 
-def draft_problems(draft, existing_task_ids, existing_milestone_ids, settings) -> list:
-    """Why a draft cannot be checked or approved (empty list: it can)."""
+def backlog_problems(entries, existing_milestone_ids) -> list:
+    """Why draft.backlog (epics to add to the backlog, unplanned) cannot be approved."""
+    if entries in (None, []):
+        return []
+    if not isinstance(entries, list):
+        return ["backlog must be a list of epics"]
     problems = []
+    if len(entries) > MAX_BACKLOG:
+        problems.append(f"at most {MAX_BACKLOG} backlog epics per draft")
+    seen = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            problems.append("a backlog epic is not an object")
+            continue
+        eid = str(entry.get("id", ""))
+        if not ID_PATTERN.match(eid):
+            problems.append(f"backlog epic {eid or '?'}: invalid id")
+        elif eid in existing_milestone_ids or eid in seen:
+            problems.append(f"backlog epic {eid}: the id is already used")
+        seen.add(eid)
+        if not str(entry.get("title", "")).strip():
+            problems.append(f"backlog epic {eid or '?'}: missing title")
+        if len(str(entry.get("summary") or "")) > 1000:
+            problems.append(f"backlog epic {eid}: summary is longer than 1000 characters")
+        priority = entry.get("priority")
+        if priority is not None and (not isinstance(priority, int) or isinstance(priority, bool)
+                                     or priority < 0):
+            problems.append(f"backlog epic {eid}: priority must be a non-negative integer")
+    return problems
+
+
+def draft_problems(draft, existing_task_ids, existing_milestone_ids, settings,
+                   plannable_epics=()) -> list:
+    """Why a draft cannot be checked or approved (empty list: it can).
+
+    ``plannable_epics``: ids of proposed backlog epics without tasks; a draft may
+    plan one of them (its ``epic.id`` is the backlog epic's id).
+    """
     if not isinstance(draft, dict):
         return ["the draft is not an object"]
+    problems = backlog_problems(draft.get("backlog"), existing_milestone_ids)
+    if not draft.get("epic") and not draft.get("tasks"):
+        return problems if draft.get("backlog") else ["the draft has no tasks"]
     epic = draft.get("epic") if isinstance(draft.get("epic"), dict) else {}
     if not ID_PATTERN.match(str(epic.get("id", ""))):
         problems.append("the epic needs an id of lowercase letters, digits and dashes")
-    elif epic["id"] in existing_milestone_ids:
+    elif epic["id"] in existing_milestone_ids and epic["id"] not in plannable_epics:
         problems.append(f"the epic id {epic['id']} is already used")
     if not str(epic.get("title", "")).strip():
         problems.append("the epic needs a title")
@@ -210,6 +249,13 @@ def task_records(draft, settings) -> list:
     return records
 
 
+def plannable_epics(status) -> set:
+    """Proposed backlog epics that have no tasks yet."""
+    with_tasks = {t.get("milestone") for t in status.get("tasks") or []}
+    return {m.get("id") for m in status.get("milestones") or []
+            if m.get("status") == "proposed" and m.get("id") not in with_tasks}
+
+
 def _protected(settings) -> list:
     """The project's protected paths plus its direction document."""
     paths = list(settings["protected_paths"])
@@ -243,7 +289,17 @@ def render_draft(draft, check=None, width: int = 100) -> str:
     if not draft:
         return "  No draft yet."
     epic = draft.get("epic") or {}
-    lines = [f"EPIC {epic.get('id')}: {epic.get('title')}"]
+    lines = []
+    if draft.get("backlog"):
+        lines.append("BACKLOG EPICS TO ADD (not planned yet):")
+        for entry in draft["backlog"]:
+            priority = entry.get("priority")
+            lines.append(f"  - {entry.get('id')}: {entry.get('title')}"
+                         + (f" (priority {priority})" if priority is not None else ""))
+            if entry.get("summary"):
+                lines += _wrap(entry["summary"], width, "      ")
+    if epic or draft.get("tasks"):
+        lines.append(f"EPIC {epic.get('id')}: {epic.get('title')}")
     if epic.get("description"):
         lines += _wrap(epic["description"], width, "  ")
     for task in draft.get("tasks") or []:
@@ -283,6 +339,11 @@ conflict in "reply" and ask in "questions". Drafts must fit its look, feel and a
 - When something is unclear or is the owner's decision (look and feel, external assets \
 and where they come from, scope, priorities), ask in "questions" instead of guessing. Keep questions few \
 and concrete; offer options.
+- BACKLOG lists the project's epics in priority order, numbered from 1. To add epics to \
+the backlog without planning them, put them in draft.backlog (id "epic-<slug>", title, \
+summary, optional priority) and leave draft.epic null and draft.tasks empty. When the owner \
+asks to plan a backlog epic ("plan epic 1"), draft ALL of its tasks in one draft, with \
+draft.epic.id set to that epic's id and its title; read the relevant code first.
 - Prefer independent tasks; use depends_on only when one task truly needs another.
 - Task ids: continue the project's numbering; the next free ids are {next_ids}. The epic id \
 is a short slug like "epic-search".
@@ -307,7 +368,9 @@ Answer with ONE JSON object only:
 {{"reply": "what you say to the owner (short, plain words)",
   "questions": ["..."],
   "read_files": ["path", ...],
-  "draft": null or {{"epic": {{"id": "...", "title": "...", "description": "..."}},
+  "draft": null or {{"backlog": [{{"id": "epic-...", "title": "...", "summary": "...",
+                         "priority": 1}}],
+            "epic": {{"id": "...", "title": "...", "description": "..."}},
             "tasks": [{{"id": "...", "title": "...", "size": "small|medium|hard",
                         "depends_on": [], "files": ["files it will change"],
                         "description": "...", "manual_check": "...",
@@ -438,7 +501,15 @@ class PlannerChat:
         tasks = "\n".join(f"- {t['id']} [{t.get('status')}] {t.get('title')}"
                           for t in self._tasks())
         direction = read_direction(self._project(), self._git)
+        from core.backlog import backlog_rows
+
+        rows = backlog_rows(self._master.status(self.project_id))
+        backlog = "\n".join(
+            f"{r['number']}. {r['id']} [{r['status']}] {r['name']}"
+            + (f": {' '.join(str(r['summary']).split())}" if r.get("summary") else "")
+            for r in rows if not (r["tasks"] and r["done"] == r["tasks"]))
         return ((direction.block() + "\n\n" if direction else "")
+                + f"BACKLOG:\n{backlog or '(empty)'}\n\n"
                 + f"PROJECT FILES ({branch}):\n" + "\n".join(files)
                 + f"\n\nREADME.md:\n{readme}\n\nEXISTING TASKS:\n{tasks or '(none)'}")
 
@@ -530,13 +601,17 @@ class PlannerChat:
         status = self._master.status(self.project_id)
         return draft_problems(self.state.draft, {t["id"] for t in status["tasks"]},
                               {m["id"] for m in status["milestones"]},
-                              planner_settings(self._project()))
+                              planner_settings(self._project()),
+                              plannable_epics=plannable_epics(status))
 
     def check(self) -> dict:
         problems = self.problems()
         if problems:
             raise DraftProblem("the draft is incomplete:\n  - " + "\n  - ".join(problems))
-        result = self._checker(self.project_id, self.state.draft)
+        if not self.state.draft.get("tasks"):
+            result = {"ok": True, "items": []}  # backlog epics only: nothing to run
+        else:
+            result = self._checker(self.project_id, self.state.draft)
         result["draft_hash"] = draft_hash(self.state.draft)
         self.state.check = result
         self.save()
@@ -546,16 +621,19 @@ class PlannerChat:
         problems = self.problems()
         if problems:
             raise DraftProblem("the draft is incomplete:\n  - " + "\n  - ".join(problems))
+        has_tasks = bool(self.state.draft.get("tasks"))
         check = self.state.check
-        if not check or not check.get("ok") or check.get("draft_hash") != draft_hash(self.state.draft):
+        if has_tasks and (not check or not check.get("ok")
+                          or check.get("draft_hash") != draft_hash(self.state.draft)):
             raise DraftProblem("run `check` first: the current draft has not passed its checks")
         settings = planner_settings(self._project())
-        records = task_records(self.state.draft, settings)
+        records = task_records(self.state.draft, settings) if has_tasks else []
         self._approver(self.project_id, self.state.draft, records,
-                       chat_id=self.state.chat_id, draft_hash=check["draft_hash"])
+                       chat_id=self.state.chat_id, draft_hash=draft_hash(self.state.draft))
         self.state.status = "approved"
         self.save()
-        return [r["id"] for r in records]
+        return [r["id"] for r in records] + [e["id"] for e in self.state.draft.get("backlog")
+                                             or []]
 
     def discard(self) -> None:
         self.state.status = "discarded"

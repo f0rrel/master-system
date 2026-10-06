@@ -858,6 +858,7 @@ def test_the_engine_imports_only_the_interface_and_stdlib():
         "sys",
         "dataclasses",
         "pathlib",
+        "core.backlog",
         "core.master",
         "core.provider",
         "core.reasoning",

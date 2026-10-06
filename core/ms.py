@@ -6,6 +6,7 @@
     ms report [session]        a session's report (default: the latest)
     ms chat <project> [--new]  talk to the planner: it drafts tasks with tests; `approve` queues them
     ms release <project>       release notes + a pull request develop -> main for you to merge
+    ms backlog <project>       epics in priority order; `add "Title"`, `priority <epic> <N>`
     ms pause | resume          stop or allow new work (a running task finishes)
     ms stop                    stop the current run now, and pause
     ms daemon                  the background service loop (run by systemd)
@@ -27,6 +28,7 @@ import argparse
 import os
 import signal
 import sys
+import uuid
 from pathlib import Path
 
 from core.notify import Notifier, default_topic_path, new_topic
@@ -976,6 +978,64 @@ def build_releaser(config):
                     prices=config.prices, publisher=publisher)
 
 
+def slug(title: str, prefix: str = "epic-") -> str:
+    """A milestone id from a title: lowercase words joined by dashes."""
+    import re
+
+    words = re.findall(r"[a-z0-9]+", title.lower())
+    text = prefix + "-".join(words)
+    return text[:40].rstrip("-") or prefix.rstrip("-")
+
+
+def _command_backlog(args, out):
+    from core.backlog import backlog_rows, render_backlog
+    from core.history import EventType
+    from core.master import EXPECTED_ERRORS, Master
+    from core.run_lock import ProjectBusyError, ProjectLock
+    from core.sqlite_history import SQLiteHistoryStore
+
+    config = _config(args)
+    master = Master(config.run.projects_root)
+    if args.action:
+        history = SQLiteHistoryStore(_paths().history_path)
+        state = master.project_state(args.project)
+        try:
+            with ProjectLock(state.project_path, holder="ms backlog"):
+                if args.action == "add":
+                    if not args.values:
+                        print('usage: ms backlog <project> add "Title" [--summary TEXT] '
+                              "[--priority N] [--id EPIC_ID]", file=out)
+                        return 2
+                    title = " ".join(args.values)
+                    record = master.add_backlog_epic(args.project, args.id or slug(title),
+                                                     title, args.summary, args.priority)
+                    action = {"action": "backlog_add", "epic": record["id"]}
+                    print(f"Added {record['id']} (priority {record['priority']}, proposed).",
+                          file=out)
+                else:
+                    if len(args.values) != 2 or not args.values[1].isdigit():
+                        print("usage: ms backlog <project> priority <epic> <N>", file=out)
+                        return 2
+                    record = master.set_epic_priority(args.project, args.values[0],
+                                                      int(args.values[1]))
+                    action = {"action": "backlog_priority", "epic": record["id"],
+                              "priority": record["priority"]}
+                    print(f"{record['id']} now has priority {record['priority']}.", file=out)
+        except (*EXPECTED_ERRORS, ProjectBusyError) as error:
+            print(f"error: {error}", file=out)
+            return 1
+        history.append(type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex,
+                       project_id=args.project, payload={"actor": "owner", **action})
+    rows = backlog_rows(master.status(args.project))
+    print(f"Backlog of {args.project} (lower priority number runs first):", file=out)
+    print(render_backlog(rows), file=out)
+    proposed = [r for r in rows if r["status"] == "proposed"]
+    if proposed:
+        print(f"\nTo plan one: ms chat {args.project}, then \"plan epic "
+              f"{proposed[0]['number']} from the backlog\".", file=out)
+    return 0
+
+
 def _command_release(args, out):
     result = build_releaser(_config(args)).prepare(args.project)
     print(result["message"], file=out)
@@ -1132,6 +1192,14 @@ def build_parser():
     chat.add_argument("--new", action="store_true", help="Start a new chat.")
     chat.add_argument("--file", default=None, help="Send this file as the first message.")
     chat.set_defaults(handler=_command_chat)
+    backlog = commands.add_parser("backlog", help="The project's epics in priority order.")
+    backlog.add_argument("project")
+    backlog.add_argument("action", nargs="?", choices=["add", "priority"])
+    backlog.add_argument("values", nargs="*")
+    backlog.add_argument("--summary", default=None)
+    backlog.add_argument("--priority", type=int, default=None)
+    backlog.add_argument("--id", default=None)
+    backlog.set_defaults(handler=_command_backlog)
     github = commands.add_parser("github", help="Set up and check the GitHub App.")
     github.add_argument("action", choices=["setup", "check"])
     github.add_argument("--app-id", default=None)

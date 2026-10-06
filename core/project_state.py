@@ -18,6 +18,7 @@ VALID_TASK_STATUSES = {
 }
 
 VALID_MILESTONE_STATUSES = {
+    "proposed",  # an unapproved backlog epic: no tasks until the owner approves a plan
     "planned",
     "in_progress",
     "completed",
@@ -327,6 +328,11 @@ class ProjectState:
                     f"'{status}'; valid statuses: "
                     f"{sorted(VALID_MILESTONE_STATUSES)}"
                 )
+
+            priority = milestone.get("priority")
+            if priority is not None and (not isinstance(priority, int)
+                                         or isinstance(priority, bool)):
+                problems.append(f"milestone {milestone_id} has a non-integer priority")
 
         task_ids = set()
 

@@ -355,3 +355,40 @@ def test_the_last_read_round_asks_for_an_answer_without_more_reads(env):
     assert result["questions"] == ["Hi or Hello?"]
     assert len(chat._provider.prompts) == 4
     assert "no more files" in chat._provider.prompts[3]
+
+
+# --- backlog drafts ---
+
+
+def test_the_planner_can_add_backlog_epics_without_a_check(env):
+    backlog = {"backlog": [{"id": "epic-bye", "title": "Goodbyes", "summary": "Say bye.",
+                            "priority": 2}], "epic": None, "tasks": []}
+    chat = env["chat"]([answer(backlog, reply="Added to the backlog.")])
+    chat.turn("Put goodbyes on the backlog")
+    assert "BACKLOG EPICS TO ADD" in chat_render(chat)
+    assert chat.approve() == ["epic-bye"]
+    epic = next(m for m in env["master"].status("toy")["milestones"] if m["id"] == "epic-bye")
+    assert epic == {"id": "epic-bye", "name": "Goodbyes", "status": "proposed",
+                    "priority": 2, "summary": "Say bye."}
+    [action] = env["history"].events(types=[EventType.HUMAN_ACTION])
+    assert action.payload["action"] == "backlog_add"
+
+
+def test_planning_a_backlog_epic_fills_it_with_tasks(env):
+    env["master"].add_backlog_epic("toy", "epic-hi", "Friendlier greetings", priority=1)
+    chat = env["chat"]([answer(draft())])
+    chat.turn("plan epic 1 from the backlog")
+    assert "1. epic-hi [proposed] Friendlier greetings" in chat._provider.prompts[0]
+    assert chat.problems() == []
+    chat.check()
+    assert chat.approve() == ["t-2"]
+    status = env["master"].status("toy")
+    epic = next(m for m in status["milestones"] if m["id"] == "epic-hi")
+    assert epic["status"] == "planned" and epic["priority"] == 1
+    assert [t["id"] for t in status["tasks"] if t["milestone"] == "epic-hi"] == ["t-2"]
+
+
+def chat_render(chat):
+    from core.planner import render_draft
+
+    return render_draft(chat.state.draft)

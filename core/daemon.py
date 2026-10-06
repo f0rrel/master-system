@@ -41,7 +41,8 @@ __all__ = ["Daemon", "OBJECTIVE", "RunRequest", "failed_attempts_since_human",
            "load_env_file", "start_of_today_utc", "work_for"]
 
 OBJECTIVE = (
-    "Complete the ready tasks one at a time: start a task, run it, and mark it completed "
+    "Complete the ready tasks one at a time, in the order ready_tasks lists them (backlog "
+    "priority order): start a task, run it, and mark it completed "
     "only when its latest attempt passed verification. Never request integration: the "
     "system integrates verified work itself. If a task fails verification on its third "
     "attempt, mark it blocked and move on to the next task. When no task is ready, stop."
@@ -94,8 +95,10 @@ def failed_attempts_since_human(history, project_id: str, task_id: str) -> int:
 
 
 def work_for(status: dict, history, max_failures: int = 3):
-    """(runnable task ids, exhausted task ids) for one project's status."""
-    tasks = status.get("tasks") or []
+    """(runnable task ids, exhausted task ids) for one project's status, in backlog order."""
+    from core.backlog import ordered_tasks
+
+    tasks = ordered_tasks(status.get("milestones") or [], status.get("tasks") or [])
     done = {t.get("id") for t in tasks if t.get("status") == "completed"}
     runnable, exhausted = [], []
     for task in tasks:

@@ -261,6 +261,9 @@ ADDITIONAL RULES
 - Propose the smallest change that answers the request.
 - If no action is appropriate, choose wait/blocked/needs_information with operation null.
 - Anything not in the list above will be rejected.
+- "ready_tasks" are in backlog order (epic priority first). Work on them in
+  that order unless the evidence gives a reason not to. Never change a milestone
+  whose status is "proposed": it is an unapproved backlog epic.
 - If PROJECT STATE has "direction", it is the owner's standing intent for the
   project. Judge every proposal against it: never create or change a task in a
   way that contradicts it; if the request conflicts with it, choose
@@ -452,8 +455,13 @@ class ReasoningEngine:
         from core.work_manager import calculate_readiness
 
         project_state = self._master.project_state(project_id)
+        from core.backlog import epic_rank, ordered_tasks
+
+        # Backlog order: epic priority, then file order. ready_tasks keeps it.
+        milestones = sorted(status.get("milestones", []),
+                            key=lambda m: epic_rank(status.get("milestones", []))[m.get("id")])
         tasks_with_readiness = []
-        for task in status.get("tasks", []):
+        for task in ordered_tasks(status.get("milestones", []), status.get("tasks", [])):
             readiness, blocked_by, reason = calculate_readiness(project_state, task)
             tasks_with_readiness.append(
                 {
@@ -488,7 +496,7 @@ class ReasoningEngine:
                     "name": milestone.get("name"),
                     "status": milestone.get("status"),
                 }
-                for milestone in status.get("milestones", [])
+                for milestone in milestones
             ],
             "tasks": tasks_with_readiness,
             "ready_tasks": ready_tasks,

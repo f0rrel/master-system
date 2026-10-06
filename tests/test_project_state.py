@@ -225,6 +225,7 @@ def test_progress(state):
     }
     assert summary["total_milestones"] == 8
     assert summary["milestone_status_counts"] == {
+        "proposed": 0,
         "planned": 7,
         "in_progress": 1,
         "completed": 0,
@@ -268,6 +269,7 @@ def test_sandbox_progress(sandbox):
     }
     assert summary["total_milestones"] == 2
     assert summary["milestone_status_counts"] == {
+        "proposed": 0,
         "planned": 1,
         "in_progress": 1,
         "completed": 0,

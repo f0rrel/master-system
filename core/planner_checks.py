@@ -111,9 +111,19 @@ def make_approver(master, history, paths, checker, git=None):
         repo = Path(project["repository"]).expanduser()
         branch = project["base_branch"]
         with ProjectLock(state.project_path, holder=f"planner approve {chat_id}") as lock:
-            result = checker(project_id, draft, lock_fd=lock.fileno())
-            if not result["ok"]:
+            result = checker(project_id, draft, lock_fd=lock.fileno()) if records else None
+            if result is not None and not result["ok"]:
                 raise DraftProblem("the checks failed on the latest code; run `check` again")
+            for entry in draft.get("backlog") or []:
+                master.add_backlog_epic(project_id, entry["id"], entry["title"].strip(),
+                                        entry.get("summary"), entry.get("priority"))
+                history.append(
+                    type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex,
+                    project_id=project_id,
+                    payload={"actor": ACTOR, "action": "backlog_add", "epic": entry["id"],
+                             "chat_id": chat_id, "draft_hash": draft_hash})
+            if not records:
+                return None
             worktree = Path(result["worktree"])
             test_paths = [t["path"] for task in draft["tasks"] for t in task["tests"]]
             git(["add", "--", *test_paths], worktree)

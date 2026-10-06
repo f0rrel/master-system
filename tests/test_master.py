@@ -617,6 +617,8 @@ def test_master_does_not_invent_public_methods_beyond_the_documented_api():
         "set_task_description",
         "set_task_manual_check",
         "add_planned_work",
+        "add_backlog_epic",
+        "set_epic_priority",
         "project_state",
     }
 

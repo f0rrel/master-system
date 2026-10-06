@@ -69,6 +69,16 @@ class InvalidFieldError(WorkManagerError):
     """Raised when a field name or value is not acceptable."""
 
 
+PROPOSED = "proposed"
+BACKLOG_ONLY = ("an epic becomes or stops being a proposed backlog epic only through the "
+                "backlog (ms backlog) or an approved planner draft")
+
+
+def _require_priority(priority):
+    if not isinstance(priority, int) or isinstance(priority, bool) or priority < 0:
+        raise InvalidFieldError(f"Priority must be a non-negative integer: {priority!r}")
+
+
 def _require_text(value, label):
     if not isinstance(value, str) or not value.strip():
         raise InvalidFieldError(f"{label} must be a non-empty string")
@@ -175,6 +185,8 @@ class WorkManager:
         _require_text(milestone_id, "Milestone id")
         _require_text(name, "Milestone name")
         _require_milestone_status(status)
+        if status == PROPOSED:
+            raise InvalidFieldError(BACKLOG_ONLY)
 
         existing = milestones.get("milestones", [])
 
@@ -203,6 +215,9 @@ class WorkManager:
 
         if "status" in changes:
             _require_milestone_status(changes["status"])
+            if PROPOSED in (changes["status"], record.get("status")) \
+                    and changes["status"] != record.get("status"):
+                raise InvalidFieldError(BACKLOG_ONLY)
 
         record.update(changes)
         write_yaml_atomically(self._milestones_path, milestones)
@@ -232,6 +247,11 @@ class WorkManager:
             raise InvalidFieldError(
                 f"Task references unknown milestone: {milestone}"
             )
+        if any(m.get("id") == milestone and m.get("status") == PROPOSED
+               for m in snapshot.milestones):
+            raise InvalidFieldError(
+                f"Milestone {milestone} is an unapproved backlog epic; its tasks come "
+                "from an approved planner draft")
 
         existing = tasks.get("tasks", [])
 
@@ -325,7 +345,12 @@ class WorkManager:
         tasks_doc = deepcopy(snapshot.tasks_doc)
         _require_text(milestone.get("id"), "Milestone id")
         _require_text(milestone.get("name"), "Milestone name")
-        if milestone["id"] in self._milestone_ids(snapshot):
+        backlog_epic = next((m for m in milestones_doc.get("milestones", [])
+                             if m.get("id") == milestone["id"]), None)
+        if backlog_epic is not None and (
+                backlog_epic.get("status") != PROPOSED
+                or any(t.get("milestone") == milestone["id"]
+                       for t in tasks_doc.get("tasks", []))):
             raise DuplicateRecordError(f"Milestone already exists: {milestone['id']}")
         existing = {t.get("id") for t in tasks_doc.get("tasks", [])}
         for task in tasks:
@@ -334,8 +359,12 @@ class WorkManager:
             if task.get("size") not in (None, *TASK_SIZES):
                 raise InvalidFieldError(f"Invalid task size: {task.get('size')}")
         old_milestones, old_tasks = deepcopy(milestones_doc), deepcopy(tasks_doc)
-        milestones_doc.setdefault("milestones", []).append(
-            {"id": milestone["id"], "name": milestone["name"], "status": "planned"})
+        if backlog_epic is not None:
+            # The owner approved the plan of a backlog epic: it keeps its place.
+            backlog_epic["status"] = "planned"
+        else:
+            milestones_doc.setdefault("milestones", []).append(
+                {"id": milestone["id"], "name": milestone["name"], "status": "planned"})
         tasks_doc.setdefault("tasks", []).extend(deepcopy(list(tasks)))
         write_yaml_atomically(self._milestones_path, milestones_doc)
         write_yaml_atomically(self._tasks_path, tasks_doc)
@@ -346,6 +375,37 @@ class WorkManager:
             write_yaml_atomically(self._tasks_path, old_tasks)
             raise
         return deepcopy(list(tasks))
+
+    def add_backlog_epic(self, epic_id, name, summary=None, priority=None):
+        """Add an unapproved backlog epic (status ``proposed``). Human-only."""
+        milestones = deepcopy(self._state.snapshot().milestones_doc)
+        _require_text(epic_id, "Epic id")
+        _require_text(name, "Epic name")
+        existing = milestones.setdefault("milestones", [])
+        if any(item.get("id") == epic_id for item in existing):
+            raise DuplicateRecordError(f"Milestone already exists: {epic_id}")
+        if priority is None:
+            priority = max((m.get("priority") for m in existing
+                            if isinstance(m.get("priority"), int)), default=0) + 1
+        _require_priority(priority)
+        record = {"id": epic_id, "name": name, "status": PROPOSED, "priority": priority}
+        if summary:
+            problems = description_problems(summary, "summary")
+            if problems:
+                raise InvalidFieldError("; ".join(problems))
+            record["summary"] = summary
+        existing.append(record)
+        write_yaml_atomically(self._milestones_path, milestones)
+        return record
+
+    def set_epic_priority(self, epic_id, priority):
+        """Set an epic's backlog priority (lower runs first). Human-only."""
+        _require_priority(priority)
+        milestones = deepcopy(self._state.snapshot().milestones_doc)
+        record = _find(milestones.get("milestones", []), epic_id, "Milestone")
+        record["priority"] = priority
+        write_yaml_atomically(self._milestones_path, milestones)
+        return record
 
     def _set_text_field(self, task_id, field, value):
         if value is not None:

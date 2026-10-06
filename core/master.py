@@ -184,6 +184,14 @@ class Master:
         """Add an epic and its fully specified tasks. Human-only (the approved planner flow)."""
         return self._work(project_id).add_planned_work(milestone, tasks)
 
+    def add_backlog_epic(self, project_id, epic_id, name, summary=None, priority=None):
+        """Add an unapproved backlog epic. Human-only: not in the operation allowlist."""
+        return self._work(project_id).add_backlog_epic(epic_id, name, summary, priority)
+
+    def set_epic_priority(self, project_id, epic_id, priority):
+        """Reorder the backlog. Human-only: not in the operation allowlist."""
+        return self._work(project_id).set_epic_priority(epic_id, priority)
+
     def set_task_manual_check(self, project_id, task_id, manual_check):
         """Set or (with None) clear how a human checks the result by hand.
         For humans only: deliberately not in the operation allowlist."""
