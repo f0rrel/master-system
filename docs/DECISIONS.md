@@ -98,3 +98,12 @@ choice* — made during implementation and recorded here for review.
 | History schema v4 adds `integration_refused`, `published`, `planner_turn` and `release` in one migration with backup | One migration for the whole milestone | Implementation choice |
 | Early experiments and milestone plans moved to `archive/`; documentation split into a usage README and developer docs | Documentation readable without project history | Approved |
 | Documentation is project-agnostic; per-project information lives in `project.yaml` and the managed repository | The system is reusable across projects | Approved |
+
+## Project-agnostic system
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| Project definitions live outside the repository, by default in `$XDG_CONFIG_HOME/master-system/projects` (`[run] projects_root` overrides); tests use fictional fixtures in an isolated `XDG_CONFIG_HOME` | The public repository holds no managed project's data; tests no longer depend on live task state | Approved |
+| The preview site is optional (`github.site_dir`, no default) and its URL configurable (`github.site_url`) | Not every project has a static site | Approved |
+| The planner's test conventions (`test_suffixes`, `syntax_check`, `test_command_examples`, `test_guidance`, `broken_test_markers`, `ignore_paths`) come from `project.yaml`; without them any file under `test_dir` is accepted and no syntax check runs | Any language, no JavaScript assumptions in the code | Approved; key names are implementation choices |
+| P1: one planner turn is up to four model calls. Files named in prose are read; an empty promise to act gets one corrective re-ask; the last call must answer without reads | Tool use completes within the turn, so the owner never pays to nudge the model | Approved; heuristics are implementation choices |

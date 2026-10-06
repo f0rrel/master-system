@@ -5,12 +5,6 @@ its output (it contains no keys, tokens or notification topic) when asking for h
 Paths: `$MS_HOME` is the repository; `<clone>` is a managed project's dedicated clone
 (`repository` in its `project.yaml`).
 
-## Known issues
-
-| Problem | Cause | Workaround |
-| --- | --- | --- |
-| The planner says it will read files ("let me look at…") and then ends its turn | **P1.** The model described the files in prose instead of listing them in its `read_files` field, so there was nothing to read. | Reply `go on`. If it repeats, name the files explicitly. A planned fix re-asks the model automatically when a reply has no files, draft or questions. |
-
 ## Common problems
 
 | Symptom | Meaning | What to check or run |
@@ -24,7 +18,10 @@ Paths: `$MS_HOME` is the repository; `<clone>` is a managed project's dedicated 
 | Planner: "this chat reached its cap" | `[planner] chat_usd` was hit | `ms chat <project> --new`, or raise the cap |
 | A multi-line paste arrived as several messages | The terminal does not use bracketed paste | Put the text between two `"""` lines, or use `ms chat <project> --file <path>` |
 | `check` fails: "passes already on the current code" | The drafted test does not test anything new | Ask the planner for a test that fails until the feature exists |
-| `check` fails: "the test itself is broken" | Syntax error or missing helper in the drafted test | Paste the failure to the planner and ask it to fix the test |
+| `check` fails: "the test itself is broken", or a syntax check fails | Syntax error or missing helper in the drafted test | Paste the failure to the planner and ask it to fix the test |
+| The planner drafts tests in the wrong language or location | The project's planner conventions are not configured | Set `planner.test_suffixes`, `test_command_examples` and, optionally, `syntax_check` and `test_guidance` in `project.yaml` |
+| `Projects root not found` | No project definitions at the configured root | Create `~/.config/master-system/projects/<id>/`, or set `[run] projects_root` |
+| No preview link in `ms status` | The project has no `github.site_dir` | Add `site_dir` if the project has a static site to preview |
 | `check` fails during a `setup` command | Dependency installation or network failure | Run the setup command manually in `<clone>`; check connectivity |
 | The preview did not update after "batch done" | GitHub Pages builds take 1–2 minutes, or publishing failed | Wait and reload; `ms publish <project>` shows any error; `ms github check` |
 | "Publishing is not set up yet (GitHub App)" | App id or private key missing | `ms github check`; [GITHUB-SETUP.md](GITHUB-SETUP.md) |
@@ -49,3 +46,4 @@ Paths: `$MS_HOME` is the repository; `<clone>` is a managed project's dedicated 
 | A merged release waited because nothing checked GitHub while the service was idle | `ms status` completes merged releases |
 | A multi-line paste in `ms chat` became many messages and consumed the chat cap | Pastes arrive as one message; `"""` blocks; `--file` |
 | `ms` run inside another checkout of the repository used that checkout's code | The wrapper runs `python -P` with an explicit `PYTHONPATH` |
+| The planner replied "I'll read the files…" and ended its turn, so every nudge cost a paid turn (P1) | Reads happen within the turn: files named in prose are read, an empty promise is re-asked once, and the last call must answer |

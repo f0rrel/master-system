@@ -5,8 +5,9 @@ the browser plus three commands. When done:
 
 - the system has its own GitHub identity, a **GitHub App** that can access only your repo;
 - it can push `develop` and the preview site, but **can never change `main`**;
-- the preview of your app is served at `https://<owner>.github.io/<repo>/develop/` and the
-  released version at `https://<owner>.github.io/<repo>/`.
+- if the project has a preview site (`github.site_dir`), the preview of your app is
+  served at `https://<owner>.github.io/<repo>/develop/` and the released version at
+  `https://<owner>.github.io/<repo>/`.
 
 `ms github check` reports which steps are complete at any time. Its messages refer to the
 step numbers below.
@@ -119,6 +120,8 @@ With these rules nobody, including the App, can push to `main`. `main` changes o
 human merges a release pull request.
 
 ## 7. Enable GitHub Pages
+
+Skip this step if the project has no `github.site_dir` (no preview site).
 
 The first publish (after a run, or `ms publish <project>`) creates the `gh-pages` branch.
 Only a repository administrator can enable Pages, and the App deliberately is not one, so

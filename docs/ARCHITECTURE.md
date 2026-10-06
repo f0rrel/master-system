@@ -52,7 +52,8 @@ installation and usage, see the [README](../README.md).
 | Location | Content |
 | --- | --- |
 | `$MS_HOME` | This repository. The service runs from it. |
-| `$MS_HOME/projects/<id>/` | Project definitions and state: `project.yaml`, `milestones.yaml`, `tasks.yaml`. Runs update `tasks.yaml`. |
+| `~/.config/master-system/projects/<id>/` | Project definitions and state: `project.yaml`, `milestones.yaml`, `tasks.yaml`. Runs update `tasks.yaml`. Private; never in this repository. `[run] projects_root` (or `--root` for the lower-level CLIs) points elsewhere. |
+| `$MS_HOME/examples/projects/` | A fictional example project definition |
 | `$MS_HOME/docs/` | This document, troubleshooting, the decision log, the GitHub setup guide |
 | `$MS_HOME/archive/` | Early experiments and historical milestone plans; unused by the code |
 | `~/.config/master-system/` | `config.toml` (no secrets); `master.env` (model API key, mode 600); `github-app.pem` (600); `ntfy-topic` (600) |
@@ -87,15 +88,27 @@ A run that makes no progress marks the project **stalled** until a human acts on
 
 `ms chat <project>` opens a chat with the planner model. The planner may read files from
 the project's base branch (read-only, through git) and returns structured JSON: questions,
-or a draft epic with tasks. Each task has a title, size, description, manual-check steps,
-test files and acceptance commands.
+files to read, or a draft epic with tasks. Each task has a title, size, description,
+manual-check steps, test files and acceptance commands.
+
+One owner message is one *turn* of up to four model calls. Files the model lists in
+`read_files` are read and the model is asked again within the turn. If it names files in
+prose instead, those are read too; if it only promises to act ("let me check…"), it is
+re-asked once with a corrective note; the last call tells it to answer without further
+reads. The owner sees only the final answer.
+
+The project's test conventions come from `planner` in `project.yaml`: `test_dir`,
+`test_suffixes`, `syntax_check`, `test_command_examples`, `test_guidance`,
+`broken_test_markers`, `ignore_paths`, `setup`, `base_checks`, `protected_paths`. Nothing
+in the planner assumes a language.
 
 `check` validates a draft in a fresh worktree:
 
 1. the project's `setup` commands run;
-2. `base_checks` pass on the current code;
-3. each drafted test is syntactically valid and **fails** on the current code for the
-   right reason (not because the test itself is broken).
+2. each drafted test passes `syntax_check` (if configured);
+3. each task's test commands **fail** on the current code for the right reason (output
+   containing a `broken_test_markers` entry means the test itself is broken);
+4. `base_checks` still pass.
 
 `approve` repeats the checks under the project lock, commits the tests to the base branch,
 and writes the epic and tasks atomically through `Master.add_planned_work` (human-only),
@@ -112,15 +125,16 @@ human-approved.
 - **Conflict or failed re-verification:** recorded as `integration_refused`; the task runs
   again from the new `develop`.
 
-**Publishing** pushes `develop` and rebuilds a `gh-pages` branch with git plumbing (no
-checkout, no build step): the release branch's `site_dir` at `/`, `develop`'s at
-`/develop/`.
+**Publishing** pushes `develop`. If the project sets `github.site_dir`, it also rebuilds a
+`gh-pages` branch with git plumbing (no checkout, no build step): the release branch's
+`site_dir` at `/`, `develop`'s at `/develop/`. The site URL defaults to
+`https://<owner>.github.io/<repo>/` and can be overridden with `github.site_url`.
 
 | Branch | Changed by |
 | --- | --- |
 | `main` (release branch) | Only a human, by merging a release pull request (ruleset: PR required, no force push, no deletion, no bypass) |
 | `develop` | The system: verified attempts, planner tests, changelog entries (ruleset: no force push, no deletion) |
-| `gh-pages` | The system: the published preview and live site |
+| `gh-pages` | The system: the published preview and live site (only with `site_dir`) |
 | `attempt/*`, `planner/*` | Local only, in the dedicated clone |
 
 **A release** is a merge commit created by a human merging the release pull request. The
@@ -167,7 +181,6 @@ Master's context never names them. Reports show attempts, passes and cost per ti
 
 | ID | Gap | Plan |
 | --- | --- | --- |
-| P1 | The planner sometimes announces that it will read files and ends its turn without listing them | Re-ask automatically when a reply has no files, draft or questions |
 | N1 | Workers run as the system's OS user: isolation, not a sandbox | Containers or an OS sandbox |
 | H2 | Policy is keyed on operation names, not state transitions | A transition table |
 | H3 | Approvals for gated operations cannot be granted outside a run | Approval events and `ms approve` |
@@ -175,7 +188,6 @@ Master's context never names them. Reports show attempts, passes and cost per ti
 | M4 | Edits made directly in YAML are not recorded (`ms chat` and `run_cli task …` edits are) | Record every write with an actor |
 | H6 | Homemade durable execution | DBOS evaluation (milestone 4) |
 | L6 | Old attempt worktrees and branches accumulate | Periodic cleanup |
-| — | The planner drafts JavaScript tests only; the publisher assumes a static site directory | Pluggable test stacks; optional preview |
 
 ## Developing
 
@@ -189,7 +201,8 @@ Rules:
 
 - Small commits, each with a green test suite.
 - Never weaken a boundary test.
-- Never commit runtime state, except task status in `projects/*/tasks.yaml`.
+- Never commit runtime state or project definitions; tests use the fictional fixtures in
+  `tests/fixtures/projects/`, copied into an isolated `XDG_CONFIG_HOME` for every test.
 - Do not restart the service while `ms status` reports work in progress; develop in a
   separate worktree.
 - Code is project-agnostic: project-specific values belong in `project.yaml` or the

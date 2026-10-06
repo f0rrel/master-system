@@ -40,8 +40,8 @@ code:
   checks protected paths; worker claims are recorded but never trusted.
 - **Automatic integration**: verified work is fast-forwarded, or rebased and re-verified,
   onto `develop`; a conflict sends the task back for another attempt.
-- **Preview publishing**: `develop` and a static preview site are pushed through a GitHub
-  App with short-lived tokens and no administrative rights.
+- **Preview publishing**: `develop`, and optionally a static preview site, are pushed
+  through a GitHub App with short-lived tokens and no administrative rights.
 - **Human-approved releases**: `ms release` writes release notes and a changelog entry and
   opens a pull request; merging it is the approval. The system then tags the version,
   creates the GitHub Release and republishes the site.
@@ -49,6 +49,8 @@ code:
   repeated failures.
 - **Operations**: [ntfy](https://ntfy.sh) notifications, plain-language status, run
   reports with token and cost accounting, and a secret-free diagnostic dump (`ms doctor`).
+- **Any stack**: test file types, syntax checks and test commands come from each
+  project's configuration.
 - **Pluggable models**: the orchestrator, planner and workers sit behind adapters
   (DeepSeek, Ollama and the OpenCode CLI are included).
 
@@ -86,11 +88,6 @@ design, module map and trust boundaries are in **[docs/ARCHITECTURE.md](docs/ARC
 | A GitHub repository per managed project | For publishing and releases; see [docs/GITHUB-SETUP.md](docs/GITHUB-SETUP.md). |
 | [ntfy](https://ntfy.sh) app (optional) | Push notifications. |
 
-The planner currently drafts tests in JavaScript (`node:test` unit tests and Playwright
-browser tests), and the publisher expects a static site directory. Other stacks can be
-managed with hand-written acceptance commands; broader support is on the
-[roadmap](#roadmap).
-
 ## Installation and setup
 
 Paths used throughout the documentation:
@@ -99,6 +96,7 @@ Paths used throughout the documentation:
 | --- | --- |
 | `$MS_HOME` | Where this repository is cloned, e.g. `~/src/master-system` |
 | `~/.config/master-system/` | Configuration and secrets, outside the repository |
+| `~/.config/master-system/projects/` | Project definitions (private; `[run] projects_root` overrides) |
 | `~/.local/share/master-system/` | Runtime state: history, sessions, logs, planner chats |
 
 ```bash
@@ -126,6 +124,9 @@ run `uv sync`, `ms install` and `ms service install` again from the new location
 
 ## Adding a project
 
+Project definitions are private configuration and never live in this repository. A
+complete, fictional example is in [`examples/projects/example-app/`](examples/projects/example-app/).
+
 1. **Create a dedicated clone** for the system to work in, separate from any checkout you
    edit by hand, with a `develop` branch:
 
@@ -134,41 +135,57 @@ run `uv sync`, `ms install` and `ms service install` again from the new location
    cd ~/managed/example-app && git switch -c develop && git push -u origin develop
    ```
 
-2. **Describe the project** in `$MS_HOME/projects/example-app/project.yaml`:
+2. **Describe the project** in `~/.config/master-system/projects/example-app/`:
+
+   ```bash
+   cp -r "$MS_HOME/examples/projects/example-app" ~/.config/master-system/projects/
+   ```
+
+   Then edit `project.yaml`, and empty `tasks.yaml` (`tasks: []`) and `milestones.yaml`
+   (`milestones: []`):
 
    ```yaml
    id: example-app
    name: Example App
-   description: >
-     A small web app used to illustrate the configuration.
    status: active
    repository: ~/managed/example-app
    base_branch: develop
-   auto_integrate: true            # the service may run it and integrate into develop
+   auto_integrate: true              # the service may run it and integrate into develop
    github:
      repo: <you>/example-app
      release_branch: main
-     site_dir: public              # static files published as the preview
+     site_dir: public                # optional: publish this directory as the preview site
+     # site_url: https://app.example.com/   # optional: default https://<you>.github.io/example-app/
    planner:
-     test_dir: tests/tasks         # where drafted tests are committed
-     setup:                        # run before checks in a fresh worktree
+     test_dir: tests/tasks           # where drafted tests are committed
+     test_suffixes: [".test.js"]     # allowed test file endings (any if unset)
+     syntax_check: "node --check {path}"           # optional, per drafted test file
+     test_command_examples: ["node --test {path}"] # shown to the planner
+     # test_guidance: "Use the helpers in tests/helpers."
+     setup:                          # run before checks in a fresh worktree
        - npm ci --no-audit --no-fund
-     base_checks:                  # must pass on the current code
+     base_checks:                    # must pass on the current code
        - npm test
-     protected_paths:              # workers may not change these
+     protected_paths:                # workers may not change these
        - tests/*
        - package.json
        - package-lock.json
    ```
 
-   Create `milestones.yaml` (`milestones: []`) and `tasks.yaml` (`tasks: []`) next to it.
+   For a Python project the planner keys would be, for example,
+   `test_suffixes: [".py"]`, `syntax_check: "python -m py_compile {path}"` and
+   `test_command_examples: ["python -m pytest -q {path}"]`. Other optional keys:
+   `broken_test_markers` (output that means a drafted test is itself broken) and
+   `ignore_paths` (directories hidden from the planner's file list).
 
-3. **Connect GitHub**: create the GitHub App, protect `main` and enable Pages as described
-   in [docs/GITHUB-SETUP.md](docs/GITHUB-SETUP.md), then run `ms github check`.
+3. **Connect GitHub**: create the GitHub App, protect `main` and, if the project has a
+   `site_dir`, enable Pages, as described in [docs/GITHUB-SETUP.md](docs/GITHUB-SETUP.md).
+   Then run `ms github check`.
 
 4. **Plan the first work**: `ms chat example-app`.
 
-A project without `auto_integrate: true` is never run by the service.
+A project without `auto_integrate: true` is never run by the service. A project without
+`github.site_dir` gets no preview site; only `develop` is pushed.
 
 ## Daily workflow
 
@@ -243,7 +260,7 @@ Settings live in `~/.config/master-system/config.toml`. Every key is optional.
 | | `max_attempts_per_task` | `3` | Attempts per task within one run |
 | | `attempt_timeout_s` | `1800` | Worker deadline per attempt |
 | | `verification_timeout_s` | `1800` | Acceptance deadline per attempt |
-| | `projects_root` | `$MS_HOME/projects` | Location of project definitions |
+| | `projects_root` | `~/.config/master-system/projects` | Location of project definitions |
 | `[budget]` | `daily_usd` | `0.50` | Daily cap: Master, planner and paid workers |
 | | `run_usd` | `0.20` | Cap per service run |
 | `[daemon]` | `interval_s` | `300` | Service polling interval (seconds) |
@@ -303,10 +320,10 @@ else, run `ms doctor` and include its output when asking for help.
 | 1. Contain and verify | Worktree per attempt, locking, deadlines, acceptance verifier, spec-bound evidence | Done |
 | 2. Run it for real | Run CLI, real worker, reports from history, cost accounting | Done |
 | 3. Hands-off | Background service, auto-integration, preview publishing, planner, releases, worker tiers | Done |
-| Next | Planner turn-completion fix, policy by state transition, out-of-run approvals, unified attempt budgets | Planned |
+| Next | Policy by state transition, out-of-run approvals, unified attempt budgets | Planned |
 | 4. Durable runtime | Evaluate DBOS in place of homemade durable execution | Planned |
 | 5. Focused context | Per-task digests, project notes, versioned prompts | Partly done |
-| Later | Non-JavaScript test stacks in the planner, optional preview site, OS-level worker sandbox, self-hosting | Planned |
+| Later | OS-level worker sandbox; self-hosting | Planned |
 
 Changes are listed in [CHANGELOG.md](CHANGELOG.md), design decisions in
 [docs/DECISIONS.md](docs/DECISIONS.md).
@@ -341,11 +358,10 @@ Releases: <https://github.com/f0rrel/Match_Legends_mobile_game/releases>
 
 **Machine notes**
 
-- `$MS_HOME` is `~/AI/master-system-big-pickle` (named after OpenCode's default model; to
-  be renamed `~/AI/master-system`). The service runs from this checkout.
+- `$MS_HOME` is `~/AI/master-system` (branch `main`); the service runs from this checkout.
+- Project definitions: `~/.config/master-system/projects/` (`match-legends`, and
+  `ai-system`, the system's own backlog, which has no `auto_integrate` and is never run).
 - Managed clone: `~/AI/managed/match-legends`. Its push URL is disabled; pushes go through
   the GitHub App.
 - Daily cap: `$0.60`. Worker: OpenCode's free default model only (tiers off).
 - Node.js 22 for workers is installed through nvm; the system Node.js is left untouched.
-- `projects/ai-system` (the system's own backlog) has no `auto_integrate` and is never run
-  by the service.

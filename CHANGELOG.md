@@ -5,6 +5,24 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Changed
+- Project definitions moved out of the repository to
+  `~/.config/master-system/projects/` (or `[run] projects_root`). The repository's
+  `projects/` and the tests tied to live project data are removed; tests use a fictional
+  fixture project, and `examples/projects/example-app/` documents a definition.
+- The preview site is optional: without `github.site_dir` only `develop` is pushed.
+  `github.site_url` overrides the default github.io address. `ms status` labels the
+  released site "Live:".
+- Planner test conventions are configured per project (`test_suffixes`, `syntax_check`,
+  `test_command_examples`, `test_guidance`, `broken_test_markers`, `ignore_paths`)
+  instead of being JavaScript-only.
+- Code messages point to `docs/GITHUB-SETUP.md` and `docs/ARCHITECTURE.md`.
+
+### Fixed
+- P1: the planner could answer "I'll read the files…" and end its turn without reading
+  them. Reads now complete within the same turn (files named in prose are read; an empty
+  promise is re-asked once; the last call must answer).
+
 ### Documentation
 - README restructured as project-agnostic documentation: features, architecture
   overview, requirements, setup, adding a project, workflow, command and configuration
