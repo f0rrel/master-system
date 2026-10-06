@@ -355,6 +355,8 @@ Master's context never names them. Reports show attempts, passes and cost per ti
 | B1 | Backlog order is guidance for the Master, not enforced by policy | Enforce with transition policy (H2) if it is ignored |
 | T2 | Type isolation is only as fine as the project's file layout (a single-file app cannot separate visual from logic work by path) | Split such files; tool limits still apply |
 | S1 | Screenshots and the summary page are local files, not viewable from a phone | Optionally publish them with the preview |
+| V1 | Verification runs in the worker's own worktree, and its cleanliness check (`git status --porcelain`) does not list ignored files. A worker can leave an untracked file ignored through `.gitignore` or the shared `.git/info/exclude` that changes how acceptance commands behave; it is not in the commit or the diff, so the verdict can be pass, and when `develop` has not moved, integration fast-forwards on it. The replay path (a fresh worktree) does not carry such files. A consequence of N1 | Verify in a fresh worktree of the result commit, or check `git status --porcelain --ignored` |
+| V2 | Attempt worktrees share refs and the common `.git` directory (hooks, config, `info/exclude`) with the dedicated clone: `git update-ref refs/heads/develop <sha>` from the worktree moves `develop`, and the publisher pushes whatever `develop` points to without comparing it with the last recorded integration. A consequence of N1 | Compare `develop` with the last integration before publishing; isolate attempt repositories |
 
 ## Developing
 
@@ -385,5 +387,7 @@ Every milestone, release or fix batch updates, in the same change:
 4. This document and the README, when behaviour, commands or configuration change.
 
 Documentation stays project-agnostic. Information about a specific managed project lives
-in that project's `project.yaml` and repository; the author's own setup is confined to the
-last section of the README.
+in that project's `project.yaml` and repository; the README mentions the author's real
+project only in its "Used in practice" section, and the author's machine setup is not
+documented here. Reference material (setup, commands, configuration) lives in
+[REFERENCE.md](REFERENCE.md).

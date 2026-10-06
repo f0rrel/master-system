@@ -1,521 +1,326 @@
 # Master System
 
-![Status: personal project, actively developed](https://img.shields.io/badge/status-personal%20project%2C%20actively%20developed-blue)
+**Unattended AI coding where the agent never decides when it's done.**
+
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-informational)
 
-A model-independent control plane for AI-assisted software development. You describe a
-change in plain language; a planner model turns it into small tasks with executable tests;
-coding agents implement each task in an isolated git worktree; the system verifies every
-result itself, integrates passing work into a development branch, publishes a preview, and
-leaves releases to a human.
+Master System is a control plane that wraps an off-the-shelf coding agent (the OpenCode
+CLI) and treats it as untrusted. Before any work starts, a planner drafts tests for each
+task, the system proves those tests fail on the current code, and a human approves them.
+After the agent works, the system's own code runs those tests and decides whether the
+task is done; the agent's report is recorded but not believed. Passing work is
+integrated into a development branch; releases to `main` stay a human merge.
 
-## Why
+It is for developers who want to hand small, well-specified tasks to an agent overnight
+and audit the result in the morning. Status: a personal, single-user project that runs
+on one Linux machine and is used on one real project. Testers are welcome:
+[try to break it](#try-to-break-it).
 
-Coding agents are capable but not trustworthy on their own: they report success they did
-not achieve, edit files they should not touch, and spend money without bound. Master
-System treats every model as an untrusted proposer and keeps authority in deterministic
-code:
+## What makes it different
 
-- **Done means verified.** A task completes only when acceptance tests, fixed before the
-  work started, pass on the committed result and that result is integrated.
-- **Models propose, policy decides.** The orchestrating model requests one operation at a
-  time; a policy layer and a completion gate decide whether it runs.
-- **Releases stay human.** The system may change the development branch; only a human
-  merge changes the release branch.
-- **Everything is auditable.** Every decision, attempt, verification, integration and
-  release is recorded in an append-only history, and reports are built from it alone.
+- **A fixed definition of done.** Each task's acceptance commands and protected paths are
+  drafted, checked to fail on today's code and approved before the attempt; the
+  orchestrating model cannot change them (`core/planner_checks.py`,
+  `core/work_manager.py`), and every attempt is bound to the spec by a hash
+  (`core/evidence.py`).
+- **Claims are recorded, not believed.** The worker's status and usage are stored as
+  claims; the orchestrator commits the worktree itself and the verifier runs the
+  acceptance commands on that commit (`core/task_orchestrator.py`,
+  `core/acceptance_verifier.py`).
+- **One allowlisted operation per step.** The orchestrating model (internally "Master")
+  proposes one of seven operations at a time; code decides whether a task may complete
+  or be integrated (`core/reasoning.py`, `core/evidence.py`).
+- **Infrastructure failures are not task failures, and nothing is replayed.** A provider
+  limit ends an attempt as `limited` and a worker that changes nothing as `stalled`;
+  neither counts against the task. An attempt found unfinished after a crash is marked
+  `interrupted` and never re-run (`core/task_orchestrator.py`, `core/recovery.py`).
+- **Re-verification on the integration target, human-merged releases.** If `develop` moved,
+  the attempt is cherry-picked onto it and verified again before a fast-forward. The
+  system's code never merges to `main`, and the ruleset blocks direct pushes
+  (`core/attempts.py`, `core/release.py`).
 
-## Features
+What it is not: not a coding agent (it wraps one), not a sandbox, not multi-user, not a
+hosted service.
 
-- **Project direction**: each project's `docs/DIRECTION.md` (vision, audience, feel, what
-  never changes) is read by the planner, the orchestrating model, the workers and the
-  visual reviewer, which judge every proposal against it.
-- **Backlog**: epics in priority order (`ms backlog`). The planner adds epics and plans a
-  whole epic in one draft; the service works through approved tasks in backlog order.
-- **Planner chat** (`ms chat`): turns a request into an epic of small, typed tasks, each
-  with test files, acceptance commands and manual-check steps. Drafts are validated in a
-  fresh worktree (tests must be valid and must fail on the current code) before they can
-  be approved.
-- **Right-sized tasks**: the planner keeps each task to one new thing and about 150
-  lines; `check` flags oversized tasks with a suggested split. A worker that runs out
-  of output while planning is retried with a write-incrementally instruction, and then
-  the planner drafts a split for the owner to approve.
-- **Task types**: `developer`, `visual`, `logic`, `docs`, each with a skill doc, allowed
-  paths and allowed tools that the orchestrator enforces.
-- **Shared project memory**: workers propose lessons after verified tasks; approved
-  lessons (`ms lessons`) reach future workers of the same type.
-- **Visual reviewer**: for visual tasks, a vision model judges phone-sized screenshots
-  against the task and the direction; it can block a task, never pass one.
-- **Generated images**: visual tasks can request images in the project's fixed style; the
-  owner picks among candidates (`ms pick`).
-- **Telegram bot**: the phone interface (status, planner chat, approvals with
-  confirmation buttons, image picks, lessons, worker-limit choices, notifications with
-  screenshots), paired to one owner; ntfy remains an optional fallback.
-- **Worker limits handled calmly**: provider rate limits and disappearing free models
-  never count as task failures; short limits are waited out automatically, longer ones
-  pause the project and ask the owner (`ms limit`); a weekly check confirms free worker
-  models are still offered and free.
-- **Background service**: a systemd user service that runs approved tasks within daily,
-  per-run and per-task cost caps, and sends one morning summary when the work runs out.
-- **Isolated attempts**: one git worktree per attempt, process-group deadlines, and an
-  allowlisted environment with no secrets for workers.
-- **Independent verification**: the orchestrator runs each task's acceptance commands and
-  checks protected paths; worker claims are recorded but never trusted.
-- **Automatic integration**: verified work is fast-forwarded, or rebased and re-verified,
-  onto `develop`; a conflict sends the task back for another attempt.
-- **Preview publishing**: `develop`, and optionally a static preview site, are pushed
-  through a GitHub App with short-lived tokens and no administrative rights.
-- **Human-approved releases**: `ms release` writes release notes and a changelog entry and
-  opens a pull request; merging it is the approval. The system then tags the version,
-  creates the GitHub Release and republishes the site.
-- **Worker tiers** (optional): tasks start on the cheapest worker model and escalate after
-  repeated failures.
-- **Operations**: [ntfy](https://ntfy.sh) notifications, plain-language status, run
-  reports with token and cost accounting, and a secret-free diagnostic dump (`ms doctor`).
-- **Any stack**: test file types, syntax checks and test commands come from each
-  project's configuration.
-- **Pluggable models**: the orchestrator, planner and workers sit behind adapters
-  (DeepSeek, Ollama and the OpenCode CLI are included).
+## How a task flows
 
-## Architecture overview
-
-```text
- DIRECTION.md + backlog ─▶ human ──ms chat──▶ Planner model ──approve──▶ typed tasks + tests
-                                                                          on develop
- background service (systemd user unit), every N minutes, within cost caps
-   images for visual tasks ─▶ committed, or candidates wait for the owner's pick
-                                                   ▼
-   run (child process) ─▶ autonomous loop ─▶ Master model proposes ONE operation
-                                │                    │ (backlog order, direction)
-                                │          policy + completion gate decide
-                                ▼
-   task orchestrator ─▶ git worktree per attempt ─▶ coding worker (type: paths + tools,
-        │                                            skill, approved lessons)
-        │                                        ─▶ acceptance verifier ─▶ visual reviewer
-        └─ pass ─▶ auto-integrator: rebase + re-verify ─▶ develop (fast-forward)
-   after the run: publisher ─▶ push develop + preview site (GitHub App)
-   when the work runs out: one morning summary (done, blocked, screenshots, cost, needs you)
- human ──ms release──▶ PR develop → main ──human merges──▶ tag, GitHub Release, live site
+```mermaid
+flowchart TD
+    A["1. Request (human)"] --> B["2. Planner draft: tests + acceptance (model)"]
+    B --> C["3. check: tests must fail today (code), then approve (human)"]
+    C -->|"tests committed to develop"| D["4. Attempt in a fresh worktree (worker model)"]
+    D --> E["5. Verification by the orchestrator (code)"]
+    E -->|"fail: next attempt or blocked"| D
+    E -->|"pass"| F["6. Integration into develop (code)"]
+    F --> G["7. Release PR to main, merged by a human (human)"]
 ```
 
-Project state lives in YAML files with a single writer; history lives in SQLite. The full
-design, module map and trust boundaries are in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+1. **Request:** describe the change in `ms chat <project>`, or plan an epic from the
+   backlog (`ms backlog`).
+2. **Draft:** the planner model drafts small tasks, each with test files, acceptance
+   commands and manual-check steps (`core/planner.py`).
+3. **Check and approve:** `check` runs the drafted tests in a fresh worktree and requires
+   them to fail on the current code; `approve` commits them to `develop` (`core/planner_checks.py`).
+4. **Attempt:** the background service starts a run; the orchestrating model picks the
+   next operation and the worker edits a fresh git worktree (`core/task_orchestrator.py`).
+5. **Verification:** the orchestrator commits the worktree and runs the acceptance
+   commands itself (`core/acceptance_verifier.py`).
+6. **Integration:** a verified attempt is fast-forwarded into `develop`, or replayed and
+   re-verified if `develop` moved (`core/auto_integrate.py`).
+7. **Release:** `ms release` opens a pull request from `develop` to `main`; a human
+   merges it (`core/release.py`).
 
-## Requirements
+## Example: one task, end to end
 
-| Requirement | Notes |
+This is an illustration built from the example definition in
+[`examples/projects/example-app/`](examples/projects/example-app/), not captured output.
+Task `app-1`, "Greet the visitor by name", has this acceptance block:
+
+```yaml
+acceptance:
+  commands:
+  - npm ci --no-audit --no-fund
+  - node --test tests/tasks/app-1-greeting.test.js
+  - node --test tests/unit/*.test.js
+  protected_paths:
+  - tests/*
+  - package.json
+  - package-lock.json
+```
+
+- **check:** in a fresh worktree, `node --test tests/tasks/app-1-greeting.test.js` must
+  fail on today's code (the planner drafted that file), and `tests/unit` must pass.
+- **approve:** the test file is committed to `develop`, and the task is queued with the
+  acceptance above.
+- **An attempt that edits `tests/tasks/app-1-greeting.test.js`** fails with a
+  `protected_path` finding: "1 protected path(s) changed". Deleting or renaming the file
+  counts too.
+- **An attempt that reports success without making the test pass** fails with a
+  `command_failed` finding: "1 of 3 command(s) failed". The worker's report changes
+  nothing: the completion gate does not let the task complete without a verified pass.
+- **A real fix** gives "all 3 command(s) passed" and is fast-forwarded into `develop`.
+- **The human** follows the manual check on the preview and merges the release pull request.
+
+<!-- TODO: real ms report excerpt -->
+
+## Trust model
+
+| Role | What it can do | What checks it |
+| --- | --- | --- |
+| Planner | drafts tasks and tests | fail-first check + human approval |
+| Orchestrating model | proposes one allowlisted operation per step | policy + completion gate |
+| Worker | edits a fresh worktree with a bash-capable agent | the verifier; its claims are ignored |
+| Visual reviewer | can only turn pass into fail | — |
+
+**The worker gets** a fresh git worktree at the tip of `develop`, a deadline enforced by
+coreutils `timeout` in its own process group, and an allowlisted environment
+(`core/worker_env.py`): `PATH` is the nvm Node `bin` directory plus
+`/usr/local/bin:/usr/bin:/bin`, and `HOME` is a dedicated worker home. **It never gets**
+API keys or tokens in its environment; secret-looking extras are refused. It does run as
+the same OS user, so it can read any file that user can, including `master.env` and the
+GitHub App key.
+
+**The verifier** (`core/acceptance_verifier.py`) runs in the attempt's worktree after the
+orchestrator has committed it. It reports `unable_to_verify` if the task has no
+acceptance or the worktree is not clean, a `protected_path` finding for any changed,
+renamed or deleted protected path, an `outside_allowed_paths` finding for changes outside
+the task type's paths, and a `command_failed` finding for any acceptance command that
+fails or times out. It passes only with no findings. It is independent of the worker:
+the commands were fixed and approved before the attempt, the orchestrator runs them, and
+the result is bound to the task's `spec_hash`.
+
+| Defends against | Does not defend against |
 | --- | --- |
-| Linux with systemd user services | The background service is a systemd user unit. |
-| Python 3.12+ and [uv](https://docs.astral.sh/uv/) | Dependencies are pinned in `uv.lock`. |
-| git, coreutils `timeout`, `openssl` | Worktrees, deadlines, GitHub App JWT signing. |
-| A model API key for the Master and planner | DeepSeek by default; Ollama and OpenCode adapters are included. |
-| [OpenCode CLI](https://opencode.ai) | The default coding worker. |
-| The managed project's own toolchain | Whatever its tests need, e.g. Node.js and Playwright for a web project. |
-| A GitHub repository per managed project | For publishing and releases; see [docs/GITHUB-SETUP.md](docs/GITHUB-SETUP.md). |
-| [ntfy](https://ntfy.sh) app (optional) | Push notifications. |
+| False success reports | A worker deliberately using its shell against the host: it runs as your user |
+| Edited, deleted or renamed protected tests | Untracked files hidden by `.gitignore` or `.git/info/exclude` that change how acceptance commands behave (gap V1) |
+| Files changed outside the task type's paths | A worker moving `develop` from its worktree, which shares refs with the clone (gap V2) |
+| Hangs (deadline and process-group kill) | Processes that escape their group with `setsid` (gap N1) |
+| A spec changed after a pass | Weak tests that a human approved |
+| The orchestrating model completing or integrating without evidence | The orchestrating model cancelling or retitling tasks (gap H2) |
+| Crashes mid-attempt (no replay) | |
 
-## Installation and setup
+Details: [safety rules](docs/ARCHITECTURE.md#safety-rules-and-trust-boundaries) and
+[known gaps](docs/ARCHITECTURE.md#known-gaps).
 
-Paths used throughout the documentation:
+## Try it
 
-| Path | Meaning |
-| --- | --- |
-| `$MS_HOME` | Where this repository is cloned, e.g. `~/src/master-system` |
-| `~/.config/master-system/` | Configuration and secrets, outside the repository |
-| `~/.config/master-system/projects/` | Project definitions (private; `[run] projects_root` overrides) |
-| `~/.local/share/master-system/` | Runtime state: history, sessions, logs, planner chats |
+**Before you start.** It runs on Linux only. The default caps are $0.50 a day, $0.20 per
+run and $0.30 per planner chat. Data leaves your machine: the planner sends the project
+files it reads and the README to the planner model, the worker sends code to its model
+provider through OpenCode, and the visual reviewer sends screenshots. Because workers run
+as your user, use a VM, a container or a separate Linux user, a throwaway repository and
+spend-limited keys.
+
+**Prerequisites:** Python 3.12+ and [uv](https://docs.astral.sh/uv/); git and coreutils;
+Node.js ≥ 22 installed with nvm (required even for non-Node projects); the
+[OpenCode CLI](https://opencode.ai) at `~/.opencode/bin/opencode`; a DeepSeek API key.
+Acceptance commands see only the nvm Node `bin` directory and
+`/usr/local/bin:/usr/bin:/bin`, with `HOME` set to the worker home: tools in
+`~/.local/bin` are invisible, and `python` fails where only `python3` exists.
+
+A minimal local trial, without the GitHub App, systemd or Telegram:
 
 ```bash
-git clone https://github.com/f0rrel/master-system.git "$MS_HOME"
-cd "$MS_HOME"
-uv sync                                   # creates .venv
-uv run python -m core.ms install          # installs the `ms` wrapper to ~/.local/bin/ms
-
-mkdir -p ~/.config/master-system && chmod 700 ~/.config/master-system
-printf 'DEEPSEEK_API_KEY=%s\n' '<your key>' > ~/.config/master-system/master.env
+export MS_HOME=~/src/master-system
+git clone https://github.com/f0rrel/master-system.git "$MS_HOME" && cd "$MS_HOME"
+uv sync
+uv run python -m core.ms install                 # puts `ms` in ~/.local/bin
+mkdir -p ~/.config/master-system/projects && chmod 700 ~/.config/master-system
+printf 'DEEPSEEK_API_KEY=%s\n' '<key>' > ~/.config/master-system/master.env
 chmod 600 ~/.config/master-system/master.env
-
-ms notify setup                           # optional: phone notifications
-ms service install                        # installs and starts the background service
-ms doctor                                 # checks the installation
+HOME=~/.local/share/master-system-worker ~/.opencode/bin/opencode auth login
 ```
 
-A missing `config.toml` means "use the defaults" (see [Configuration](#configuration)).
-Workers use their own home directory as their only credential store; sign the worker in
-to its model provider once inside that home, e.g.
-`HOME=~/.local/share/master-system-worker opencode auth login`.
-
-The service unit records the absolute path of `$MS_HOME`. After moving the repository,
-run `uv sync`, `ms install` and `ms service install` again from the new location.
-
-## Adding a project
-
-Project definitions are private configuration and never live in this repository. A
-complete, fictional example is in [`examples/projects/example-app/`](examples/projects/example-app/).
-
-1. **Create a dedicated clone** for the system to work in, separate from any checkout you
-   edit by hand, with a `develop` branch:
-
-   ```bash
-   git clone https://github.com/<you>/example-app.git ~/managed/example-app
-   cd ~/managed/example-app && git switch -c develop && git push -u origin develop
-   ```
-
-2. **Write the direction** (optional, recommended): `docs/DIRECTION.md` in the project's
-   repository on `develop`: vision, audience, the feel every change is judged against,
-   and what must never change.
-
-3. **Describe the project** in `~/.config/master-system/projects/example-app/`:
-
-   ```bash
-   cp -r "$MS_HOME/examples/projects/example-app" ~/.config/master-system/projects/
-   ```
-
-   Then edit `project.yaml`, and empty `tasks.yaml` (`tasks: []`) and `milestones.yaml`
-   (`milestones: []`):
-
-   ```yaml
-   id: example-app
-   name: Example App
-   status: active
-   repository: ~/managed/example-app
-   base_branch: develop
-   auto_integrate: true              # the service may run it and integrate into develop
-   github:
-     repo: <you>/example-app
-     release_branch: main
-     site_dir: public                # optional: publish this directory as the preview site
-     # site_url: https://app.example.com/   # optional: default https://<you>.github.io/example-app/
-   planner:
-     test_dir: tests/tasks           # where drafted tests are committed
-     test_suffixes: [".test.js"]     # allowed test file endings (any if unset)
-     syntax_check: "node --check {path}"           # optional, per drafted test file
-     test_command_examples: ["node --test {path}"] # shown to the planner
-     # test_guidance: "Use the helpers in tests/helpers."
-     setup:                          # run before checks in a fresh worktree
-       - npm ci --no-audit --no-fund
-     base_checks:                    # must pass on the current code
-       - npm test
-     protected_paths:                # workers may not change these
-       - tests/*
-       - package.json
-       - package-lock.json
-   ```
-
-   Optional sections (all project-specific content stays here or in the project's
-   repository):
-
-   ```yaml
-   direction: {path: docs/DIRECTION.md, max_chars: 6000}
-   task_types:                       # narrow what each type may change and use
-     visual:
-       allowed_paths: ["public/css/*", "public/assets/*", "public/index.html"]
-       tools: [read, edit, write, grep, glob, list, bash]
-       skill: docs/skills/visual.md  # project skill doc, added to the generic one
-     docs:
-       allowed_paths: ["*.md", "docs/*"]
-   visual_review:
-     viewport: [390, 844]
-     screens:
-       - {name: home, url: index.html}
-     capture: "node tests/screens/capture.js {out_dir} {screens} {width} {height}"
-   images:
-     style: "flat vector illustration, soft shadows, pastel background"
-     width: 768
-     height: 768
-   ```
-
-   For a Python project the planner keys would be, for example,
-   `test_suffixes: [".py"]`, `syntax_check: "python -m py_compile {path}"` and
-   `test_command_examples: ["python -m pytest -q {path}"]`. Other optional keys:
-   `broken_test_markers` (output that means a drafted test is itself broken) and
-   `ignore_paths` (directories hidden from the planner's file list).
-
-4. **Connect GitHub**: create the GitHub App, protect `main` and, if the project has a
-   `site_dir`, enable Pages, as described in [docs/GITHUB-SETUP.md](docs/GITHUB-SETUP.md).
-   Then run `ms github check`.
-
-5. **Fill the backlog and plan**: `ms backlog example-app add "First epic"`, then
-   `ms chat example-app` and "plan epic 1 from the backlog".
-
-A project without `auto_integrate: true` is never run by the service. A project without
-`github.site_dir` gets no preview site; only `develop` is pushed.
-
-## Daily workflow
-
-| Step | Action | Command |
-| --- | --- | --- |
-| 1. Plan | Add epics to the backlog; ask the planner to plan one; answer its questions, run `check`, then `approve` | `ms backlog <project>`, `ms chat <project>` |
-| 2. Overnight | The service works through approved tasks in backlog order until the backlog or the daily cap runs out, then sends one summary | — |
-| 3. Morning | Read the summary (done, blocked, screenshots, cost, what needs you) | `ms report --summary` |
-| 4. Decide | Pick generated images, approve lessons, revise blocked tasks | `ms pick …`, `ms lessons <project>`, `ms chat <project>` |
-| 5. Review | Open the preview and follow each task's manual-check steps | the preview URL |
-| 6. Release | Open the release pull request, review it, merge it on GitHub | `ms release <project>` |
-
-`ms status` shows the same "needs you" list at any time.
-
-The loop is the same for any software project. For a web app or game, the review step is
-the deployed preview; for a CLI tool or library, it is the diff on `develop` and the run
-report (`ms report`).
-
-## Phone workflow (Telegram)
-
-After [setting up the bot](docs/TELEGRAM-SETUP.md) (`ms telegram pair`), the whole
-loop works from a phone:
-
-| When | In Telegram |
-| --- | --- |
-| Evening | Send the request as a message or a `.md` file; answer the planner; `/show`, `/check`, `/approve` (confirm) |
-| Night | Nothing. Only a worker limit that needs a decision arrives, with **Wait / Free / Paid** buttons |
-| Morning | The summary arrives with the preview link and the reviewer's screenshots; `/pick` images, `/lessons` |
-| Any time | `/status`, `/spend`, `/backlog`, `/pause`, `/resume` |
-| Release | `/release` (confirm) sends the pull request link; merge it on GitHub |
-
-The bot answers only the paired owner and only offers fixed actions: nothing typed is
-ever run as a command.
-
-## Command reference
-
-| Command | Description |
-| --- | --- |
-| `ms status [--details]` | Headline per project, items that need you, work finished since you last looked, upcoming work, links and today's spend. Also completes releases merged on GitHub. `--details` lists every task, session and recent event. |
-| `ms chat <project> [--new] [--file <path>]` | Talk to the planner. `approve anyway` also queues tasks the size check flagged. Continues the last open chat unless `--new`; `--file` sends a file as the first message. In-chat commands: `show`, `check`, `approve`, `discard`, `release`, `help`, `quit`. For multi-line input, paste it or put it between two lines containing only `"""`. |
-| `ms release <project>` | Commits a changelog entry to `develop` and opens a pull request `develop` → release branch with generated notes. Merging it approves the release. |
-| `ms report [<session>]` | A run's report: steps, attempts, verdicts, tokens and cost. Defaults to the latest run. |
-| `ms report --summary` | The latest morning summary, with a link to its HTML page (screenshot thumbnails). |
-| `ms backlog <project> [add "<title>" [--summary …] [--priority N] \| priority <epic> <N>]` | List the backlog in priority order; add a proposed epic; change an epic's priority (lower runs first). |
-| `ms lessons <project> [--approve all\|IDS] [--reject IDS\|rest]` | Review lessons workers proposed; only approved lessons are used. |
-| `ms pick <project> <task> <asset> <n>` | Choose one of a task's generated image candidates; it is committed and the task can run. |
-| `ms split <project> <task> draft ["guidance"] \| recheck \| approve [anyway] \| reject \| escalate` | Ask the planner to split a too-big task (again: it continues the pending split), re-run its checks without the model, or decide it (also offered in Telegram). Approving replaces the task in place; its dependents wait for all new tasks. |
-| `ms reopen <project> <task> [--reason …]` | Put a blocked task back in the queue (spec unchanged, recorded); its attempt budget starts over. |
-| `ms telegram pair\|status\|test\|unpair` | Pair the Telegram bot with your account (one-time code), check it, send a test message, or forget the owner. |
-| `ms limit <project> [wait\|free\|paid]` | Show or answer a worker limit: wait for the reset, switch to the next free worker profile, or use the paid one (counts toward the daily cap). |
-| `ms publish <project>` | Push `develop` and the preview site now (the service also does this after every run). |
-| `ms pause` / `ms resume` | Start no new work (a running task finishes) / allow new work. |
-| `ms stop` | Stop the current run now, keeping its work, and pause. |
-| `ms doctor` | A diagnostic block to paste into an issue or an AI chat. Keys, tokens and the notification topic are redacted. |
-| `ms notify setup` / `test` / `send "<text>" [--link <url>]` | Create the notification topic, send a test, or send a one-line message. |
-| `ms github setup --app-id <id>` / `ms github check` | Record the GitHub App id; check the App, rulesets and Pages. |
-| `ms service install` / `uninstall` | Install and start, or remove, the systemd user service. |
-| `ms install` | Install the `ms` wrapper to `~/.local/bin/ms`. |
-| `ms daemon [--once]` | The service loop itself (run by systemd). |
-
-Every command accepts `--config <path>` before the subcommand. Lower-level tools (start,
-resume, integrate, task edits) are available through `python -m core.run_cli --help`.
-
-### Notifications
-
-Notifications go to Telegram when a bot is set up and paired, otherwise (or if a
-Telegram send fails) to ntfy. By default the service sends one **Morning summary** when its work runs out (the
-backlog is done or waits for you, or the daily cap is reached). With
-`[daemon] batch_notifications = true` it also notifies after every run and item:
-
-| Title | Meaning | Action |
-| --- | --- | --- |
-| `Morning summary` | Done, blocked, screenshots, cost and what needs you since the service started working | `ms report --summary` |
-| `<project>: batch done` (batch mode) | Tasks finished and are in the preview | Review the preview |
-| `<project>: run finished` (batch mode) | A run ended without finishing a task | None, unless it repeats |
-| `<project>: needs you` (batch mode) | A run made no progress, or images wait for your pick | `ms status` |
-| `<project>: <task-id> needs you` (batch mode) | A task used up its attempt budget | Revise or split the task in `ms chat` |
-| `Daily budget reached` | The daily cap was hit without work to summarise; work resumes the next day | None, or raise the cap |
-| `<project>: needs you` (always) | A worker is limited for longer than `max_auto_wait_minutes`, gone, or not set up; the project is paused | `ms limit <project> wait \| free \| paid` |
-| `Worker models need you` (always) | The weekly check found a free model that is gone or no longer free | Change `[worker] workers` or the profiles |
-| `<project>: release` | A release was published, or a release pull request was closed | None |
-| `Master System service stopped` | The service exited; systemd restarts it | If it repeats: `ms doctor` |
-
-## Configuration
-
-Settings live in `~/.config/master-system/config.toml`. Every key is optional.
-
-| Section | Key | Default | Meaning |
-| --- | --- | --- | --- |
-| `[master]` | `provider` | `deepseek` | Orchestrating model adapter: `deepseek`, `ollama` or `opencode` |
-| | `model` | `deepseek-v4-flash` | Model name |
-| | `base_url` | adapter default | API endpoint |
-| | `timeout_s` | `180` | Per-call timeout (seconds) |
-| `[planner]` | `provider`, `model`, `base_url` | as `[master]` | Planner model |
-| | `timeout_s` | `300` | Per-call timeout (seconds) |
-| | `chat_usd` | `0.30` | Cost cap per planner chat |
-| | `max_output_tokens` | `16000` | Output tokens per planner reply (a whole epic with tests) |
-| project `planner.max_task_lines` | | `150` | Lines one task may add or change before `check` flags it |
-| `[worker]` | `opencode_bin` | `~/.opencode/bin/opencode` | Worker binary |
-| | `model` | the worker home's default | Passed to the worker as `--model` |
-| | `home` | `~/.local/share/master-system-worker` | The worker's `HOME` and only credential store |
-| | `extra_args` | `[]` | Extra worker arguments |
-| | `node_min_major` | `22` | Minimum Node.js major version put on the worker `PATH` |
-| | `playwright_browsers_path` | `~/.cache/ms-playwright` | Shared Playwright browsers |
-| | `ladder` | `[]` | Worker tiers, cheapest first; empty disables tiers |
-| | `workers` | `[]` | Worker profiles in order of preference; the first is used (per project: `workers` in `project.yaml`) |
-| | `max_auto_wait_minutes` | `120` | A worker limit whose reset is this close is waited for automatically |
-| | `unknown_limit_wait_minutes` | `60` | A limit without a known reset is waited for this long, once |
-| | `model_check_days` | `7` | How often free worker models are checked |
-| | `stall_minutes` | `5` | A worker that changes no file for this long (or is cut off) has stalled: not a failure; 3 stalls in a row wait for you |
-| `[worker.profiles.<name>]` | `model`, `home`, `paid`, `label` | — | One worker profile: model, worker home, whether it costs money, a readable name |
-| `[run]` | `max_steps` | `20` | Master decisions per run |
-| | `max_retries` | `1` | Retries after an unusable model reply |
-| | `max_attempts_per_task` | `3` | Attempts per task within one run |
-| | `attempt_timeout_s` | `1800` | Worker deadline per attempt |
-| | `verification_timeout_s` | `1800` | Acceptance deadline per attempt |
-| | `projects_root` | `~/.config/master-system/projects` | Location of project definitions |
-| `[budget]` | `daily_usd` | `0.50` | Daily cap: Master, planner and paid workers |
-| | `run_usd` | `0.20` | Cap per service run |
-| `[daemon]` | `interval_s` | `300` | Service polling interval (seconds) |
-| | `ntfy_server` | `https://ntfy.sh` | Notification server |
-| | `batch_notifications` | `false` | Notify after every run and item; off: one summary when the work runs out |
-| `[reviewer]` | `provider` | `deepseek` | Visual reviewer: `deepseek`, or `none` to switch it off |
-| | `model` | `deepseek-flash` | A vision-capable model |
-| | `base_url`, `timeout_s` | adapter default, `120` | |
-| | `detail` | `high` | Image detail: `high`, or `low` (512 px, cheaper) |
-| `[images]` | `providers` | `["pollinations", "cloudflare"]` | Image providers, tried in order |
-| | `pollinations_model` | `zimage` | Pollinations model |
-| | `cloudflare_model` | `@cf/black-forest-labs/flux-1-schnell` | Workers AI model |
-| | `timeout_s` | `120` | Per-image timeout |
-| `[github]` | `app_id` | — | GitHub App id |
-| | `key_path` | `~/.config/master-system/github-app.pem` | GitHub App private key |
-| `[prices]` | `"<model>" = { input, output, cached_input }` | DeepSeek prices (peak) | USD per million tokens, used for caps and reports |
-
-**Worker limits.** A worker attempt that hits a provider limit (rate limit, quota, model
-gone or no longer free, missing credential) ends as `limited`: not verified, not a
-failure, no cost. The reset time is read from the provider's answer when it gives one.
-A known reset within `max_auto_wait_minutes` pauses the project until then (plus two
-minutes) and the same worker continues; an unknown reset is waited for once
-(`unknown_limit_wait_minutes`). Anything longer, and any model that is gone or not set
-up, pauses the project and asks: `ms limit <project> wait | free | paid`. Waits and
-pending choices appear in `ms status` and the morning summary; other projects keep
-working. Example worker order:
-
-```toml
-[worker]
-workers = ["big-pickle", "space-bunny", "deepseek-flash"]
-
-[worker.profiles.big-pickle]
-model = "opencode/big-pickle"
-label = "Big Pickle"
-
-[worker.profiles.space-bunny]      # free, zero data retention
-model = "opencode/space-bunny-free"
-label = "Space Bunny"
-
-[worker.profiles.deepseek-flash]   # paid: needs its own spend-limited key
-model = "deepseek/deepseek-flash"
-home = "~/.local/share/master-system-worker-paid"
-paid = true
-label = "DeepSeek Flash"
-```
-
-A paid profile needs a credential in its own worker home:
-`HOME=~/.local/share/master-system-worker-paid opencode auth login`.
-
-**Visual review cost.** With `deepseek-flash`, a review of three phone screenshots plus
-the task and a 6000-character direction is about 6–8k input and 300 output tokens:
-about $0.002–0.003 at peak prices, half that off-peak. Reviews count toward the daily cap.
-
-**Caps.** The service stops working on a task after 3 failed attempts since the last
-human change to it (2 per tier when tiers are enabled), starts no run once the daily cap
-is reached, and bounds each run by `min(run_usd, remaining daily budget)`. After changing
-the configuration, restart the service once `ms status` reports Idle:
-`systemctl --user restart master-system.service`.
-
-**Secrets** never go in `config.toml`:
-
-| File | Content |
-| --- | --- |
-| `~/.config/master-system/master.env` (mode 600) | `DEEPSEEK_API_KEY=…` for the Master, planner and reviewer; `TELEGRAM_BOT_TOKEN=…` for the bot; `POLLINATIONS_API_KEY=…` and/or `CLOUDFLARE_ACCOUNT_ID=…`, `CLOUDFLARE_API_TOKEN=…` for images |
-| `~/.config/master-system/github-app.pem` (mode 600) | The GitHub App private key |
-| `~/.config/master-system/ntfy-topic` (mode 600) | The private notification topic |
-| The worker home | The worker's own, ideally spend-limited, model credential |
-
-Per-project options (`repository`, `base_branch`, `auto_integrate`, `github`, `planner`,
-`direction`, `task_types`, `visual_review`, `images`) are shown in
-[Adding a project](#adding-a-project).
-
-## Safety model and trust boundaries
-
-| Boundary | Enforcement |
-| --- | --- |
-| Models only propose; one component writes project state | `core/master.py` is the single writer; boundary tests |
-| Worker output is untrusted | Worker state updates are never applied; raw output is stored as provenance and never shown to the orchestrating model |
-| The definition of done is independent of the worker | Acceptance commands and protected paths are set by a human or the approved planner flow and run by the orchestrator's verifier |
-| Evidence is bound to the spec | Every attempt carries a `spec_hash`; changing the spec invalidates a pass |
-| Isolation | One git worktree per attempt; runtime state outside every workspace |
-| No secrets for workers | An allowlisted environment: toolchain `PATH`, a dedicated worker home, no keys |
-| Bounded execution | `timeout --kill-after` in a separate process group; one run per project (`flock`) |
-| Intent before side effects | Decisions and attempt starts are recorded before they act; interrupted attempts are never replayed |
-| The release branch is human-only | The GitHub App has no Administration permission; a ruleset on `main` requires a pull request and allows no bypass |
-| One phone owner, fixed actions | The Telegram bot answers only the user paired with a one-time code, offers fixed operations behind single-use buttons, asks to confirm approvals, releases and limit choices, and has no payment actions |
-| Least-privilege publishing | One-hour installation tokens, passed only to the `git push` that needs them |
-| Work stays within its type | A task's type freezes `allowed_paths` into its acceptance (the verifier fails changes elsewhere) and limits the worker's tools through a per-attempt OpenCode config |
-| The direction is not the worker's to change | The direction document is a protected path of every planned task |
-| Reviewers can only say no | The visual reviewer can turn a pass into a fail, never the reverse; an unavailable reviewer changes nothing |
-| Nothing unapproved is remembered | Lessons from workers are used only after the owner approves them |
-| Image keys stay with the orchestrator | Images are generated by the service, not by workers; a multi-candidate image is committed only after the owner's pick |
-| Limits are not failures | A `limited` attempt is never verified or counted; switching to another worker, and any paid worker, needs the owner's choice |
-| Spend | Daily, per-run, per-chat and per-task caps; reviews count toward the daily cap |
-
-**Known limitation:** workers run as the same OS user as the system. Worktrees isolate
-files, not authority; an OS-level sandbox is on the roadmap. See
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#safety-rules-and-trust-boundaries).
-
-## Troubleshooting
-
-Start with `ms status`, which states in plain words what needs attention. Symptoms and
-fixes are listed in **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)**. For anything
-else, run `ms doctor` and include its output when asking for help.
-
-## Roadmap
-
-| Milestone | Scope | State |
-| --- | --- | --- |
-| 1. Contain and verify | Worktree per attempt, locking, deadlines, acceptance verifier, spec-bound evidence | Done |
-| 2. Run it for real | Run CLI, real worker, reports from history, cost accounting | Done |
-| 3. Hands-off | Background service, auto-integration, preview publishing, planner, releases, worker tiers | Done |
-| 4. From direction to overnight work | Project direction, backlog, task types, shared lessons, visual reviewer, generated images, morning summary, whole-epic planning | Done |
-| Next | Policy by state transition, out-of-run approvals, unified attempt budgets | Planned |
-| 5. Durable runtime | Evaluate DBOS in place of homemade durable execution | Planned |
-| 6. Focused context | Per-task digests, versioned prompts | Partly done (direction, lessons) |
-| Later | OS-level worker sandbox; self-hosting | Planned |
-
-Changes are listed in [CHANGELOG.md](CHANGELOG.md), design decisions in
-[docs/DECISIONS.md](docs/DECISIONS.md).
-
-## Development
+Make a dedicated clone of a small repository with a `develop` branch and a test command
+that works on the worker `PATH`, for example `~/managed/demo`. Then describe it:
 
 ```bash
-uv sync --extra dev
-uv run python -m pytest -q        # full offline suite
+mkdir -p ~/.config/master-system/projects/demo
+cp "$MS_HOME"/examples/projects/example-app/*.yaml ~/.config/master-system/projects/demo/
 ```
 
-The module map, contribution rules and documentation policy are in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#developing).
+Edit the three files: `tasks: []` and `milestones: []`; in `project.yaml` set `id: demo`,
+`repository: ~/managed/demo`, remove the `github` section, and set the planner's test
+conventions:
+
+```yaml
+planner:                                     # a Node project
+  test_dir: tests/tasks
+  test_suffixes: [".test.js"]
+  syntax_check: "node --check {path}"
+  test_command_examples: ["node --test {path}"]
+  setup: ["npm ci --no-audit --no-fund"]
+  base_checks: ["npm test"]
+---
+planner:                                     # a Python project: pytest in a project venv
+  test_dir: tests/tasks
+  test_suffixes: [".py"]
+  syntax_check: "python3 -m py_compile {path}"
+  test_command_examples: [".venv/bin/python -m pytest -q {path}"]
+  setup: ["python3 -m venv .venv", ".venv/bin/pip install -q pytest"]
+  base_checks: [".venv/bin/python -m pytest -q tests/unit"]
+```
+
+The setup commands are also the first acceptance commands of every planned task. The
+repository's `.gitignore` should cover what they create (`node_modules/`, `.venv/`):
+the orchestrator commits everything a worker leaves in its worktree.
+
+Then plan, approve and run one cycle:
+
+```bash
+ms backlog demo add "A first small change"
+ms chat demo          # "plan epic 1 from the backlog", then `check`, then `approve`
+ms daemon --once      # one service cycle in the foreground
+ms report             # attempts, verdicts, tokens and cost
+git -C ~/managed/demo log --oneline develop
+ls ~/.local/share/master-system-worktrees/demo/
+```
+
+Without a `github` section nothing is pushed; with one but no GitHub App, publishing is
+skipped with a message. **Clean up:** remove `~/.config/master-system`,
+`~/.local/share/master-system`, `~/.local/share/master-system-worktrees`,
+`~/.local/share/master-system-worker`, `~/.local/bin/ms` and the dedicated clone.
+
+Full setup (the service, GitHub, Telegram): [docs/REFERENCE.md](docs/REFERENCE.md),
+[docs/GITHUB-SETUP.md](docs/GITHUB-SETUP.md), [docs/TELEGRAM-SETUP.md](docs/TELEGRAM-SETUP.md).
+
+## Try to break it
+
+I want bypasses, not compliments. In order of priority: (1) work marked done or
+integrated that did not meet its acceptance; (2) `develop` or `main` changed without the
+required gate; (3) secrets reaching a worker's environment or logs; (4) crash and
+recovery bugs: replay, lost work, a stuck lock; (5) setup failures; (6) documentation
+errors.
+
+| Target | What to try | Expected behaviour per the code | Where to look |
+| --- | --- | --- | --- |
+| Fake success | Have the worker report success without passing the test | `command_failed`; the task is not completed | `ms report`, history |
+| Protected tests | Edit, delete or rename a file under `tests/` | `protected_path` finding, verdict fail | `ms report` |
+| Type paths | Make a `docs` task touch `src/` | `outside_allowed_paths` finding, verdict fail | `ms report` |
+| Ignored files | Leave a file ignored by `.gitignore` or `.git/info/exclude` that changes a test's outcome | **Known gap V1**; report new routes only | `ms report`, `git -C <clone> log develop` |
+| Moving `develop` | `git update-ref refs/heads/develop <sha>` from the worktree | **Known gap V2** | `git -C <clone> log develop` |
+| Process escape | `setsid` a process that outlives the attempt | **Known gap N1** | `ps` |
+| Crash | `kill -9` the run during an attempt | The attempt becomes `interrupted` and is not replayed | `ms report`, history |
+| Concurrent change | Commit to `develop` by hand during a run | Replay onto the new tip and re-verification, or `integration_refused` and a new attempt | `git log`, history |
+| Prompt injection | Instructions in task text, `DIRECTION.md` or repository files aimed at the planner or orchestrating model | Never completed without a pass or integrated without the gate; cancelling or retitling is possible (gap H2, known) | history |
+| Trivial tests | Get the planner to draft tests that fail now but pass trivially | Nothing stops this except human review of the draft | `ms chat` → `show` |
+| Spend | Push spend past the caps | Caps are checked between steps; one call in flight can overshoot | `ms status`, `ms report` |
+| Release | Change `develop` after the release pull request opens | The pull request shows the new commits; after a merge, the release is tagged only if the merge's tree equals the pull request head's tree at merge time, so commits added after opening are released if the human merges | `ms status`, GitHub |
+
+Already known, so please report these only if you find a new route: ignored or excluded
+files (V1), moving `develop` from a worktree (V2), `setsid` escapes and anything else that
+follows from workers running as your user (N1), and the orchestrating model cancelling or
+retitling tasks (H2). The full list is in [known gaps](docs/ARCHITECTURE.md#known-gaps).
+
+**Useful feedback includes:** the master-system commit; `ms doctor` output (it redacts
+secrets); `ms report` for the run; the task's YAML; the attempt id; expected versus actual
+behaviour; and whether the worker ran as a separate user. Use title prefixes `[bypass]`,
+`[recovery]`, `[setup]` or `[docs]` in [issues](https://github.com/f0rrel/master-system/issues).
+
+## Used in practice
+
+The system develops [Match Legends](https://github.com/f0rrel/Match_Legends_mobile_game),
+a hex match-3 web game. Its `develop` branch has commits authored by `master-system`
+(task commits titled `ml-N: …`, earlier ones titled `attempt <id>`) and by
+`Master System planner` (acceptance tests); at the time of writing, 14 and 2 of them
+([commit list](https://github.com/f0rrel/Match_Legends_mobile_game/commits/develop)).
+Release [`v0.1`](https://github.com/f0rrel/Match_Legends_mobile_game/releases/tag/v0.1)
+is the merge of pull request #1 from `develop`. Preview of `develop`:
+<https://f0rrel.github.io/Match_Legends_mobile_game/develop/>; released version:
+<https://f0rrel.github.io/Match_Legends_mobile_game/>.
+
+<!-- TODO: real per-task cost figures -->
+
+## Status and limitations
+
+- Single user, one machine, Linux; the background service is a systemd user unit.
+- Model-agnostic by design (adapters; boundary tests forbid provider names above them);
+  the tested configuration is DeepSeek for planning, orchestration and review, and
+  OpenCode for the worker.
+- Not a sandbox: workers run as your user, and the
+  [known gaps](docs/ARCHITECTURE.md#known-gaps) list the consequences.
+- Next: policy by state transition, approvals outside a run and unified attempt budgets;
+  later, an evaluation of DBOS for durable execution and an OS-level worker sandbox. See
+  [CHANGELOG.md](CHANGELOG.md), [docs/DECISIONS.md](docs/DECISIONS.md) and the
+  [roadmap](docs/REFERENCE.md#roadmap).
+
+Operational features, described in [docs/REFERENCE.md](docs/REFERENCE.md):
+
+- [Telegram bot](docs/REFERENCE.md#phone-workflow-telegram): the phone interface, paired to one owner.
+- [ntfy notifications](docs/REFERENCE.md#notifications): the fallback channel.
+- [Backlog](docs/REFERENCE.md#daily-workflow): epics in priority order, planned one at a time.
+- [Generated images](docs/REFERENCE.md#adding-a-project): candidates the owner picks for visual tasks.
+- [Lessons](docs/REFERENCE.md#command-reference): worker suggestions used only after approval.
+- [Worker limits and tiers](docs/REFERENCE.md#configuration): waits, owner choices, escalation.
+- [Morning summary](docs/REFERENCE.md#notifications): one report when the work runs out.
+
+## For engineers
+
+Code entry points:
+
+- `core/task_orchestrator.py`: one attempt: worktree, worker, snapshot commit, verification.
+- `core/acceptance_verifier.py`: the definition of done, checked on the committed result.
+- `core/evidence.py`: `spec_hash`, the completion gate and the facts the orchestrating model sees.
+- `core/reasoning.py`: the operation allowlist and the approval policy.
+- `core/autonomous_loop.py`: one run: model proposal, policy, execution, stop conditions.
+- `core/attempts.py` and `core/auto_integrate.py`: integration, replay and re-verification.
+- `core/worker_env.py` and `core/worker_process.py`: the worker's environment and process control.
+- `core/planner_checks.py`: the fail-first check and approval.
+
+Tests that encode the trust model: `tests/test_acceptance_verifier.py`,
+`tests/test_evidence.py`, `tests/test_verification_boundary.py`,
+`tests/test_backend_boundaries.py`, `tests/test_worker_env.py`,
+`tests/test_approval_policy.py`.
+
+```bash
+uv sync --extra dev && uv run python -m pytest -q   # about 1,470 offline tests, about a minute and a half
+```
+
+More: [ARCHITECTURE](docs/ARCHITECTURE.md), [DECISIONS](docs/DECISIONS.md),
+[TROUBLESHOOTING](docs/TROUBLESHOOTING.md), [CHANGELOG](CHANGELOG.md). `archive/` holds
+early experiments that the code does not use.
 
 ## License
 
 [MIT](LICENSE)
-
----
-
-## Author's setup (personal, not part of the system)
-
-This section describes the author's own installation. It is not needed to use the system.
-
-**Managed projects**
-
-| Project | Preview (`develop`) | Live (`main`) |
-| --- | --- | --- |
-| [Match Legends](https://github.com/f0rrel/Match_Legends_mobile_game) (mobile web game) | <https://f0rrel.github.io/Match_Legends_mobile_game/develop/> | <https://f0rrel.github.io/Match_Legends_mobile_game/> |
-
-Releases: <https://github.com/f0rrel/Match_Legends_mobile_game/releases>
-
-**Machine notes**
-
-- `$MS_HOME` is `~/AI/master-system` (branch `main`); the service runs from this checkout.
-- Project definitions: `~/.config/master-system/projects/` (`match-legends`, and
-  `ai-system`, the system's own backlog, which has no `auto_integrate` and is never run).
-- Managed clone: `~/AI/managed/match-legends`. Its push URL is disabled; pushes go through
-  the GitHub App.
-- Daily cap: `$0.60`. Worker: OpenCode's free default model only (tiers off).
-- Match Legends: direction in its repository (`docs/DIRECTION.md`), screenshots by
-  `tests/screens/capture.js`, backlog of eight epics. Image generation waits for a
-  Pollinations key in `master.env`.
-- Node.js 22 for workers is installed through nvm; the system Node.js is left untouched.

@@ -5,6 +5,14 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Documentation
+- README rewritten for visitors, engineers and external testers: what it is, what makes
+  it different, how a task flows, a worked example, the trust model, a local trial, a
+  "Try to break it" guide, real use, status and code entry points. Reference material
+  (requirements, setup, project definitions, commands, notifications, configuration,
+  the safety table, the roadmap) moved to `docs/REFERENCE.md`, with fresh-install fixes
+  and corrected statements. Gaps V1 and V2 added to `docs/ARCHITECTURE.md`.
+
 ### Right-sized tasks
 - Fixed: a reopened task could be blocked again at once, because the Master still saw
   its attempts from before the reopen. The Master now sees only attempts since the
