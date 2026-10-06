@@ -159,8 +159,17 @@ def make_approver(master, history, paths, checker, git=None):
                  "--", *test_paths], worktree, extra_env=IDENTITY)
             commit = git(["rev-parse", "HEAD"], worktree)
             fast_forward(repo, branch, result["base_sha"], commit)
-            master.add_planned_work(project_id, {"id": epic["id"], "name": epic["title"]},
-                                    records)
+            if draft.get("replaces"):
+                master.split_task(project_id, draft["replaces"], records)
+                history.append(
+                    type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex,
+                    project_id=project_id, task_id=draft["replaces"],
+                    payload={"actor": ACTOR, "action": "split", "chat_id": chat_id,
+                             "draft_hash": draft_hash,
+                             "replaced_by": [r["id"] for r in records]})
+            else:
+                master.add_planned_work(project_id, {"id": epic["id"], "name": epic["title"]},
+                                        records)
             for record in records:
                 history.append(
                     type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex,

@@ -45,6 +45,7 @@ COMMANDS = {
     "pick": "Choose generated images",
     "lessons": "Review lessons workers proposed",
     "limit": "Answer a worker limit",
+    "splits": "Splits of too-big tasks waiting for you",
     "pause": "Start nothing new",
     "resume": "Allow new work",
     "stop": "Stop the current run now, and pause",
@@ -264,7 +265,7 @@ class BotOps:
 
         project = self.project()
         try:
-            ids = self._chat(project).approve()
+            ids = self._chat(project).approve(size_override=_arg == "anyway")
         except DraftProblem as error:
             return [{"text": esc(str(error))}]
         self.record("planner_approve", project, ids=ids)
@@ -334,8 +335,41 @@ class BotOps:
         code, text = self.ms("limit", project)
         return [{"text": esc(text), "buttons": limit_buttons(project)}]
 
+    def splits_menu(self, _arg=None) -> list:
+        from core.ms import _paths
+        from core.splits import SplitStore
+
+        project = self.project()
+        pending = SplitStore(_paths().state_dir).pending(project)
+        if not pending:
+            return [{"text": "No split waits for a decision."}]
+        escalate = bool(self.config().worker.ladder)
+        return [{"text": esc(f"{task}: the planner drafted a split (/show after /project; "
+                             f"chat {split.get('chat_id')})."),
+                 "buttons": split_buttons(project, task, escalate)}
+                for task, split in pending.items()]
+
+    def split(self, action) -> list:
+        from core.ms import split_decision
+
+        answer = split_decision(self.config(), action["project"], action["task"],
+                                action["decision"], actor="telegram",
+                                size_override=bool(action.get("anyway")))
+        return [{"text": esc(answer)}]
+
     def limit(self, action) -> list:
         return [{"text": esc(self.ms("limit", action["project"], action["choice"])[1])}]
+
+
+def split_buttons(project: str, task: str, escalate: bool = False) -> list:
+    buttons = [("Approve", {"op": "split", "project": project, "task": task,
+                            "decision": "approve"}),
+               ("Reject", {"op": "split", "project": project, "task": task,
+                           "decision": "reject"})]
+    if escalate:
+        buttons.append(("Escalate", {"op": "split", "project": project, "task": task,
+                                     "decision": "escalate"}))
+    return buttons
 
 
 def limit_buttons(project: str) -> list:
@@ -371,9 +405,12 @@ class TelegramBot:
             "show": ops.show, "check": ops.check, "discard": ops.discard,
             "pick": ops.pick_menu, "lessons": ops.lessons_menu, "limit": ops.limit_menu,
             "pause": ops.pause, "resume": ops.resume, "stop": ops.stop, "doctor": ops.doctor,
+            "splits": ops.splits_menu,
         }
         self._actions = {"pick": ops.pick, "lesson": ops.lesson, "limit": ops.limit,
-                         "approve": lambda a: ops.approve(), "release": lambda a: ops.release()}
+                         "split": ops.split,
+                         "approve": lambda a: ops.approve("anyway" if a.get("anyway") else None),
+                         "release": lambda a: ops.release()}
 
     # --- the loop ---
 
@@ -438,10 +475,13 @@ class TelegramBot:
             return
         if command in ("approve", "release"):
             project = self.ops.project()
-            what = ("Approve the planner's draft and queue its tasks?" if command == "approve"
-                    else "Open the release pull request (develop → main)?")
+            anyway = command == "approve" and arg == "anyway"
+            what = ("Approve the planner's draft and queue its tasks" + (
+                ", including tasks flagged too big?" if anyway else "?")
+                if command == "approve"
+                else "Open the release pull request (develop → main)?")
             self.send(chat, [{"text": esc(f"{project}: {what}"), "buttons": [
-                ("Confirm", {"op": command, "confirmed": True}),
+                ("Confirm", {"op": command, "confirmed": True, "anyway": anyway}),
                 ("Cancel", {"op": "cancel"})]}])
             return
         handler = self._commands.get(command)
@@ -466,11 +506,16 @@ class TelegramBot:
         if op == "cancel":
             self.api.send_message(chat, "Cancelled.")
             return
-        needs_confirm = op in ("approve", "release") or (op == "limit")
+        needs_confirm = op in ("approve", "release", "limit") or (
+            op == "split" and action.get("decision") in ("approve", "escalate"))
         if needs_confirm and not action.get("confirmed"):
             label = {"wait": "Keep waiting for the reset", "free": "Switch to the next free worker",
                      "paid": "Use the paid worker (counts toward the daily cap)"}.get(
                 action.get("choice"), op)
+            if op == "split":
+                label = {"approve": f"Replace {action['task']} with the drafted split",
+                         "escalate": f"Run {action['task']} again on the strongest worker"}[
+                    action["decision"]]
             self.send(chat, [{"text": esc(f"{action.get('project', '')}: {label}?"),
                               "buttons": [("Confirm", {**action, "confirmed": True}),
                                           ("Cancel", {"op": "cancel"})]}])

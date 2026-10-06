@@ -360,6 +360,9 @@ def render_draft(draft, check=None, width: int = 100) -> str:
                          + (f" (priority {priority})" if priority is not None else ""))
             if entry.get("summary"):
                 lines += _wrap(entry["summary"], width, "      ")
+    if draft.get("replaces"):
+        lines.append(f"SPLIT OF {draft['replaces']}: approving cancels it, adds the tasks below "
+                     "in its place, and its dependents wait for all of them.")
     if epic or draft.get("tasks"):
         lines.append(f"EPIC {epic.get('id')}: {epic.get('title')}")
     if epic.get("description"):
@@ -428,6 +431,9 @@ limited output each, so bigger work MUST be an ordered sequence of tasks with de
 (for example: the module skeleton with the first two items, then two more items per \
 task). Each task's tests check only that task's part. Give every task "estimate_lines", \
 your estimate of the lines it adds or changes.
+- SPLIT: when asked to split an existing task X, put "replaces": "X" in the draft, keep \
+draft.epic.id as X's epic, and draft the ordered replacement tasks (new ids, depends_on \
+in order, each with its own tests). Tasks that depended on X will depend on all of them.
 - Prefer independent tasks; use depends_on only when one task truly needs another.
 - Task ids: continue the project's numbering; the next free ids are {next_ids}. The epic id \
 is a short slug like "epic-search".
@@ -463,7 +469,8 @@ Answer with ONE JSON object only:
 {{"reply": "what you say to the owner (short, plain words)",
   "questions": ["..."],
   "read_files": ["path", ...],
-  "draft": null or {{"backlog": [{{"id": "epic-...", "title": "...", "summary": "...",
+  "draft": null or {{"replaces": null or "task id",
+            "backlog": [{{"id": "epic-...", "title": "...", "summary": "...",
                          "priority": 1}}],
             "epic": {{"id": "...", "title": "...", "description": "..."}},
             "tasks": [{{"id": "...", "title": "...", "type": "developer|visual|logic|docs",
@@ -738,10 +745,23 @@ class PlannerChat:
 
     def problems(self) -> list:
         status = self._master.status(self.project_id)
-        return draft_problems(self.state.draft, {t["id"] for t in status["tasks"]},
-                              {m["id"] for m in status["milestones"]},
-                              planner_settings(self._project()),
-                              plannable_epics=plannable_epics(status))
+        plannable = set(plannable_epics(status))
+        problems = []
+        replaces = (self.state.draft or {}).get("replaces")
+        if replaces:
+            old = next((t for t in status["tasks"] if t.get("id") == replaces), None)
+            epic = ((self.state.draft or {}).get("epic") or {}).get("id")
+            if old is None or old.get("status") not in ("planned", "in_progress", "blocked"):
+                problems.append(f"the draft replaces {replaces}, which is not an open task")
+            elif epic != old.get("milestone"):
+                problems.append(f"a split of {replaces} stays in its epic "
+                                f"{old.get('milestone')}: set draft.epic.id to it")
+            else:
+                plannable.add(epic)
+        return problems + draft_problems(
+            self.state.draft, {t["id"] for t in status["tasks"]},
+            {m["id"] for m in status["milestones"]}, planner_settings(self._project()),
+            plannable_epics=plannable)
 
     def check(self) -> dict:
         problems = self.problems()

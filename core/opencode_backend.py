@@ -99,6 +99,8 @@ def build_prompt(task: Mapping, briefing: Optional[Mapping] = None) -> str:
     parts.append(f"Title: {task.get('title') or task_id or 'task'}")
     if briefing.get("type"):
         parts.append(f"Task type: {briefing['type']}")
+    if briefing.get("recovery"):
+        parts.append(briefing["recovery"])
     if task.get("description"):
         parts.append(f"Description:\n{task['description']}")
     if briefing.get("skill"):

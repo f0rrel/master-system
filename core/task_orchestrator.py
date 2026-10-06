@@ -218,8 +218,16 @@ class TaskOrchestrator:
         lessons = LessonStore(self._master.project_state(project_id).project_path)
         briefing.update(type=task_type, skill=skill_text(project, settings),
                         lessons=lessons.for_prompt(task_type))
+        if self._history is not None:
+            from core.splits import recovery_note
+
+            note = recovery_note(self._history, project_id, task.get("id"))
+            if note:
+                briefing["recovery"] = note
         facts = {"task_type": task_type, "allowed_tools": settings["tools"],
                  "lessons_used": len(briefing["lessons"])}
+        if briefing.get("recovery"):
+            facts["recovery"] = "write incrementally"
         return briefing, facts, opencode_config(settings["tools"])
 
     def prepare(self, project_id: str, task_id: str):

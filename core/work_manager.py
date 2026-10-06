@@ -376,6 +376,56 @@ class WorkManager:
             raise
         return deepcopy(list(tasks))
 
+    def set_task_size(self, task_id, size):
+        """Set a task's size (small, medium, hard): it picks the worker tier. Human-only."""
+        if size not in TASK_SIZES:
+            raise InvalidFieldError(f"Invalid task size: {size}")
+        tasks = deepcopy(self._state.snapshot().tasks_doc)
+        record = _find(tasks.get("tasks", []), task_id, "Task")
+        record["size"] = size
+        write_yaml_atomically(self._tasks_path, tasks)
+        return record
+
+    def split_task(self, task_id, records):
+        """Replace an open task with an ordered sequence of smaller tasks. Human-only.
+
+        The task is cancelled (``replaced_by`` names the new ids), the new records go in
+        its place, and every task that depended on it depends on all of them. All or
+        nothing, like add_planned_work.
+        """
+        snapshot = self._state.snapshot()
+        tasks_doc = deepcopy(snapshot.tasks_doc)
+        tasks = tasks_doc.get("tasks", [])
+        index = next((i for i, t in enumerate(tasks) if t.get("id") == task_id), None)
+        if index is None:
+            raise InvalidFieldError(f"Task not found: {task_id}")
+        old = tasks[index]
+        if old.get("status") not in ("planned", "in_progress", "blocked"):
+            raise InvalidFieldError(f"Task {task_id} is {old.get('status')}; only open or "
+                                    "blocked tasks can be split")
+        existing = {t.get("id") for t in tasks}
+        new_ids = [r.get("id") for r in records]
+        for record in records:
+            if record.get("id") in existing:
+                raise DuplicateRecordError(f"Task already exists: {record.get('id')}")
+            if record.get("milestone") != old.get("milestone"):
+                raise InvalidFieldError("the replacement tasks must stay in the task's epic")
+        old.update(status="cancelled", replaced_by=new_ids)
+        tasks[index + 1:index + 1] = deepcopy(list(records))
+        for task in tasks:
+            deps = task.get("depends_on") or []
+            if task_id in deps and task.get("id") not in new_ids:
+                task["depends_on"] = [d for d in deps if d != task_id] + [
+                    i for i in new_ids if i not in deps]
+        previous = deepcopy(snapshot.tasks_doc)
+        write_yaml_atomically(self._tasks_path, tasks_doc)
+        try:
+            self._state.snapshot()
+        except ValueError:
+            write_yaml_atomically(self._tasks_path, previous)
+            raise
+        return deepcopy(list(records))
+
     def add_backlog_epic(self, epic_id, name, summary=None, priority=None):
         """Add an unapproved backlog epic (status ``proposed``). Human-only."""
         milestones = deepcopy(self._state.snapshot().milestones_doc)

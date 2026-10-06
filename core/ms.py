@@ -13,6 +13,7 @@
     ms limit <project> [wait|free|paid]    answer a worker limit (see ms status)
     ms telegram pair|status|test|unpair    the Telegram bot (the phone interface)
     ms reopen <project> <task> [--reason]  put a blocked task back in the queue (recorded)
+    ms split <project> <task> draft [guidance] | approve [anyway] | reject | escalate
     ms pause | resume          stop or allow new work (a running task finishes)
     ms stop                    stop the current run now, and pause
     ms daemon                  the background service loop (run by systemd)
@@ -116,6 +117,7 @@ def _command_install(args, out):
 def build_daemon(config, config_path):
     from core.daemon import Daemon
     from core.host import subprocess_runner
+    from core.splits import SplitStep, SplitStore
     from core.worker_limits import LimitState
     from core.worker_models import FreeModelCheck, opencode_lister
     from core.images import waiting_tasks
@@ -146,8 +148,13 @@ def build_daemon(config, config_path):
         max_failures=max(3, 2 * len(config.worker.ladder)),
         after_run=[publisher, release_ready_notice(releaser)], is_busy=is_busy,
         preview_url=publisher.preview_url, watchers=[releaser.watch],
-        prepare=[asset_step(config, master, paths, env_file)],
-        waiting=lambda project_id: waiting_tasks(master, project_id),
+        prepare=[asset_step(config, master, paths, env_file),
+                 SplitStep(master, history, paths.state_dir,
+                           lambda project_id, chat_id: build_planner(config, project_id,
+                                                                     chat_id),
+                           notifier, escalate=bool(config.worker.ladder))],
+        waiting=lambda project_id: {**waiting_tasks(master, project_id),
+                                    **SplitStore(paths.state_dir).waiting(project_id)},
         summarize=morning_summary(config, master, history, paths, releaser, publisher),
         limits=LimitState(paths.state_dir),
         checks=[FreeModelCheck(config, paths.state_dir, opencode_lister(config.worker.opencode_bin),
@@ -576,6 +583,13 @@ def owner_needs(master, history, config, project_id, *, stalled=(), pending_rele
                      {n: p.get("label", n) for n, p in config.worker.profiles.items()})
     if limit:
         needs.append(limit)
+    from core.splits import SplitStore
+
+    for task_id, split in SplitStore(_paths().state_dir).pending(project_id).items():
+        needs.append(f"{task_id} was too big for the worker; the planner drafted a split "
+                     f"(chat {split.get('chat_id')}). See it with ms chat {project_id} → show, "
+                     f"then: ms split {project_id} {task_id} approve | reject"
+                     + (" | escalate" if config.worker.ladder else ""))
     pending_lessons = LessonStore(master.project_state(project_id).project_path).pending()
     if pending_lessons:
         needs.append(f"{len(pending_lessons)} lesson(s) from workers wait for your review: "
@@ -1400,6 +1414,78 @@ def _command_reopen(args, out):
     return 0
 
 
+def split_decision(config, project_id, task_id, decision, actor="owner",
+                   size_override=False) -> str:
+    """Approve, reject or escalate a pending split. Returns a plain answer."""
+    import uuid as _uuid
+
+    from core.history import EventType
+    from core.master import Master
+    from core.run_lock import ProjectLock
+    from core.splits import SplitStore
+    from core.sqlite_history import SQLiteHistoryStore
+
+    paths = _paths()
+    store = SplitStore(paths.state_dir)
+    split = store.get(project_id, task_id)
+    if not split:
+        raise ValueError(f"no split of {task_id} waits for a decision")
+    master = Master(config.run.projects_root)
+    history = SQLiteHistoryStore(paths.history_path)
+    if decision == "approve":
+        ids = build_planner(config, project_id, split["chat_id"]).approve(
+            size_override=size_override)
+        store.clear(project_id, task_id)
+        return f"Approved: {task_id} is replaced by {', '.join(ids)}."
+    state = master.project_state(project_id)
+    with ProjectLock(state.project_path, holder=f"{actor} split {decision}"):
+        if decision == "reject":
+            master.update_task(project_id, task_id, status="blocked")
+            answer = (f"Rejected. {task_id} is blocked: change it in ms chat {project_id}, or "
+                      f"ms reopen {project_id} {task_id}.")
+        elif decision == "escalate":
+            if not config.worker.ladder:
+                raise ValueError("escalation needs worker tiers ([worker] ladder)")
+            master.set_task_size(project_id, task_id, "hard")
+            answer = f"{task_id} runs again on the strongest worker tier."
+        else:
+            raise ValueError("choose approve, reject or escalate")
+        history.append(type=EventType.HUMAN_ACTION, run_id=_uuid.uuid4().hex,
+                       project_id=project_id, task_id=task_id,
+                       payload={"actor": actor, "action": f"split_{decision}",
+                                "chat_id": split.get("chat_id")})
+    store.clear(project_id, task_id)
+    return answer
+
+
+def _command_split(args, out):
+    from core.master import EXPECTED_ERRORS, Master
+    from core.planner import DraftProblem
+    from core.run_lock import ProjectBusyError
+    from core.splits import SplitStep
+    from core.sqlite_history import SQLiteHistoryStore
+
+    config = _config(args)
+    try:
+        if args.decision == "draft":
+            for key, value in __import__("core.daemon", fromlist=["load_env_file"]) \
+                    .load_env_file(default_config_path().parent / "master.env").items():
+                os.environ.setdefault(key, value)
+            paths = _paths()
+            master = Master(config.run.projects_root)
+            step = SplitStep(master, SQLiteHistoryStore(paths.history_path), paths.state_dir,
+                             lambda p, c: build_planner(config, p, c), build_notifier(config),
+                             escalate=bool(config.worker.ladder))
+            print(step.draft(args.project, args.task, " ".join(args.text) or None), file=out)
+            return 0
+        print(split_decision(config, args.project, args.task, args.decision, args.actor,
+                             size_override=args.text == ["anyway"]), file=out)
+        return 0
+    except (*EXPECTED_ERRORS, ProjectBusyError, DraftProblem) as error:
+        print(f"error: {error}", file=out)
+        return 1
+
+
 def _command_release(args, out):
     result = build_releaser(_config(args)).prepare(args.project)
     print(result["message"], file=out)
@@ -1568,6 +1654,12 @@ def build_parser():
     backlog.add_argument("--priority", type=int, default=None)
     backlog.add_argument("--id", default=None)
     backlog.set_defaults(handler=_command_backlog)
+    split = commands.add_parser("split", help="Draft or decide a split of a too-big task.")
+    split.add_argument("project")
+    split.add_argument("task")
+    split.add_argument("decision", choices=["draft", "approve", "reject", "escalate"])
+    split.add_argument("text", nargs="*", help="draft: guidance; approve: 'anyway'")
+    split.set_defaults(handler=_command_split)
     reopen = commands.add_parser("reopen", help="Put a blocked task back in the queue.")
     reopen.add_argument("project")
     reopen.add_argument("task")

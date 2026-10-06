@@ -184,6 +184,14 @@ class Master:
         """Add an epic and its fully specified tasks. Human-only (the approved planner flow)."""
         return self._work(project_id).add_planned_work(milestone, tasks)
 
+    def set_task_size(self, project_id, task_id, size):
+        """Set a task's size, which picks its worker tier. Human-only."""
+        return self._work(project_id).set_task_size(task_id, size)
+
+    def split_task(self, project_id, task_id, records):
+        """Replace a task with smaller ones (an approved split). Human-only."""
+        return self._work(project_id).split_task(task_id, records)
+
     def add_backlog_epic(self, project_id, epic_id, name, summary=None, priority=None):
         """Add an unapproved backlog epic. Human-only: not in the operation allowlist."""
         return self._work(project_id).add_backlog_epic(epic_id, name, summary, priority)
