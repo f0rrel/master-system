@@ -55,7 +55,10 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
   Changes beyond the attempt's branch, the stash, remote-tracking refs and the git
   identity fail the attempt with a `repository_tampered` finding, shown in `ms report`
   (gap V2 narrowed). Detection and restoration, not a sandbox.
-- Control-plane git runs without repository hooks or fsmonitor (gap G1 narrowed).
+- Control-plane git runs without repository hooks or fsmonitor, with a minimal
+  environment (no `master.env` keys) and without the global or system git config, so a
+  filter planted in `~/.gitconfig` no longer runs during the snapshot (gap G1 closed).
+  It no longer uses your git credential helper: release fetches are anonymous.
 - Publish guard: develop is pushed (by the publisher and by release preparation) only
   at a tip the system set; otherwise "needs you". `ms publish <project> --accept-tip`
   accepts a deliberate change.

@@ -874,7 +874,7 @@ def doctor_report(args) -> str:
 
     from core.daemon import load_env_file
     from core.host import capture
-    from core.workspace import control_git_argv
+    from core.workspace import control_git_argv, control_git_env
 
     paths = _paths()
     config_path = Path(args.config).expanduser() if args.config else default_config_path()
@@ -897,16 +897,16 @@ def doctor_report(args) -> str:
     except Exception as error:
         node, no_node = None, f"(could not check: {error})"
     section("Versions", "\n".join([
-        f"ms: {capture([*control_git_argv(), '-C', str(REPO), 'describe', '--always', '--dirty', '--tags'])}",
-        f"git: {capture([*control_git_argv(), '--version'])}",
+        f"ms: {capture([*control_git_argv(), '-C', str(REPO), 'describe', '--always', '--dirty', '--tags'], env=control_git_env())}",
+        f"git: {capture([*control_git_argv(), '--version'], env=control_git_env())}",
         f"python: {platform.python_version()} ({sys.executable})",
         f"node (workers): {capture([str(Path(node) / 'node'), '--version']) if node else no_node}",
         f"system: {platform.platform()}"]))
     section("Master System checkout", "\n".join([
         f"path: {REPO}",
-        f"branch: {capture([*control_git_argv(), '-C', str(REPO), 'branch', '--show-current'])}",
-        f"commit: {capture([*control_git_argv(), '-C', str(REPO), 'log', '-1', '--format=%h %s (%cr)'])}",
-        "changes: " + (capture([*control_git_argv(), '-C', str(REPO), 'status', '--short']) or "none")]))
+        f"branch: {capture([*control_git_argv(), '-C', str(REPO), 'branch', '--show-current'], env=control_git_env())}",
+        f"commit: {capture([*control_git_argv(), '-C', str(REPO), 'log', '-1', '--format=%h %s (%cr)'], env=control_git_env())}",
+        "changes: " + (capture([*control_git_argv(), '-C', str(REPO), 'status', '--short'], env=control_git_env()) or "none")]))
     try:
         config = _config(args)
         hint = missing_projects_root(config)

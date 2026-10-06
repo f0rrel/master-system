@@ -191,3 +191,51 @@ def test_the_tip_of_a_restored_ref_is_recorded_so_the_commit_can_be_recovered(tm
 
     found = payload(history, EventType.ATTEMPT_FINISHED)["restored_refs"]
     assert git(repo, "log", "-1", "--format=%s", found["refs/heads/main"]) == "sneak"
+
+
+# --- G1: control-plane git ignores the owner's global git config -------------------------
+
+
+def test_a_filter_in_the_global_git_config_does_not_run_during_the_snapshot(
+        tmp_path, monkeypatch):
+    """A worker runs as the owner and can write ~/.gitconfig; a committed .gitattributes
+    naming a filter defined there must not make the control plane run it."""
+    marker = tmp_path / "global-filter-ran"
+    global_config = tmp_path / "gitconfig"
+    global_config.write_text(f'[filter "evil"]\n\tclean = "touch {marker}; cat"\n')
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+
+    def attributes(path):
+        edit_app(path)
+        (path / ".gitattributes").write_text("*.txt filter=evil\n")
+        (path / "notes.txt").write_text("hello\n")
+
+    result, history, repo, _, _ = run_once(tmp_path, Does(attributes))
+
+    assert not marker.exists()
+    assert "notes.txt" in payload(history, EventType.ATTEMPT_FINISHED)["files_changed"]
+
+
+def test_control_plane_git_gets_a_minimal_environment_without_keys(monkeypatch):
+    from core.workspace import control_git_env
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-secret")
+    monkeypatch.setenv("GIT_DIR", "/elsewhere")
+    env = control_git_env({"GIT_ASKPASS": "/askpass"})
+
+    assert "DEEPSEEK_API_KEY" not in env and "GIT_DIR" not in env
+    assert env["GIT_CONFIG_GLOBAL"] == "/dev/null" and env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert env["GIT_TERMINAL_PROMPT"] == "0" and env["GIT_ASKPASS"] == "/askpass"
+    assert set(env) <= {"PATH", "HOME", "LANG", "LC_ALL", "TZ", "GIT_TERMINAL_PROMPT",
+                        "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_ASKPASS"}
+
+
+def test_host_git_does_not_read_the_global_config(tmp_path, monkeypatch, git_repo):
+    from core.host import git as host_git
+
+    global_config = tmp_path / "gitconfig"
+    global_config.write_text("[alias]\n\towned = status\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+
+    with __import__("pytest").raises(RuntimeError):
+        host_git(["owned"], git_repo)

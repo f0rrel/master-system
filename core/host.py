@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from core.daemon import OBJECTIVE, RunRequest, load_env_file
-from core.workspace import control_git_argv
+from core.workspace import control_git_argv, control_git_env
 
 __all__ = ["capture", "git", "openssl_sign_rs256", "subprocess_runner", "systemctl"]
 
@@ -62,7 +62,7 @@ def subprocess_runner(config_path: Optional[str], env_file: Path, log_dir: Path,
 
 def git(args, cwd, *, extra_env=None, input_text=None, timeout=300) -> str:
     """Run git for the control plane (publishing); raises RuntimeError on failure."""
-    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", **(extra_env or {}))
+    env = control_git_env(extra_env)
     done = subprocess.run(control_git_argv(*args), cwd=str(cwd), capture_output=True, text=True,
                           errors="replace", env=env, input=input_text, timeout=timeout)
     if done.returncode != 0:
@@ -94,11 +94,11 @@ def openssl_sign_rs256(key_path: Path, data: bytes) -> bytes:
     return done.stdout
 
 
-def capture(argv, timeout=30) -> str:
+def capture(argv, timeout=30, env=None) -> str:
     """Output of a diagnostic command (ms doctor); never raises."""
     try:
         done = subprocess.run(argv, capture_output=True, text=True, errors="replace",
-                              timeout=timeout)
+                              timeout=timeout, env=env)
         return (done.stdout + done.stderr).strip()
     except (OSError, subprocess.TimeoutExpired) as error:
         return f"({argv[0]} unavailable: {error})"

@@ -272,11 +272,12 @@ errors.
 
 Already known, so please report these only if you find a new route: changes to the shared
 git directory that take effect before they are undone, or files in it that are not checked
-(V2, narrowed), git configuration outside the repository such as `~/.gitconfig` (G1),
-`setsid` escapes and anything else that follows from workers running as your user (N1),
-and the orchestrating model retitling tasks or changing their status other than to
-completed or cancelled (H2). Ignored files (V1) and
-moving `develop` from a worktree are now defended: a route around either is a bypass. The full list is in [known gaps](docs/ARCHITECTURE.md#known-gaps).
+(V2, narrowed), `setsid` escapes and anything else that follows from workers running as
+your user (N1), and the orchestrating model retitling tasks or changing their status other
+than to completed or cancelled (H2). Ignored files (V1), moving `develop` from a worktree,
+and git hooks or filters (including in `~/.gitconfig`, G1) are now defended: a route
+around any of them is a bypass. The full list is in
+[known gaps](docs/ARCHITECTURE.md#known-gaps).
 
 **Useful feedback includes:** the master-system commit; `ms doctor` output (it redacts
 secrets); `ms report` for the run; the task's YAML; the attempt id; expected versus actual

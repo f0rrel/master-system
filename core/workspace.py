@@ -44,6 +44,7 @@ __all__ = [
     "WorkspaceError",
     "check_isolated",
     "control_git_argv",
+    "control_git_env",
     "control_plane_root",
 ]
 
@@ -101,9 +102,26 @@ def control_git_argv(*args: str) -> list:
     return ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *args]
 
 
+#: Copied from the control plane's environment into control-plane git; nothing else is.
+_GIT_ENV_COPIED = ("PATH", "HOME", "LANG", "LC_ALL", "TZ")
+
+
+def control_git_env(extra: Optional[Mapping[str, str]] = None) -> dict:
+    """The environment of a git command the control plane runs itself.
+
+    Minimal: no keys from master.env, no GIT_* overrides, and no global or system git
+    config (a worker running as the owner can write ``~/.gitconfig``), plus only what
+    the call needs (an identity for a commit, the askpass variables for a push).
+    """
+    env = {name: os.environ[name] for name in _GIT_ENV_COPIED if name in os.environ}
+    env.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+    env.update(extra or {})
+    return env
+
+
 def _git(args: Sequence[str], cwd, check: bool = True,
          extra_env=None, input_text=None) -> subprocess.CompletedProcess:
-    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", **(extra_env or {}))
+    env = control_git_env(extra_env)
     try:
         done = subprocess.run(
             control_git_argv(*args), cwd=str(cwd), capture_output=True, text=True,
