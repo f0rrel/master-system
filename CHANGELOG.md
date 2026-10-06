@@ -11,6 +11,8 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
   README badge.
 - `pyproject.toml`: the package is named `master-system`, described with the README's
   tagline (`uv.lock` updated; no dependency changed).
+- Issue templates for bypasses and setup problems, asking for the fields in the README's
+  "useful feedback" list, and links to the README sections and troubleshooting.
 
 ### The first ten minutes
 - Without a projects root, `ms status` and `ms doctor` print a one-line hint instead of a

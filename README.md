@@ -280,8 +280,10 @@ moving `develop` from a worktree are now defended: a route around either is a by
 
 **Useful feedback includes:** the master-system commit; `ms doctor` output (it redacts
 secrets); `ms report` for the run; the task's YAML; the attempt id; expected versus actual
-behaviour; and whether the worker ran as a separate user. Use title prefixes `[bypass]`,
-`[recovery]`, `[setup]` or `[docs]` in [issues](https://github.com/f0rrel/master-system/issues).
+behaviour; and whether the worker ran as a separate user. The `[bypass]` and `[setup]`
+[issue templates](https://github.com/f0rrel/master-system/issues/new/choose) ask for
+exactly these; use title prefixes `[recovery]` or `[docs]` for other
+[issues](https://github.com/f0rrel/master-system/issues).
 
 ## Used in practice
 

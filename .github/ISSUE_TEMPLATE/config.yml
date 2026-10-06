@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Try to break it (targets and known gaps)
+    url: https://github.com/f0rrel/master-system#try-to-break-it
+    about: What counts as a bypass, what is already known, and what useful feedback includes.
+  - name: Try it (local trial and quickstart)
+    url: https://github.com/f0rrel/master-system#try-it
+    about: Setting up a first local run.
+  - name: Troubleshooting
+    url: https://github.com/f0rrel/master-system/blob/main/docs/TROUBLESHOOTING.md
+    about: Known failure modes and what to run.
