@@ -295,3 +295,55 @@ def test_without_a_syntax_check_the_check_runs_only_the_commands(env):
     result = chat.check()
     assert result["ok"]
     assert not any("syntax" in i["what"] for i in result["items"])
+
+
+# --- P1: a reply that promises to read files must not end the turn ---
+
+
+def test_a_promise_to_read_named_files_reads_them_in_the_same_turn(env):
+    chat = env["chat"]([answer(reply="I'll read greet.js first, then draft the tasks."),
+                        answer(draft(), reply="Here is a plan.")])
+    result = chat.turn("I want greet to say Hi")
+
+    assert result["reply"] == "Here is a plan." and result["draft_changed"]
+    assert len(chat._provider.prompts) == 2
+    assert "FILE greet.js:\nexports.greet" in chat._provider.prompts[1]
+
+
+def test_a_promise_without_files_is_re_asked_once_in_the_same_turn(env):
+    chat = env["chat"]([answer(reply="Let me look at the code first."),
+                        answer(read_files=["greet.js"]),
+                        answer(draft(), reply="Here is a plan.")])
+    result = chat.turn("I want greet to say Hi")
+
+    assert result["reply"] == "Here is a plan." and result["draft_changed"]
+    assert "promised" in chat._provider.prompts[1]
+    assert "FILE greet.js:" in chat._provider.prompts[2]
+    owner_visible = [m["text"] for m in chat.state.messages if m["role"] == "planner"]
+    assert owner_visible == ["Here is a plan."]
+
+
+def test_a_repeated_empty_promise_is_re_asked_only_once(env):
+    chat = env["chat"]([answer(reply="Let me check the files."),
+                        answer(reply="I will check the files now.")])
+    result = chat.turn("hello")
+
+    assert len(chat._provider.prompts) == 2
+    assert result["reply"] == "I will check the files now."
+
+
+def test_an_ordinary_reply_costs_one_call(env):
+    chat = env["chat"]([answer(reply="Noted: greetings stay short.")])
+    assert chat.turn("Keep greetings short")["reply"] == "Noted: greetings stay short."
+    assert len(chat._provider.prompts) == 1
+
+
+def test_the_last_read_round_asks_for_an_answer_without_more_reads(env):
+    chat = env["chat"]([answer(read_files=["greet.js"]), answer(read_files=["README.md"]),
+                        answer(read_files=["tests/tasks/README.md"]),
+                        answer(questions=["Hi or Hello?"], reply="One question.")])
+    result = chat.turn("I want greet to say Hi")
+
+    assert result["questions"] == ["Hi or Hello?"]
+    assert len(chat._provider.prompts) == 4
+    assert "no more files" in chat._provider.prompts[3]

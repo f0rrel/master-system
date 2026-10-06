@@ -63,6 +63,15 @@ SIZES = ("small", "medium", "hard")
 MAX_TASKS = 8
 MAX_TEST_CHARS = 20000
 MAX_FILE_CHARS = 20000
+MAX_ROUNDS = 4  # model calls per owner message: reads, at most one re-ask, the answer
+PROMISE = re.compile(
+    r"\b(i'?ll|i will|i'?m going to|let me|i need to|first,? i)\b[^.!?\n]{0,80}?"
+    r"\b(read|look|check|review|examine|inspect|open|scan|go through)\b", re.IGNORECASE)
+NUDGE = ("SYSTEM NOTE: your previous answer promised to read or check something but did "
+         "nothing, and the owner has not seen it. Do it now, in this answer: list the files "
+         "in read_files, or ask your questions, or give the draft.")
+LAST_ROUND = ("SYSTEM NOTE: no more files can be read in this turn. Answer the owner now "
+              "with what you have: questions, a draft, or both.")
 BROKEN_TEST_MARKERS = ("SyntaxError", "Cannot find module", "ERR_MODULE_NOT_FOUND",
                        "No tests found", "Error: No test files found", "no tests ran",
                        "IndentationError")
@@ -395,7 +404,7 @@ class PlannerChat:
         return content[:MAX_FILE_CHARS] + ("\n...(truncated)" if len(content) > MAX_FILE_CHARS
                                            else "")
 
-    def _context(self) -> str:
+    def _file_list(self) -> list:
         repo, branch = self._repo()
         try:
             files = self._git(["ls-tree", "-r", "--name-only", f"refs/heads/{branch}"],
@@ -403,7 +412,11 @@ class PlannerChat:
         except RuntimeError:
             files = []
         ignored = tuple(planner_settings(self._project())["ignore_paths"])
-        files = [f for f in files if not f.startswith(ignored)][:400]
+        return [f for f in files if not f.startswith(ignored)][:400]
+
+    def _context(self) -> str:
+        _, branch = self._repo()
+        files = self._file_list()
         readme = self.read_file("README.md")[:6000]
         tasks = "\n".join(f"- {t['id']} [{t.get('status')}] {t.get('title')}"
                           for t in self._tasks())
@@ -433,8 +446,13 @@ class PlannerChat:
                                settings)
         extra_files: list = []
         answer = None
-        for _round in range(3):
-            prompt = self._prompt(system, extra_files)
+        note = None
+        nudged = False
+        listing = self._file_list()
+        for round_ in range(MAX_ROUNDS):
+            last = round_ == MAX_ROUNDS - 1
+            prompt = self._prompt(system, extra_files, LAST_ROUND if last else note)
+            note = None
             raw = self._provider.complete(prompt, schema=SCHEMA)
             usage = getattr(self._provider, "last_usage", None)
             cost = self._price(usage)
@@ -445,12 +463,22 @@ class PlannerChat:
                 payload={"chat_id": self.state.chat_id, "usage": usage or {},
                          "reasoner": self._model_label, "cost_usd": cost})
             answer = _parse(raw)
-            wanted = [p for p in answer.get("read_files") or [] if isinstance(p, str)][:6]
-            already = {name for name, _ in extra_files}
-            wanted = [p for p in wanted if p not in already]
-            if not wanted or answer.get("draft"):
+            if answer.get("draft") or last:
                 break
-            extra_files += [(p, self.read_file(p)) for p in wanted]
+            already = {name for name, _ in extra_files}
+            wanted = [p for p in answer.get("read_files") or [] if isinstance(p, str)]
+            if not wanted and not answer.get("questions"):
+                # P1: the files were named in prose instead of read_files.
+                wanted = mentioned_files(answer.get("reply"), listing)
+            wanted = [p for p in wanted if p not in already][:6]
+            if wanted:
+                extra_files += [(p, self.read_file(p)) for p in wanted]
+                continue
+            if stalled(answer) and not nudged:
+                # P1: a promise to act with nothing to act on; ask again, once.
+                note, nudged = NUDGE, True
+                continue
+            break
         changed = False
         if isinstance(answer.get("draft"), dict):
             self.state.draft = answer["draft"]
@@ -462,7 +490,7 @@ class PlannerChat:
         self.save()
         return {"reply": reply, "questions": questions, "draft_changed": changed}
 
-    def _prompt(self, system, extra_files) -> str:
+    def _prompt(self, system, extra_files, note=None) -> str:
         parts = [system, self._context()]
         for name, content in extra_files:
             parts.append(f"FILE {name}:\n{content}")
@@ -473,6 +501,8 @@ class PlannerChat:
             + (("\n  (asked: " + " | ".join(m["questions"]) + ")") if m.get("questions") else "")
             for m in self.state.messages[-20:])
         parts.append("CONVERSATION:\n" + conversation)
+        if note:
+            parts.append(note)
         return "\n\n".join(parts)
 
     # --- check / approve / discard ---
@@ -511,6 +541,25 @@ class PlannerChat:
     def discard(self) -> None:
         self.state.status = "discarded"
         self.save()
+
+
+def mentioned_files(text, files) -> list:
+    """Project files a reply names in prose, in order of appearance."""
+    text = str(text or "")
+    found = []
+    for name in files:
+        match = re.search(r"(?<![\w./-])" + re.escape(name) + r"(?![\w/-])", text)
+        if match:
+            found.append((match.start(), name))
+    return [name for _, name in sorted(found)]
+
+
+def stalled(answer) -> bool:
+    """A reply that promises to act but asks nothing, reads nothing and drafts nothing."""
+    if answer.get("draft") or answer.get("questions") or answer.get("read_files"):
+        return False
+    reply = str(answer.get("reply") or "").strip()
+    return not reply or bool(PROMISE.search(reply))
 
 
 def _parse(raw) -> dict:
