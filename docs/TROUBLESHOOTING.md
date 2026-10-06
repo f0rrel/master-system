@@ -73,6 +73,7 @@ Paths: `$MS_HOME` is the repository; `<clone>` is a managed project's dedicated 
 
 | Problem | Resolution |
 | --- | --- |
+| `ms doctor` showed "(no report: 'Namespace' object has no attribute 'summary')" | Fixed: it shows the last run report, or "No sessions yet." |
 | The Master proposed completion repeatedly for a task whose pass conflicted with newer work | The Master is told the attempt is not integrated; a second refusal stops the run; runs without progress stall the project |
 | The service could pick up the system's own backlog project | Only projects with `auto_integrate: true` are run |
 | The GitHub App could not enable Pages (HTTP 403) | Pages is enabled once by a repository administrator ([GITHUB-SETUP.md](GITHUB-SETUP.md), step 7) |

@@ -662,3 +662,10 @@ def test_install_creates_a_private_projects_root(home, monkeypatch):
     assert root.is_dir()
     assert root.stat().st_mode & 0o777 == 0o700
     assert "ms install" not in run_ms("status")[1]
+
+
+def test_doctor_without_any_run_says_so_instead_of_an_error(home):
+    code, out = run_ms("doctor")
+    report = out.split("### Last run report\n", 1)[1].split("###", 1)[0]
+    assert report.strip() == "No sessions yet."
+    assert "no report:" not in out

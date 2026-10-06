@@ -10,6 +10,8 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
   traceback, and the service idles and logs the hint instead of exiting (systemd no
   longer restarts it every minute). `ms install` creates
   `~/.config/master-system/projects` (mode 700).
+- Fixed: `ms doctor` printed "(no report: 'Namespace' object has no attribute 'summary')"
+  instead of the last run report (or "No sessions yet.").
 
 ### Orchestrator scope
 - The orchestrating model can no longer cancel a task: a proposal to set `cancelled` is

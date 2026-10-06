@@ -922,7 +922,8 @@ def doctor_report(args) -> str:
                      "-o", "short-iso"]))
     report = io.StringIO()
     try:
-        _command_report(argparse.Namespace(config=args.config, session=None), report)
+        _command_report(argparse.Namespace(config=args.config, session=None, summary=False),
+                        report)
     except Exception as error:
         report.write(f"(no report: {error})")
     section("Last run report", report.getvalue())
