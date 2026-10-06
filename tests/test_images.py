@@ -53,7 +53,7 @@ def test_pollinations_sends_the_key_and_returns_the_image():
     assert image == PNG
     [request] = seen
     assert request.full_url.startswith("https://gen.pollinations.ai/image/a%20blob?")
-    assert "model=zimage" in request.full_url and "seed=7" in request.full_url
+    assert "model=flux" in request.full_url and "seed=7" in request.full_url
     assert request.get_header("Authorization") == "Bearer sk_test"
 
 
@@ -204,3 +204,11 @@ def test_ms_pick_commits_the_chosen_candidate(tmp_path, monkeypatch):
     master = Master(root)
     assert missing_assets(master.project_state("sample-project").project(),
                           master.project_state("sample-project").get_task(task_id)) == []
+
+
+def test_provider_defaults_come_from_the_configuration_defaults():
+    from core.images import CloudflareImages, PollinationsImages
+    from core.run_config import ImagesSettings
+
+    assert PollinationsImages("k").model == ImagesSettings().pollinations_model
+    assert CloudflareImages("a", "t").model == ImagesSettings().cloudflare_model

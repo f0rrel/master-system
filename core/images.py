@@ -36,6 +36,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
+from core.run_config import ImagesSettings
+
 
 __all__ = ["ImageError", "PollinationsImages", "CloudflareImages", "build_image_providers",
            "generate", "task_assets", "asset_problems", "missing_assets", "waiting_tasks",
@@ -60,7 +62,8 @@ class ImageError(RuntimeError):
 class PollinationsImages:
     name = "pollinations"
 
-    def __init__(self, api_key: str, model: str = "zimage", timeout: float = 120,
+    def __init__(self, api_key: str, model: str = ImagesSettings.pollinations_model,
+                 timeout: float = 120,
                  opener=urllib.request.urlopen):
         self._key, self.model, self._timeout, self._open = api_key, model, timeout, opener
 
@@ -76,7 +79,7 @@ class CloudflareImages:
     name = "cloudflare"
 
     def __init__(self, account_id: str, api_token: str,
-                 model: str = "@cf/black-forest-labs/flux-1-schnell", timeout: float = 120,
+                 model: str = ImagesSettings.cloudflare_model, timeout: float = 120,
                  opener=urllib.request.urlopen):
         self._account, self._token, self.model = account_id, api_token, model
         self._timeout, self._open = timeout, opener

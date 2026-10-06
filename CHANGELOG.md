@@ -14,6 +14,9 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 - `docs/GITHUB-SETUP.md` recommends 1 required approval on `main` (was 0): the App opens
   the release pull request and cannot approve it, but with 0 approvals its token could
   merge it through the API. Existing installations: edit the `main` ruleset.
+- The image providers' default models come from `core/run_config.py` (Pollinations
+  `flux`; the adapter defaulted to `zimage`). The service always passed the configured
+  model, so its behaviour is unchanged.
 - Issue templates for bypasses and setup problems, asking for the fields in the README's
   "useful feedback" list, and links to the README sections and troubleshooting.
 
