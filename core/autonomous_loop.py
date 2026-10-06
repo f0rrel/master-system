@@ -45,6 +45,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Optional
 
+from core.direction import direction_text
 from core.execution import ExecutionBackend
 from core.evidence import DEFAULT_MAX_ATTEMPTS, HistoryEvidence
 from core.execution_runner import ExecutionError
@@ -209,7 +210,8 @@ class AutonomousLoop:
         # lands on the same approval gate and the same Master instance.
         self._interface = ReasoningInterface(master)
         self._engine = ReasoningEngine(
-            provider, master, self._interface, evidence_source=self._evidence
+            provider, master, self._interface, evidence_source=self._evidence,
+            direction_source=lambda project_id: direction_text(master, project_id),
         )
         self._orchestrator = TaskOrchestrator(
             master,

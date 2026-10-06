@@ -53,6 +53,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from core.direction import direction_settings, read_direction
 from core.history import EventType
 
 __all__ = ["PlannerChat", "DraftProblem", "draft_hash", "draft_problems", "render_draft",
@@ -108,6 +109,7 @@ def planner_settings(project: dict) -> dict:
         "setup": list(planner.get("setup") or []),
         "base_checks": list(planner.get("base_checks") or []),
         "protected_paths": list(planner.get("protected_paths") or ["tests/*"]),
+        "direction_path": direction_settings(project)["path"],
     }
 
 
@@ -198,7 +200,7 @@ def task_records(draft, settings) -> list:
             "acceptance": {
                 "commands": [*settings["setup"], *task["test_commands"],
                              *settings["base_checks"]],
-                "protected_paths": list(settings["protected_paths"]),
+                "protected_paths": _protected(settings),
             },
             "manual_check": task["manual_check"].strip(),
         }
@@ -206,6 +208,15 @@ def task_records(draft, settings) -> list:
             record["depends_on"] = list(task["depends_on"])
         records.append(record)
     return records
+
+
+def _protected(settings) -> list:
+    """The project's protected paths plus its direction document."""
+    paths = list(settings["protected_paths"])
+    direction = settings.get("direction_path")
+    if direction and direction not in paths:
+        paths.append(direction)
+    return paths
 
 
 def _wrap(text, width, indent):
@@ -265,6 +276,10 @@ coding agent can each finish in one attempt (a focused change, usually under ~20
 with acceptance TESTS that you write.
 
 Rules:
+- PROJECT DIRECTION, when present, is the owner's standing intent for this project. Judge \
+every request and every task against it. If a request conflicts with it (for example it \
+changes something the direction says must never change), do not draft it: explain the \
+conflict in "reply" and ask in "questions". Drafts must fit its look, feel and audience.
 - When something is unclear or is the owner's decision (look and feel, external assets \
 and where they come from, scope, priorities), ask in "questions" instead of guessing. Keep questions few \
 and concrete; offer options.
@@ -422,7 +437,9 @@ class PlannerChat:
         readme = self.read_file("README.md")[:6000]
         tasks = "\n".join(f"- {t['id']} [{t.get('status')}] {t.get('title')}"
                           for t in self._tasks())
-        return (f"PROJECT FILES ({branch}):\n" + "\n".join(files)
+        direction = read_direction(self._project(), self._git)
+        return ((direction.block() + "\n\n" if direction else "")
+                + f"PROJECT FILES ({branch}):\n" + "\n".join(files)
                 + f"\n\nREADME.md:\n{readme}\n\nEXISTING TASKS:\n{tasks or '(none)'}")
 
     # --- a turn ---

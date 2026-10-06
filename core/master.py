@@ -89,7 +89,7 @@ class Master:
     def __init__(self, root=None):
         """Create a Master over a projects root.
 
-        root defaults to the projects directory shipped with this repository,
+        root defaults to ~/.config/master-system/projects (core.paths),
         matching ProjectManager. ProjectManager raises FileNotFoundError if the
         root does not exist, and that is deliberately not caught here.
         """

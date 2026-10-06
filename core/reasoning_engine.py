@@ -261,6 +261,10 @@ ADDITIONAL RULES
 - Propose the smallest change that answers the request.
 - If no action is appropriate, choose wait/blocked/needs_information with operation null.
 - Anything not in the list above will be rejected.
+- If PROJECT STATE has "direction", it is the owner's standing intent for the
+  project. Judge every proposal against it: never create or change a task in a
+  way that contradicts it; if the request conflicts with it, choose
+  needs_information and say why.
 
 WHAT THIS SYSTEM CAN DO
 You do not write code and you do not edit files yourself. A separate worker
@@ -415,7 +419,8 @@ class Proposal:
 class ReasoningEngine:
     """Turns a human request plus project state into an approvable proposal."""
 
-    def __init__(self, provider, master=None, interface=None, evidence_source=None):
+    def __init__(self, provider, master=None, interface=None, evidence_source=None,
+                 direction_source=None):
         if master is None:
             master = Master()
         if interface is None:
@@ -427,6 +432,9 @@ class ReasoningEngine:
         #: :class:`core.evidence.HistoryEvidence`. Optional: without one the
         #: model sees project state only.
         self._evidence_source = evidence_source
+        #: project_id -> the project's direction text or None (core.direction).
+        #: Optional: without one the model sees no direction.
+        self._direction_source = direction_source
 
     @property
     def provider(self):
@@ -488,6 +496,10 @@ class ReasoningEngine:
             "in_progress_tasks": in_progress_tasks,
             "completed_tasks": completed_tasks,
         }
+        if self._direction_source is not None:
+            direction = self._direction_source(project_id)
+            if direction:
+                context["direction"] = direction
         if self._evidence_source is not None:
             context.update(
                 self._evidence_source.for_project(

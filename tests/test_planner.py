@@ -63,7 +63,8 @@ def env(tmp_path, monkeypatch):
         "planner": {"test_dir": "tests/tasks", "test_suffixes": [".test.js"],
                     "syntax_check": "node --check {path}",
                     "test_command_examples": ["node --test {path}"],
-                    "setup": [], "base_checks": ["true"], "protected_paths": ["tests/*"]}}))
+                    "setup": [], "base_checks": ["true"],
+                                  "protected_paths": ["tests/*", "docs/DIRECTION.md"]}}))
     (project / "milestones.yaml").write_text(yaml.safe_dump(
         {"milestones": [{"id": "m1", "name": "M1", "status": "in_progress"}]}))
     (project / "tasks.yaml").write_text(yaml.safe_dump({"tasks": [
@@ -178,7 +179,8 @@ def test_approve_commits_the_tests_and_queues_the_tasks(env):
     assert task["status"] == "planned" and task["size"] == "small"
     assert task["milestone"] == "epic-hi"
     assert task["acceptance"] == {"commands": ["node --test tests/tasks/t-2-greet.test.js",
-                                               "true"], "protected_paths": ["tests/*"]}
+                                               "true"],
+                                  "protected_paths": ["tests/*", "docs/DIRECTION.md"]}
     assert task["manual_check"] == "1. Open the page."
     [action] = env["history"].events(types=[EventType.HUMAN_ACTION])
     assert action.payload["actor"] == "owner via planner"
