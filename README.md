@@ -45,6 +45,10 @@ code:
   against the task and the direction; it can block a task, never pass one.
 - **Generated images**: visual tasks can request images in the project's fixed style; the
   owner picks among candidates (`ms pick`).
+- **Worker limits handled calmly**: provider rate limits and disappearing free models
+  never count as task failures; short limits are waited out automatically, longer ones
+  pause the project and ask the owner (`ms limit`); a weekly check confirms free worker
+  models are still offered and free.
 - **Background service**: a systemd user service that runs approved tasks within daily,
   per-run and per-task cost caps, and sends one morning summary when the work runs out.
 - **Isolated attempts**: one git worktree per attempt, process-group deadlines, and an
@@ -260,6 +264,7 @@ report (`ms report`).
 | `ms backlog <project> [add "<title>" [--summary …] [--priority N] \| priority <epic> <N>]` | List the backlog in priority order; add a proposed epic; change an epic's priority (lower runs first). |
 | `ms lessons <project> [--approve all\|IDS] [--reject IDS\|rest]` | Review lessons workers proposed; only approved lessons are used. |
 | `ms pick <project> <task> <asset> <n>` | Choose one of a task's generated image candidates; it is committed and the task can run. |
+| `ms limit <project> [wait\|free\|paid]` | Show or answer a worker limit: wait for the reset, switch to the next free worker profile, or use the paid one (counts toward the daily cap). |
 | `ms publish <project>` | Push `develop` and the preview site now (the service also does this after every run). |
 | `ms pause` / `ms resume` | Start no new work (a running task finishes) / allow new work. |
 | `ms stop` | Stop the current run now, keeping its work, and pause. |
@@ -287,6 +292,8 @@ backlog is done or waits for you, or the daily cap is reached). With
 | `<project>: needs you` (batch mode) | A run made no progress, or images wait for your pick | `ms status` |
 | `<project>: <task-id> needs you` (batch mode) | A task used up its attempt budget | Revise or split the task in `ms chat` |
 | `Daily budget reached` | The daily cap was hit without work to summarise; work resumes the next day | None, or raise the cap |
+| `<project>: needs you` (always) | A worker is limited for longer than `max_auto_wait_minutes`, gone, or not set up; the project is paused | `ms limit <project> wait \| free \| paid` |
+| `Worker models need you` (always) | The weekly check found a free model that is gone or no longer free | Change `[worker] workers` or the profiles |
 | `<project>: release` | A release was published, or a release pull request was closed | None |
 | `Master System service stopped` | The service exited; systemd restarts it | If it repeats: `ms doctor` |
 
@@ -311,7 +318,11 @@ Settings live in `~/.config/master-system/config.toml`. Every key is optional.
 | | `node_min_major` | `22` | Minimum Node.js major version put on the worker `PATH` |
 | | `playwright_browsers_path` | `~/.cache/ms-playwright` | Shared Playwright browsers |
 | | `ladder` | `[]` | Worker tiers, cheapest first; empty disables tiers |
-| `[worker.profiles.<name>]` | `model`, `home` | — | One worker tier |
+| | `workers` | `[]` | Worker profiles in order of preference; the first is used (per project: `workers` in `project.yaml`) |
+| | `max_auto_wait_minutes` | `120` | A worker limit whose reset is this close is waited for automatically |
+| | `unknown_limit_wait_minutes` | `60` | A limit without a known reset is waited for this long, once |
+| | `model_check_days` | `7` | How often free worker models are checked |
+| `[worker.profiles.<name>]` | `model`, `home`, `paid`, `label` | — | One worker profile: model, worker home, whether it costs money, a readable name |
 | `[run]` | `max_steps` | `20` | Master decisions per run |
 | | `max_retries` | `1` | Retries after an unusable model reply |
 | | `max_attempts_per_task` | `3` | Attempts per task within one run |
@@ -334,6 +345,38 @@ Settings live in `~/.config/master-system/config.toml`. Every key is optional.
 | `[github]` | `app_id` | — | GitHub App id |
 | | `key_path` | `~/.config/master-system/github-app.pem` | GitHub App private key |
 | `[prices]` | `"<model>" = { input, output, cached_input }` | DeepSeek prices (peak) | USD per million tokens, used for caps and reports |
+
+**Worker limits.** A worker attempt that hits a provider limit (rate limit, quota, model
+gone or no longer free, missing credential) ends as `limited`: not verified, not a
+failure, no cost. The reset time is read from the provider's answer when it gives one.
+A known reset within `max_auto_wait_minutes` pauses the project until then (plus two
+minutes) and the same worker continues; an unknown reset is waited for once
+(`unknown_limit_wait_minutes`). Anything longer, and any model that is gone or not set
+up, pauses the project and asks: `ms limit <project> wait | free | paid`. Waits and
+pending choices appear in `ms status` and the morning summary; other projects keep
+working. Example worker order:
+
+```toml
+[worker]
+workers = ["big-pickle", "space-bunny", "deepseek-flash"]
+
+[worker.profiles.big-pickle]
+model = "opencode/big-pickle"
+label = "Big Pickle"
+
+[worker.profiles.space-bunny]      # free, zero data retention
+model = "opencode/space-bunny-free"
+label = "Space Bunny"
+
+[worker.profiles.deepseek-flash]   # paid: needs its own spend-limited key
+model = "deepseek/deepseek-flash"
+home = "~/.local/share/master-system-worker-paid"
+paid = true
+label = "DeepSeek Flash"
+```
+
+A paid profile needs a credential in its own worker home:
+`HOME=~/.local/share/master-system-worker-paid opencode auth login`.
 
 **Visual review cost.** With `deepseek-flash`, a review of three phone screenshots plus
 the task and a 6000-character direction is about 6–8k input and 300 output tokens:
@@ -377,6 +420,7 @@ Per-project options (`repository`, `base_branch`, `auto_integrate`, `github`, `p
 | Reviewers can only say no | The visual reviewer can turn a pass into a fail, never the reverse; an unavailable reviewer changes nothing |
 | Nothing unapproved is remembered | Lessons from workers are used only after the owner approves them |
 | Image keys stay with the orchestrator | Images are generated by the service, not by workers; a multi-candidate image is committed only after the owner's pick |
+| Limits are not failures | A `limited` attempt is never verified or counted; switching to another worker, and any paid worker, needs the owner's choice |
 | Spend | Daily, per-run, per-chat and per-task caps; reviews count toward the daily cap |
 
 **Known limitation:** workers run as the same OS user as the system. Worktrees isolate

@@ -47,7 +47,7 @@ installation and usage, see the [README](../README.md).
 | State | `master.py`, `work_manager.py`, `project_state.py`, `project_manager.py`, `human_edits.py`, `backlog.py` (epic order), `lessons.py` (shared project memory) |
 | Project guidance | `direction.py` (the direction document), `task_types.py` (types, skills, paths, tools); generic skill docs in `$MS_HOME/skills/` |
 | Loop | `autonomous_loop.py`, `reasoning.py` (operations, policy), `reasoning_engine.py`, `evidence.py` (completion gate, attempt facts), `session_runner.py`, `work_session.py`, `session_store.py`, `recovery.py`, `run_lock.py` |
-| Execution | `task_orchestrator.py`, `workspace.py` (worktrees, git), `worker_process.py`, `worker_env.py`, `opencode_backend.py`, `ollama_backend.py` (frozen), `worker_tiers.py`, `acceptance_verifier.py`, `visual_review.py`, `images.py`, `verification.py`, `execution.py`, `execution_runner.py` |
+| Execution | `task_orchestrator.py`, `workspace.py` (worktrees, git), `worker_process.py`, `worker_env.py`, `opencode_backend.py`, `ollama_backend.py` (frozen), `worker_tiers.py`, `worker_limits.py`, `worker_models.py`, `acceptance_verifier.py`, `visual_review.py`, `images.py`, `verification.py`, `execution.py`, `execution_runner.py` |
 | Integration and release | `attempts.py` (integrate), `auto_integrate.py`, `publish.py`, `github.py` (App auth, push), `release.py` |
 | Models | `provider.py` (interface), `deepseek_provider.py` (also `DeepSeekVision` for the reviewer), `ollama_provider.py`, `opencode_provider.py`, `usage.py` |
 | Operator tools | `ms.py` (the `ms` command), `daemon.py`, `summary.py` (morning summary), `host.py` (service processes), `notify.py`, `planner.py`, `planner_checks.py`, `report.py`, `run_cli.py` (lower-level CLI), `run_config.py`, `paths.py` |
@@ -63,7 +63,7 @@ installation and usage, see the [README](../README.md).
 | `$MS_HOME/docs/` | This document, troubleshooting, the decision log, the GitHub setup guide |
 | `$MS_HOME/archive/` | Early experiments and historical milestone plans; unused by the code |
 | `~/.config/master-system/` | `config.toml` (no secrets); `master.env` (model API key, mode 600); `github-app.pem` (600); `ntfy-topic` (600) |
-| `~/.local/share/master-system/` | `history.sqlite` (and `.bak-*` migration backups); `sessions/`; `logs/` (worker and verification logs; `runs/` per service run); `planner/` (chats); `artifacts/<project>/<task>/<result>/` (review screenshots); `assets/<project>/<task>/<asset>/` (image candidates, contact sheet); `reports/` (morning summaries, `latest.html`); `daemon-state.json`; `paused` (flag); `run.pid`; `last-looked`; `release-check`; `git-askpass.sh` (contains no secret) |
+| `~/.local/share/master-system/` | `history.sqlite` (and `.bak-*` migration backups); `sessions/`; `logs/` (worker and verification logs; `runs/` per service run); `planner/` (chats); `limits/<project>.json` (worker limits); `worker-models.json` (weekly check); `artifacts/<project>/<task>/<result>/` (review screenshots); `assets/<project>/<task>/<asset>/` (image candidates, contact sheet); `reports/` (morning summaries, `latest.html`); `daemon-state.json`; `paused` (flag); `run.pid`; `last-looked`; `release-check`; `git-askpass.sh` (contains no secret) |
 | `~/.local/share/master-system-worktrees/<project>/` | One git worktree per attempt, rebase or planner check, kept for inspection |
 | `~/.local/share/master-system-worker/` | The worker's home and its only credential store |
 | A dedicated clone per managed project | The repository the system works in (`repository` in `project.yaml`). Its push URL should be disabled; pushes go through the GitHub App. `refs/ms-release/<branch>` records the remote release branch at the last check. |
@@ -185,6 +185,37 @@ several are stored with a contact sheet and the task waits: the daemon skips it,
 Master sees `readiness: waiting_for_owner`, and `TaskOrchestrator.prepare` refuses it.
 `ms pick` commits the chosen candidate under the project lock and records a human action.
 
+## Worker profiles and limits (`core/worker_limits.py`, `core/worker_models.py`)
+
+**Profiles.** `[worker.profiles.<name>]` define workers (`model`, `home`, `paid`,
+`label`). `[worker] workers` (or `workers` in `project.yaml`) orders them; the
+orchestrator uses the first, unless the owner chose another after a limit
+(`LimitState.override`), or a tier ladder is configured. Every attempt records
+`worker_profile`, `worker_model`, `worker_paid` and `worker_choice` (`order` or `owner`).
+
+**Limits.** The OpenCode backend classifies a failed run (`classify_failure`):
+`rate_limited`, `model_unavailable` (including HTTP 402), `not_configured`, or
+`provider_error` (an error event before the first worker step). It reads the reset time
+(`parse_reset`: `Retry-After`, `x-ratelimit-reset`, "try again in …", "resets at …").
+The attempt ends `limited`: no verification; `failed_attempts_since_human` and the
+session attempt limit skip it. `LimitState.record_limit` decides:
+
+| Situation | Phase | Effect |
+| --- | --- | --- |
+| Known reset within `max_auto_wait_minutes` | `auto_wait` | Paused until the reset + 2 min; then the same worker |
+| Unknown reset, first time | `auto_wait` | Paused `unknown_limit_wait_minutes` |
+| Longer, still limited, model gone, not configured | `needs_choice` | Paused; one immediate notification |
+| Owner chose `wait` | `chosen_wait` | Paused until the reset (or hourly); not asked again |
+| Owner chose `free` / `paid` | — | `override` profile until the limited worker's reset (or 24 h) |
+
+A run stops as soon as its project is paused (`run_cli.limit_check`, part of the stop
+check); the service skips paused projects and holds the morning summary while an
+automatic wait is pending. `record_success` clears the limit when the worker works again.
+
+**Weekly model check.** `FreeModelCheck` runs `opencode models <provider> --verbose
+--refresh` in each free profile's home every `model_check_days` and notifies the owner
+when a model is no longer offered, no longer active, or no longer free.
+
 ## Integration, publishing and releases
 
 **Integration into `develop`** happens right after an attempt passes, under the run's lock:
@@ -245,6 +276,7 @@ Master's context never names them. Reports show attempts, passes and cost per ti
 | The release branch changes only by a human merge | The App has no Administration permission; a ruleset on `main` requires a PR with no bypass |
 | A task stays within its type | `acceptance.allowed_paths` (verifier) and a per-attempt OpenCode tool config |
 | Reviewers and memory cannot widen authority | The visual reviewer can only block; lessons are used only after approval; image keys never reach workers |
+| Provider limits are not failures, and money is not spent without the owner | `limited` attempts are excluded from every budget; switching workers or using a paid one is the owner's choice |
 | Only `worker_process.py`, `workspace.py`, `attempts.py` and `host.py` start processes | `tests/test_backend_boundaries.py` |
 | No provider or model names above the adapters | Boundary tests |
 | Spend | Daily, per-run, per-chat and per-task caps |

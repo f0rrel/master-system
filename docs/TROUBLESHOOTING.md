@@ -29,6 +29,12 @@ Paths: `$MS_HOME` is the repository; `<clone>` is a managed project's dedicated 
 | An attempt fails with "outside the task type's allowed paths" | The worker changed files its type may not touch | Change the task's type in a new plan, or widen `task_types.<type>.allowed_paths` |
 | The planner says an epic id "is already used" | The epic already has tasks, or is not a proposed backlog epic | Check `ms backlog <project>`; plan only `proposed` epics |
 | No notification after runs | Per-run notifications are off by default | Read the morning summary (`ms report --summary`), or set `[daemon] batch_notifications = true` |
+| `ms status`: "<worker> is rate-limited until ~18:00. Choose: ms limit …" | The worker's provider limit lasts longer than `max_auto_wait_minutes`, or it stayed limited after an automatic wait | `ms limit <project> wait` (keep waiting), `free` (next free worker) or `paid` (the paid worker; counts toward the daily cap) |
+| `ms status`: "<worker> is not available (model gone or no longer free)" | The model was removed or now costs money | Choose `free` or `paid`, then update `[worker] workers` |
+| `ms status`: "<worker> is not set up (no credential)" | A profile (usually the paid one) has no login in its worker home | `HOME=<profile home> opencode auth login`, or choose another worker |
+| "the project waits until 14:02 (automatic)" | A short limit; the same worker continues after the reset | Nothing |
+| Attempts show outcome `limited` in `ms report` | The provider refused; the attempt was not verified and does not count | Nothing |
+| Notification "Worker models need you" | The weekly check found a free model gone or no longer free | Edit `[worker] workers` and the profiles in `config.toml` |
 | `ms lessons` shows nothing | No verified attempt has proposed lessons yet | Nothing to do |
 | `check` fails during a `setup` command | Dependency installation or network failure | Run the setup command manually in `<clone>`; check connectivity |
 | The preview did not update after "batch done" | GitHub Pages builds take 1–2 minutes, or publishing failed | Wait and reload; `ms publish <project>` shows any error; `ms github check` |

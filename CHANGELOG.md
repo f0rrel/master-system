@@ -5,6 +5,18 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Worker limits
+- Provider limits (HTTP 429, quota, model gone or no longer free, missing credential)
+  end an attempt as `limited`: not verified, never counted against budgets, no cost.
+- The reset time is read from the provider. Known resets within
+  `[worker] max_auto_wait_minutes` (120) are waited for automatically; unknown resets
+  get one 60-minute wait. Longer limits and gone models pause the project and ask the
+  owner: `ms limit <project> wait | free | paid`, with an immediate notification.
+- Worker profiles gain `paid` and `label`; `[worker] workers` (or `workers` per project)
+  orders them. Every attempt records its profile; `ms report`, `ms status` and the
+  morning summary show limits, waits, pending choices and attempts per worker with cost.
+- A weekly check confirms the free worker models are still offered and free.
+
 ### Milestone 4: From direction to overnight work
 - **Direction:** a project's `docs/DIRECTION.md` (configurable path and size budget) is
   read by the planner, the Master, workers and the visual reviewer, who judge proposals

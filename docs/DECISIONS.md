@@ -125,3 +125,17 @@ choice* — made during implementation and recorded here for review.
 | A task waiting for images is skipped by the service, shown to the Master as `waiting_for_owner`, and refused by the orchestrator | Three layers, so a waiting task cannot run by mistake | Implementation choice |
 | One morning summary (text and HTML) when the work runs out or the daily cap is reached; per-run notifications off by default (`[daemon] batch_notifications`) | One notification per night instead of many | Approved; trigger rules are implementation choices |
 | Planner replies may use up to 16000 output tokens (`[planner] max_output_tokens`) and drafts up to 12 tasks | A whole epic with its tests does not fit in 4000 tokens | Implementation choice |
+
+## Worker limits
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| A provider limit (rate limit, quota, model gone or no longer free, missing credential, provider error before any work) ends the attempt as `limited`; it is not verified and never counts against a task's budgets | Infrastructure must not exhaust tasks or mislead the Master | Approved |
+| The reset time is read from the provider's answer and recorded, or recorded as unknown | Waiting is only sensible with a known end | Approved |
+| A known reset within `max_auto_wait_minutes` (default 120) is waited for automatically (reset + 2 minutes), then the same worker continues; an unknown reset is waited for 60 minutes once | Short limits resolve themselves without cost or owner effort | Approved |
+| Longer limits, gone or no-longer-free models and missing credentials pause only that project and ask the owner: wait, next free worker, or the paid worker | Switching models or spending money is the owner's decision | Approved |
+| The owner's free or paid choice lasts until the limited worker's reset (or 24 hours), then the first worker is used again | The preferred worker comes back without another decision | Implementation choice |
+| Classification is by patterns in the worker's output; a generic provider error counts as a limit only before the first worker step | OpenCode reports some provider failures (e.g. an unknown model) only as a generic error | Implementation choice |
+| Second free worker: OpenCode `space-bunny-free` (zero data retention per OpenCode Zen; verified on a real edit). `longcat-2.5-preview-free` also qualifies | Zero retention was requested; both passed a test edit | Approved |
+| Paid worker: DeepSeek `deepseek/deepseek-flash` through OpenCode in its own worker home with a spend-limited key; the Master's key is not reused | Workers hold no control-plane secrets | Approved |
+| A weekly check lists the providers' models and notifies when a free profile's model is gone, inactive or no longer free | Free models change without notice | Approved |
