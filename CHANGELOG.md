@@ -10,6 +10,12 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
   traceback, and the service idles and logs the hint instead of exiting (systemd no
   longer restarts it every minute). `ms install` creates
   `~/.config/master-system/projects` (mode 700).
+- Node is optional for workers: it is looked up in a new `[worker] node_bin`, then nvm,
+  then the worker `PATH`. Without one, runs and `ms chat` warn once ("no Node >= N for
+  workers; Node-based acceptance commands will fail") instead of refusing to start, and
+  `ms doctor` says so.
+- New `[worker] path_dirs`: extra directories (for example where uv is installed) on the
+  worker and verification `PATH`.
 - Fixed: `ms doctor` printed "(no report: 'Namespace' object has no attribute 'summary')"
   instead of the last run report (or "No sessions yet.").
 

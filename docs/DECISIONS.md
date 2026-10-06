@@ -201,3 +201,6 @@ choice* — made during implementation and recorded here for review.
 | --- | --- | --- |
 | Without a projects root, `ms status` and `ms doctor` print a one-line hint, and the service idles (logging the hint once) until the root exists | A traceback is no help to a new user, and an exiting service is restarted by systemd every minute with "service stopped" notifications | Approved |
 | `ms install` creates the projects root (mode 700) | One step fewer, and the right permissions by default | Approved |
+| Node is optional for workers: looked up in `[worker] node_bin`, nvm, then the worker `PATH`; without it runs and `ms chat` warn once (and `ms doctor` says so) instead of refusing | Python projects need no Node; a hard requirement blocked them at the first `ms chat` | Approved |
+| `[worker] path_dirs` adds existing directories (checked at load, `~` expanded) to the worker and verification `PATH`; the secret-name check for environment extras is unchanged | Project toolchains such as uv live outside the system `PATH`; the environment stays an allowlist | Approved |
+| A Node binary's version is read by running `node --version` from `core/host.py`; the lookup in `core/worker_env.py` starts no process | Keeps the process-starting modules as they are (boundary test) | Implementation choice |

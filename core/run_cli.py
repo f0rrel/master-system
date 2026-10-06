@@ -172,20 +172,43 @@ def build_tiers(config):
                    labels={n: p.get("label", n) for n, p in w.profiles.items()})
 
 
+#: Warnings already given by this process (each once).
+_NODE_WARNINGS: set = set()
+
+
+def find_node_for(config):
+    """Node for workers: ``[worker] node_bin``, nvm, then the worker's PATH; or None."""
+    from core.host import node_major
+    from core.worker_env import SYSTEM_PATH, find_worker_node
+
+    w = config.worker
+    return find_worker_node(w.node_min_major, configured=w.node_bin,
+                            system_dirs=[*w.path_dirs, *SYSTEM_PATH], version_of=node_major)
+
+
+def node_warning(config) -> str:
+    return (f"no Node >= {config.worker.node_min_major} for workers; Node-based acceptance "
+            "commands will fail")
+
+
 def build_worker_env(config, home=None):
-    from core.worker_env import find_node_bin, worker_environment
+    """The workers' environment. Without a suitable Node it still works (Python
+    projects need none) and warns once."""
+    from core.worker_env import SYSTEM_PATH, worker_environment
 
     w = config.worker
     home = Path(home) if home is not None else Path(w.home)
-    node_bin = find_node_bin(w.node_min_major)
-    if node_bin is None:
-        raise SetupError(f"no Node >= {w.node_min_major} found in nvm's install directory "
-                         "(install it with 'nvm install', or lower [worker] node_min_major)")
+    node_bin = find_node_for(config)
+    if node_bin is None and node_warning(config) not in _NODE_WARNINGS:
+        _NODE_WARNINGS.add(node_warning(config))
+        print(f"warning: {node_warning(config)}", file=sys.stderr, flush=True)
     home.mkdir(parents=True, exist_ok=True)
     extra = {}
     if w.playwright_browsers_path:
         extra["PLAYWRIGHT_BROWSERS_PATH"] = str(w.playwright_browsers_path)
-    return worker_environment(home, path_dirs=[node_bin], extra=extra)
+    listed = {str(d) for d in (*w.path_dirs, *SYSTEM_PATH)}
+    first = [node_bin] if node_bin is not None and str(node_bin) not in listed else []
+    return worker_environment(home, path_dirs=[*first, *w.path_dirs], extra=extra)
 
 
 def budget_check(ctx, session_id, max_cost_usd):

@@ -71,6 +71,19 @@ def git(args, cwd, *, extra_env=None, input_text=None, timeout=300) -> str:
     return done.stdout.strip()
 
 
+def node_major(node: Path) -> Optional[int]:
+    """The major version of a Node binary (``node --version``), or None."""
+    import re
+
+    try:
+        done = subprocess.run([str(node), "--version"], capture_output=True, text=True,
+                              timeout=10, env={"PATH": str(Path(node).parent)})
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    match = re.match(r"v(\d+)\.", done.stdout.strip())
+    return int(match.group(1)) if done.returncode == 0 and match else None
+
+
 def openssl_sign_rs256(key_path: Path, data: bytes) -> bytes:
     """RS256 signature of ``data`` with a PEM private key, by the openssl CLI."""
     done = subprocess.run(["openssl", "dgst", "-sha256", "-sign", str(key_path)],

@@ -29,6 +29,7 @@ from typing import Iterable, Mapping, Optional
 __all__ = [
     "SYSTEM_PATH",
     "find_node_bin",
+    "find_worker_node",
     "worker_environment",
     "default_worker_home",
 ]
@@ -64,6 +65,28 @@ def find_node_bin(min_major: int = 22, env: Optional[Mapping[str, str]] = None) 
                 if version[0] >= min_major:
                     found.append((version, entry / "bin"))
     return max(found)[1] if found else None
+
+
+def find_worker_node(min_major: int, *, configured=None, system_dirs: Iterable = SYSTEM_PATH,
+                     version_of=None, env: Optional[Mapping[str, str]] = None) -> Optional[Path]:
+    """The ``bin`` directory of a Node >= min_major for workers, or None.
+
+    In order: ``configured`` (``[worker] node_bin``), nvm's install directory, then
+    ``system_dirs`` (the worker's PATH). ``version_of(node)`` gives a binary's major
+    version (it runs it, so it is supplied by a process-starting module).
+    """
+    def usable(directory) -> bool:
+        node = Path(directory) / "node"
+        if not (node.is_file() and os.access(node, os.X_OK)) or version_of is None:
+            return False
+        return (version_of(node) or 0) >= min_major
+
+    if configured is not None and usable(configured):
+        return Path(configured)
+    nvm = find_node_bin(min_major, env)
+    if nvm is not None:
+        return nvm
+    return next((Path(d) for d in system_dirs if usable(d)), None)
 
 
 def worker_environment(

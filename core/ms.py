@@ -888,14 +888,19 @@ def doctor_report(args) -> str:
     def section(title, body):
         sections.append(f"### {title}\n{str(body).rstrip() or '(empty)'}\n")
 
-    from core.worker_env import find_node_bin
+    from core import run_cli
 
-    node = find_node_bin(22)
+    try:
+        doctor_config = _config(args)
+        node = run_cli.find_node_for(doctor_config)
+        no_node = f"none ({run_cli.node_warning(doctor_config)})"
+    except Exception as error:
+        node, no_node = None, f"(could not check: {error})"
     section("Versions", "\n".join([
         f"ms: {capture([*control_git_argv(), '-C', str(REPO), 'describe', '--always', '--dirty', '--tags'])}",
         f"git: {capture([*control_git_argv(), '--version'])}",
         f"python: {platform.python_version()} ({sys.executable})",
-        f"node (workers): {capture([str(Path(node) / 'node'), '--version']) if node else 'none >= 22'}",
+        f"node (workers): {capture([str(Path(node) / 'node'), '--version']) if node else no_node}",
         f"system: {platform.platform()}"]))
     section("Master System checkout", "\n".join([
         f"path: {REPO}",

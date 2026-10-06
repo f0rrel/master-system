@@ -18,6 +18,8 @@ opencode_bin = "~/.opencode/bin/opencode"
 home = "~/.local/share/master-system-worker"
 extra_args = []
 node_min_major = 22
+# node_bin = "~/node22/bin"       # tried before nvm and the system PATH
+# path_dirs = ["~/.local/bin"]    # extra worker and verification PATH (e.g. uv)
 playwright_browsers_path = "~/.cache/ms-playwright"
 
 # Worker profiles in order of preference (the first is used). On a long limit the owner
@@ -123,6 +125,10 @@ class WorkerConfig:
     home: Path = field(default_factory=lambda: _path("~/.local/share/master-system-worker"))
     extra_args: tuple = ()
     node_min_major: int = 22
+    #: A directory holding the workers' Node, tried before nvm and the system PATH.
+    node_bin: Optional[Path] = None
+    #: Extra directories on the worker and verification PATH (e.g. where uv lives).
+    path_dirs: tuple = ()
     playwright_browsers_path: Optional[Path] = field(
         default_factory=lambda: _path("~/.cache/ms-playwright"))
     #: Worker tiers: name -> {"model": str|None, "home": Path}; empty = no tiers.
@@ -234,6 +240,19 @@ class RunConfig:
     source: Optional[Path] = None
 
 
+def _directory(value, key) -> Path:
+    path = _path(value) if isinstance(value, str) else None
+    if path is None or not path.is_dir():
+        raise ConfigError(f"[worker] {key} must name an existing directory, got {value!r}")
+    return path
+
+
+def _directories(value) -> tuple:
+    if not isinstance(value, list):
+        raise ConfigError("[worker] path_dirs must be a list of existing directories")
+    return tuple(_directory(item, "path_dirs") for item in value)
+
+
 def _section(data, name, allowed):
     section = data.get(name, {})
     if not isinstance(section, dict):
@@ -279,7 +298,8 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
         raise ConfigError("[master] model must be a non-empty string")
 
     w = _section(data, "worker", ("opencode_bin", "model", "home", "extra_args",
-                                  "node_min_major", "playwright_browsers_path", "profiles",
+                                  "node_min_major", "node_bin", "path_dirs",
+                                  "playwright_browsers_path", "profiles",
                                   "ladder", "workers", "max_auto_wait_minutes",
                                   "unknown_limit_wait_minutes", "model_check_days",
                                   "stall_minutes"))
@@ -308,6 +328,8 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
         home=_path(w["home"]) if "home" in w else defaults.home,
         extra_args=tuple(extra_args),
         node_min_major=_positive(w, "worker", "node_min_major", 22, int),
+        node_bin=_directory(w["node_bin"], "node_bin") if "node_bin" in w else None,
+        path_dirs=_directories(w.get("path_dirs", [])),
         playwright_browsers_path=(
             _path(w["playwright_browsers_path"]) if "playwright_browsers_path" in w
             else defaults.playwright_browsers_path

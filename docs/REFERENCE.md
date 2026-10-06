@@ -25,10 +25,10 @@ the roadmap. The [README](../README.md) explains what the system is and how to t
 | Linux with systemd user services | The background service is a systemd user unit; `ms daemon --once` runs one cycle without it. |
 | Python 3.12+ and [uv](https://docs.astral.sh/uv/) | Dependencies are pinned in `uv.lock`. |
 | git, coreutils `timeout`, `openssl` | Worktrees, deadlines, GitHub App JWT signing. |
-| Node.js ≥ 22 installed with [nvm](https://github.com/nvm-sh/nvm) | Required even for projects that do not use Node: the worker environment is built from nvm's install directory, and runs and planner checks stop with "no Node >= 22 found in nvm's install directory" without it (`[worker] node_min_major`). |
+| Node.js ≥ 22, for Node projects | Looked up in `[worker] node_bin`, then [nvm](https://github.com/nvm-sh/nvm)'s install directory, then the worker `PATH` (`path_dirs`, `/usr/local/bin`, `/usr/bin`, `/bin`). Without one, runs and `ms chat` still work: they warn once ("no Node >= 22 for workers; Node-based acceptance commands will fail"), and so does `ms doctor` (`[worker] node_min_major`). |
 | [OpenCode CLI](https://opencode.ai) at `~/.opencode/bin/opencode` | The coding worker (`[worker] opencode_bin`). It must be signed in inside the worker home (see below). |
 | A DeepSeek API key | The default orchestrating model, planner and visual reviewer use DeepSeek; the key goes in `~/.config/master-system/master.env`. Ollama and OpenCode adapters exist for the orchestrating model and the planner. |
-| The managed project's own toolchain, on the worker `PATH` | Worker and verification processes get only the nvm Node `bin` directory plus `/usr/local/bin:/usr/bin:/bin`, and `HOME` is the worker home. Tools in `~/.local/bin` (uv, pipx) are not visible, and `python` fails where only `python3` exists. |
+| The managed project's own toolchain, on the worker `PATH` | Worker and verification processes get only the Node `bin` directory found, `[worker] path_dirs` and `/usr/local/bin:/usr/bin:/bin`, and `HOME` is the worker home. Tools in `~/.local/bin` (uv, pipx) are visible only if you add that directory to `path_dirs`, and `python` fails where only `python3` exists. |
 | A GitHub repository per managed project (optional) | For publishing and releases; see [GITHUB-SETUP.md](GITHUB-SETUP.md). Without the GitHub App, publishing is skipped with a message. |
 | Telegram or the [ntfy](https://ntfy.sh) app (optional) | The phone interface and notifications; see [TELEGRAM-SETUP.md](TELEGRAM-SETUP.md). |
 
@@ -275,7 +275,9 @@ Settings live in `~/.config/master-system/config.toml`. Every key is optional.
 | | `model` | the worker home's default | Passed to the worker as `--model` |
 | | `home` | `~/.local/share/master-system-worker` | The worker's `HOME` and only credential store |
 | | `extra_args` | `[]` | Extra worker arguments |
-| | `node_min_major` | `22` | Minimum Node.js major version put on the worker `PATH` (from nvm) |
+| | `node_min_major` | `22` | Minimum Node.js major version put on the worker `PATH` |
+| | `node_bin` | unset | A directory holding `node`, tried before nvm and the system `PATH`; must exist |
+| | `path_dirs` | `[]` | Extra directories on the worker and verification `PATH`, before the system ones (for example `~/.local/bin` for uv); each must exist (`~` is expanded) |
 | | `playwright_browsers_path` | `~/.cache/ms-playwright` | Shared Playwright browsers |
 | | `ladder` | `[]` | Worker tiers, cheapest first; empty disables tiers |
 | | `workers` | `[]` | Worker profiles in order of preference; the first is used (per project: `workers` in `project.yaml`) |

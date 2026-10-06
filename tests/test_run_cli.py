@@ -290,15 +290,17 @@ def test_a_missing_worker_binary_is_a_setup_error(setup, monkeypatch):
     assert code == 2
 
 
-def test_no_suitable_node_is_a_setup_error(setup, monkeypatch, tmp_path):
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+def test_no_suitable_node_is_not_a_setup_error(setup, monkeypatch, tmp_path):
+    """Node is optional (Python projects need none): run_cli warns instead of refusing."""
     fake_bin = tmp_path / "opencode"
     fake_bin.write_text("#!/bin/sh\n")
-    config = config_file(setup, f'[worker]\nopencode_bin = "{fake_bin}"\nnode_min_major = 99\n')
+    config = run_cli.load_config(config_file(
+        setup, f'[worker]\nopencode_bin = "{fake_bin}"\nnode_min_major = 99\n'
+               f'home = "{tmp_path / "wh"}"\n'))
 
-    code, _ = cli_with(setup, config, "start", "alpha", "--objective", "o")
+    env = run_cli.build_worker_env(config)
 
-    assert code == 2
+    assert env["HOME"] == str(tmp_path / "wh")
 
 
 def test_the_real_composition_wires_the_configured_parts(setup, monkeypatch, tmp_path):

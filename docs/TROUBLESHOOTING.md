@@ -65,7 +65,9 @@ Paths: `$MS_HOME` is the repository; `<clone>` is a managed project's dedicated 
 | A run stopped with "completion refused twice" | The Master kept proposing completion for a task whose pass could not be integrated | The service retries next cycle; if the project stalls, revise the task in `ms chat` |
 | `error: … project is busy` | A run or another command holds the project lock | Wait until `ms status` reports Idle. The lock is released when its holding process exits (`ps aux \| grep run_cli`). |
 | History schema error on start | The database is newer or older than the code | Update the checkout; migration backups are `~/.local/share/master-system/history.sqlite.bak-*` |
-| Worker fails immediately ("OpenCode binary not found" / "no Node >= N") | Worker toolchain missing | Check `[worker] opencode_bin`; `ls ~/.nvm/versions/node/` must contain a version ≥ `node_min_major` |
+| Worker fails immediately ("OpenCode binary not found") | Worker toolchain missing | Check `[worker] opencode_bin` |
+| "warning: no Node >= N for workers; Node-based acceptance commands will fail" (run log, `ms doctor`) | No Node ≥ `node_min_major` in `[worker] node_bin`, nvm or the worker `PATH`. Python projects are unaffected | For a Node project: install Node (nvm, or a system package), or set `[worker] node_bin` to its `bin` directory |
+| An acceptance command says `uv: not found` (or another tool in `~/.local/bin`) | The worker `PATH` is an allowlist | Add the directory to `[worker] path_dirs`, then restart the service |
 | No phone notifications | Topic not subscribed, or ntfy unreachable | `ms notify test`; the topic is in `~/.config/master-system/ntfy-topic` (keep it private) |
 | Disk filling up | Attempt worktrees are kept for inspection | Remove integrated ones under `~/.local/share/master-system-worktrees/` with `git -C <clone> worktree remove <path>` |
 

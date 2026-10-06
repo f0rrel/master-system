@@ -115,8 +115,9 @@ acceptance:
 
 **The worker gets** a fresh git worktree at the tip of `develop`, a deadline enforced by
 coreutils `timeout` in its own process group, and an allowlisted environment
-(`core/worker_env.py`): `PATH` is the nvm Node `bin` directory plus
-`/usr/local/bin:/usr/bin:/bin`, and `HOME` is a dedicated worker home. **It never gets**
+(`core/worker_env.py`): `PATH` is a Node `bin` directory (if one is found), any
+`[worker] path_dirs`, then `/usr/local/bin:/usr/bin:/bin`, and `HOME` is a dedicated
+worker home. **It never gets**
 API keys or tokens in its environment; secret-looking extras are refused. It does run as
 the same OS user, so it can read any file that user can, including `master.env` and the
 GitHub App key.
@@ -164,11 +165,13 @@ as your user, use a VM, a container or a separate Linux user, a throwaway reposi
 spend-limited keys.
 
 **Prerequisites:** Python 3.12+ and [uv](https://docs.astral.sh/uv/); git and coreutils;
-Node.js ≥ 22 installed with nvm (required even for non-Node projects); the
+for Node projects, Node.js ≥ 22 (found through `[worker] node_bin`, nvm, or the system
+`PATH`; without it, runs warn and Node-based acceptance commands fail); the
 [OpenCode CLI](https://opencode.ai) at `~/.opencode/bin/opencode`; a DeepSeek API key.
-Acceptance commands see only the nvm Node `bin` directory and
+Acceptance commands see only that Node `bin` directory, `[worker] path_dirs` and
 `/usr/local/bin:/usr/bin:/bin`, with `HOME` set to the worker home: tools in
-`~/.local/bin` are invisible, and `python` fails where only `python3` exists.
+`~/.local/bin` (uv, pipx) are invisible unless you add it to `path_dirs`, and `python`
+fails where only `python3` exists.
 
 A minimal local trial, without the GitHub App, systemd or Telegram:
 

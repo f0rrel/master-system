@@ -129,3 +129,82 @@ def test_no_secret_reaches_a_worker_or_a_verifier(tmp_path, monkeypatch):
         for value in SECRETS.values():
             assert value not in dumped
         assert "HOME=" in dumped and "/master-system-worker" in dumped
+
+
+# --- Node is optional; the lookup order; extra PATH directories ---------------------
+
+
+def fake_node(directory, major):
+    directory.mkdir(parents=True, exist_ok=True)
+    node = directory / "node"
+    node.write_text(f"#!/bin/sh\necho v{major}.1.0\n")
+    node.chmod(0o755)
+    return directory
+
+
+def nvm_with(tmp_path, major):
+    fake_node(tmp_path / "nvm" / "versions" / "node" / f"v{major}.1.0" / "bin", major)
+    return {"NVM_DIR": str(tmp_path / "nvm")}
+
+
+def test_node_is_looked_up_in_node_bin_then_nvm_then_the_system_path(tmp_path):
+    from core.host import node_major
+    from core.worker_env import find_worker_node
+
+    configured = fake_node(tmp_path / "configured", 24)
+    system = fake_node(tmp_path / "system", 22)
+    nvm = nvm_with(tmp_path, 23)
+
+    def find(**kwargs):
+        args = dict(configured=None, system_dirs=[system], env=nvm, version_of=node_major)
+        return find_worker_node(22, **{**args, **kwargs})
+
+    assert find(configured=configured) == configured
+    assert find() == tmp_path / "nvm" / "versions" / "node" / "v23.1.0" / "bin"
+    assert find(env={"NVM_DIR": str(tmp_path / "none")}) == system
+    old = fake_node(tmp_path / "old", 18)
+    assert find(configured=old, env={"NVM_DIR": "/none"}, system_dirs=[old]) is None
+
+
+def test_without_node_the_worker_env_is_built_and_a_warning_given_once(tmp_path, capsys):
+    from core import run_cli
+    from core.run_config import load_config
+
+    extra = tmp_path / "uv-bin"
+    extra.mkdir()
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(f'[worker]\nhome = "{tmp_path / "wh"}"\nnode_min_major = 99\n'
+                           f'path_dirs = ["{extra}"]\n')
+    config = load_config(config_file)
+    run_cli._NODE_WARNINGS.clear()
+
+    env = run_cli.build_worker_env(config)
+    run_cli.build_worker_env(config)
+
+    assert env["PATH"] == f"{extra}:" + ":".join(SYSTEM_PATH)
+    warning = "no Node >= 99 for workers; Node-based acceptance commands will fail"
+    assert capsys.readouterr().err.count(warning) == 1
+
+
+def test_node_bin_and_path_dirs_must_be_existing_directories(tmp_path, monkeypatch):
+    from core.run_config import ConfigError, load_config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "tools").mkdir()
+    config_file = tmp_path / "config.toml"
+    config_file.write_text('[worker]\nnode_bin = "~/tools"\npath_dirs = ["~/tools"]\n')
+    config = load_config(config_file)
+    assert config.worker.node_bin == tmp_path / "tools"
+    assert config.worker.path_dirs == (tmp_path / "tools",)
+    for text in ('node_bin = "~/missing"', 'path_dirs = ["~/missing"]', 'path_dirs = "~/tools"'):
+        config_file.write_text(f"[worker]\n{text}\n")
+        with pytest.raises(ConfigError, match="existing director"):
+            load_config(config_file)
+
+
+def test_doctor_warns_when_workers_have_no_node(tmp_path, monkeypatch):
+    from core import ms, run_cli
+
+    monkeypatch.setattr(run_cli, "find_node_for", lambda config: None)
+    report = ms.doctor_report(type("Args", (), {"config": None})())
+    assert "no Node >= 22 for workers; Node-based acceptance commands will fail" in report
