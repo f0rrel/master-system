@@ -63,6 +63,28 @@ def parse_events(stdout: str):
     return summary, usage, counts
 
 
+def parse_progress(stdout: str) -> tuple:
+    """(the last step's finish reason, the last five tool calls) of an OpenCode run.
+
+    ``length`` as the finish reason means the model hit its output limit (for example
+    by thinking too long) before it could act."""
+    finish_reason, tools = None, []
+    for line in (stdout or "").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, Mapping):
+            continue
+        part = event.get("part") if isinstance(event.get("part"), Mapping) else {}
+        if event.get("type") == "tool_use":
+            state = part.get("state") if isinstance(part.get("state"), Mapping) else {}
+            tools.append(f"{part.get('tool')}: {json.dumps(state.get('input'))[:120]}")
+        elif event.get("type") == "step_finish":
+            finish_reason = part.get("reason")
+    return finish_reason, tools[-5:]
+
+
 def build_prompt(task: Mapping, briefing: Optional[Mapping] = None) -> str:
     """The instruction given to the worker: the task's human-written spec.
 
@@ -101,6 +123,11 @@ def build_prompt(task: Mapping, briefing: Optional[Mapping] = None) -> str:
         parts.append("Change only paths matching these patterns; a change anywhere else "
                      "fails the task:\n"
                      + "\n".join(f"  - {g}" for g in acceptance["allowed_paths"]))
+    parts.append("Work in small steps. Write or create the files you need early (a first "
+                 "working version within your first few steps), then improve them with "
+                 "further edits. Never compose a whole large file in your head before "
+                 "writing it: your thinking per step is limited, and a long plan is cut off "
+                 "before anything is written. Split large new files into several writes.")
     parts.append("Work only inside the current directory. Do not push, do not switch "
                  "branches, and do not modify project-management files. When you are done, "
                  "reply with a concise summary of what you changed.")
@@ -159,6 +186,7 @@ class OpenCodeCliBackend(ExecutionBackend):
             raise OpenCodeBackendError(f"Failed to invoke OpenCode: {e}") from e
 
         summary, usage, counts = parse_events(outcome.stdout)
+        finish_reason, last_tools = parse_progress(outcome.stdout)
         from core.worker_limits import classify_failure
 
         limit = None if outcome.timed_out else classify_failure(
@@ -171,6 +199,9 @@ class OpenCodeCliBackend(ExecutionBackend):
             "returncode": outcome.returncode,
             "summary": summary,
             "event_counts": counts,
+            "finish_reason": finish_reason,
+            "last_tools": last_tools,
+            "reasoning_tokens": usage.get("reasoning_tokens"),
             "stderr_tail": outcome.stderr[-4000:],
         }
         if limit is not None:

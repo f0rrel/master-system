@@ -26,7 +26,7 @@ from core.run_lock import ProjectLock
 from core.session_store import FileSessionStore
 from core.task_orchestrator import default_worktrees
 
-__all__ = ["ACTOR", "set_acceptance", "set_description", "set_manual_check"]
+__all__ = ["ACTOR", "reopen", "set_acceptance", "set_description", "set_manual_check"]
 
 ACTOR = "human-cli"
 
@@ -78,3 +78,26 @@ def set_acceptance(master, history, project_id, task_id, acceptance,
     action = "clear_acceptance" if acceptance is None else "set_acceptance"
     return _edit(master, history, project_id, task_id, action,
                  lambda: master.set_task_acceptance(project_id, task_id, acceptance), paths)
+
+
+def reopen(master, history, project_id, task_id, reason: str, actor: str = "owner",
+           paths: Optional[RuntimePaths] = None) -> dict:
+    """Put a blocked task back to ``planned`` (its spec unchanged), recorded as a human
+    action, so the service tries it again with a fresh attempt budget."""
+    paths = paths if paths is not None else RuntimePaths.default()
+    state = master.project_state(project_id)
+    with ProjectLock(state.project_path, holder=f"{actor} reopen"):
+        task = state.get_task(task_id)
+        if task is None:
+            raise ValueError(f"Task not found: {task_id}")
+        if task.get("status") not in ("blocked", "in_progress", "planned"):
+            raise ValueError(f"{task_id} is {task.get('status')}; only blocked or open tasks "
+                             "can be reopened")
+        before = task.get("status")
+        record = master.update_task(project_id, task_id, status="planned")
+        history.append(type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex,
+                       project_id=project_id, task_id=task_id,
+                       payload={"actor": actor, "action": "reopen", "reason": reason,
+                                "status_before": before, "spec_hash_before": spec_hash(task),
+                                "spec_hash_after": spec_hash(record)})
+        return record

@@ -115,6 +115,7 @@ class TaskOrchestrator:
         tiers=None,
         limits=None,
         limit_policy=None,
+        stall_minutes: float = 5,
     ):
         if attempt_timeout_s <= 0 or verification_timeout_s <= 0:
             raise ValueError("timeouts must be positive")
@@ -140,6 +141,8 @@ class TaskOrchestrator:
         self._limits = limits
         #: {"max_auto_wait_minutes", "unknown_limit_wait_minutes"}.
         self._limit_policy = dict(limit_policy or {})
+        #: A worker that changes nothing for this long has stalled (not a failure).
+        self._stall_minutes = stall_minutes
         #: Process logs live in the state dir, never in the worktree.
         self._log_root = (
             Path(log_root) if log_root is not None
@@ -149,6 +152,25 @@ class TaskOrchestrator:
     @property
     def worktrees(self) -> GitWorktrees:
         return self._worktrees
+
+    def _stall(self, outcome, facts, exec_res, minutes):
+        """A worker that ran and changed nothing: cut off, or busy for minutes without output.
+
+        Infrastructure, like a limit: not verified and not a failure of the task. The
+        excerpt shows why (finish reason, reasoning tokens, its last tool calls)."""
+        if outcome not in ("finished", "timed_out") or facts.get("files_changed_count", 1):
+            return None
+        artifacts = exec_res.artifacts if exec_res is not None else {}
+        cut_off = artifacts.get("finish_reason") == "length"
+        if not cut_off and minutes < self._stall_minutes:
+            return None
+        return {"minutes": round(minutes, 1),
+                "reason": "cut off (the model used up its output on thinking)" if cut_off
+                else f"no file changed in {minutes:.0f} minutes",
+                "finish_reason": artifacts.get("finish_reason"),
+                "reasoning_tokens": artifacts.get("reasoning_tokens"),
+                "last_tools": artifacts.get("last_tools") or [],
+                "stderr_tail": str(artifacts.get("stderr_tail") or "")[-500:]}
 
     def _profile_choice(self, project_id):
         """(profile, why) from the owner's override or the worker order; None: tiers/default."""
@@ -379,6 +401,7 @@ class TaskOrchestrator:
 
         exec_res = None
         raised = None
+        worker_started = time.monotonic()
         try:
             exec_res = runner.invoke(task, context, workspace)
         except BaseException as error:
@@ -395,6 +418,7 @@ class TaskOrchestrator:
             outcome = "timed_out"
         else:
             outcome = "finished"
+        worker_minutes = (time.monotonic() - worker_started) / 60
 
         facts = {}
         try:
@@ -419,6 +443,10 @@ class TaskOrchestrator:
             )
         if raised is not None:
             finished.update(error_type=type(raised).__name__, message=str(raised))
+        stall = self._stall(outcome, facts, exec_res, worker_minutes)
+        if stall is not None:
+            outcome = finished["outcome"] = "stalled"
+            finished["stall"] = jsonable(stall)
         profile = tier_facts.get("worker_profile") or "default"
         if limit:
             finished["limit"] = jsonable(limit)

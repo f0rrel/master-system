@@ -12,6 +12,7 @@
     ms pick <project> <task> <asset> <n>   choose one of a task's generated images
     ms limit <project> [wait|free|paid]    answer a worker limit (see ms status)
     ms telegram pair|status|test|unpair    the Telegram bot (the phone interface)
+    ms reopen <project> <task> [--reason]  put a blocked task back in the queue (recorded)
     ms pause | resume          stop or allow new work (a running task finishes)
     ms stop                    stop the current run now, and pause
     ms daemon                  the background service loop (run by systemd)
@@ -1380,6 +1381,24 @@ def _command_telegram(args, out):
     return 0
 
 
+def _command_reopen(args, out):
+    from core.human_edits import reopen
+    from core.master import EXPECTED_ERRORS, Master
+    from core.run_lock import ProjectBusyError
+    from core.sqlite_history import SQLiteHistoryStore
+
+    paths = _paths()
+    master = Master(_config(args).run.projects_root)
+    try:
+        record = reopen(master, SQLiteHistoryStore(paths.history_path), args.project, args.task,
+                        args.reason, actor=args.actor, paths=paths)
+    except (*EXPECTED_ERRORS, ProjectBusyError) as error:
+        print(f"error: {error}", file=out)
+        return 1
+    print(f"{record['id']} is planned again; its attempt budget starts over.", file=out)
+    return 0
+
+
 def _command_release(args, out):
     result = build_releaser(_config(args)).prepare(args.project)
     print(result["message"], file=out)
@@ -1548,6 +1567,11 @@ def build_parser():
     backlog.add_argument("--priority", type=int, default=None)
     backlog.add_argument("--id", default=None)
     backlog.set_defaults(handler=_command_backlog)
+    reopen = commands.add_parser("reopen", help="Put a blocked task back in the queue.")
+    reopen.add_argument("project")
+    reopen.add_argument("task")
+    reopen.add_argument("--reason", default="reopened by the owner")
+    reopen.set_defaults(handler=_command_reopen)
     telegram = commands.add_parser("telegram", help="The Telegram bot: pair, status, test.")
     telegram.add_argument("action", choices=["pair", "status", "test", "unpair"])
     telegram.set_defaults(handler=_command_telegram)

@@ -214,7 +214,7 @@ class HistoryEvidence:
         ``limited`` attempt (the provider refused) is infrastructure."""
         return sum(1 for a in attempts_for_task(self._history, project_id, task_id,
                                                 **self._scope())
-                   if a.outcome != "limited")
+                   if a.outcome not in ("limited", "stalled"))
 
     def attempt_limit_reached(self, project_id: str, task_id: str) -> bool:
         return self.attempts_in_scope(project_id, task_id) >= self.max_attempts

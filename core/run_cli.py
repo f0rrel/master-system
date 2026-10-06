@@ -252,6 +252,7 @@ def build_runner(ctx, stop_check=None):
         limit_policy={"max_auto_wait_minutes": ctx.config.worker.max_auto_wait_minutes,
                       "unknown_limit_wait_minutes":
                           ctx.config.worker.unknown_limit_wait_minutes},
+        stall_minutes=ctx.config.worker.stall_minutes,
         auto_integrate=AutoIntegrator(ctx.master, ctx.history, ctx.paths, verifier=verifier,
                                       worker_env=worker_env,
                                       verification_timeout_s=r.verification_timeout_s),

@@ -185,6 +185,7 @@ def build_report(history: HistoryStore, session_id: str,
             "seconds": _seconds(started.created_at, finished.created_at if finished else None),
             "profile": started.payload.get("worker_profile"),
             "limit": finished.payload.get("limit") if finished else None,
+            "stall": finished.payload.get("stall") if finished else None,
         })
 
     # --- tokens and cost ----------------------------------------------------
@@ -363,6 +364,13 @@ def render_report(report: dict) -> str:
         lines.append(f"  {a['task_id']:<14} {a['outcome']:<11} verdict {a['verdict'] or '-':<17} "
                      f"files {a['files_changed']}  {a['seconds']} s  {a['attempt_id'][:12]}"
                      + (f"  worker {a['profile']}" if a.get("profile") else ""))
+        if a.get("stall"):
+            stall = a["stall"]
+            lines.append(f"      stalled worker: {stall.get('reason')} after "
+                         f"{stall.get('minutes')} min (reasoning tokens "
+                         f"{stall.get('reasoning_tokens')}; not counted as a failure)")
+            for tool in stall.get("last_tools") or []:
+                lines.append(f"        last: {tool}")
         if a.get("limit"):
             limit = a["limit"]
             lines.append(f"      worker limit: {limit.get('kind')}, reset "

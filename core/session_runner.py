@@ -99,6 +99,7 @@ class SessionRunner:
         tiers=None,
         limits=None,
         limit_policy=None,
+        stall_minutes: float = 5,
     ):
         self._master = master
         self._provider = provider
@@ -125,6 +126,7 @@ class SessionRunner:
         self._tiers = tiers
         self._limits = limits
         self._limit_policy = limit_policy
+        self._stall_minutes = stall_minutes
 
     @property
     def store(self):
@@ -216,6 +218,7 @@ class SessionRunner:
             tiers=self._tiers,
             limits=self._limits,
             limit_policy=self._limit_policy,
+            stall_minutes=self._stall_minutes,
         )
         try:
             result = loop.run(session.project_id)

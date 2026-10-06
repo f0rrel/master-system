@@ -42,8 +42,12 @@ DEFAULTS = {
     "visual": {"allowed_paths": ["*"], "tools": _CODE_TOOLS},
     "logic": {"allowed_paths": ["*"], "tools": _CODE_TOOLS},
     "docs": {"allowed_paths": ["*.md", "docs/*"],
-             "tools": ("edit", "write", "patch", "read", "grep", "glob", "list")},
+             "tools": ("bash", "edit", "write", "patch", "read", "grep", "glob", "list")},
 }
+#: Tools every type keeps. OpenCode's free tier refuses requests whose bash tool is
+#: disabled ("can only be used from within OpenCode", HTTP 403), so path limits, not
+#: tool limits, keep a docs task to documentation.
+REQUIRED_TOOLS = ("bash",)
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 SKILL_BUDGET = 4000
 
@@ -60,6 +64,7 @@ def type_settings(project: dict, task_type: str) -> dict:
     own = configured.get(task_type) if isinstance(configured.get(task_type), dict) else {}
     paths = [str(g) for g in own.get("allowed_paths") or DEFAULTS[task_type]["allowed_paths"]]
     tools = [str(t) for t in own.get("tools") or DEFAULTS[task_type]["tools"]]
+    tools += [t for t in REQUIRED_TOOLS if t not in tools]
     return {"type": task_type, "allowed_paths": paths,
             "tools": [t for t in tools if t in ALL_TOOLS],
             "skill": str(own["skill"]) if own.get("skill") else None}

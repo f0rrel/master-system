@@ -88,11 +88,27 @@ def failed_attempts_since_human(history, project_id: str, task_id: str) -> int:
             passed = set()
         elif e.type is EventType.VERIFICATION and e.payload.get("verdict") == "pass":
             passed.add(e.attempt_id)
-        elif e.type is EventType.ATTEMPT_FINISHED and e.payload.get("outcome") != "limited":
-            # A worker limit is infrastructure, never the task's failure.
+        elif e.type is EventType.ATTEMPT_FINISHED and e.payload.get("outcome") not in (
+                "limited", "stalled"):
+            # A worker limit or stall is infrastructure, never the task's failure.
             count += 1
     # Attempts that later passed are not failures.
     return max(0, count - len(passed))
+
+
+MAX_STALLS = 3
+
+
+def stalls_since_human(history, project_id: str, task_id: str) -> int:
+    """Stalled worker attempts on the task since the last human action on it."""
+    count = 0
+    for e in history.events(project_id=project_id, task_id=task_id,
+                            types=[EventType.HUMAN_ACTION, EventType.ATTEMPT_FINISHED]):
+        if e.type is EventType.HUMAN_ACTION:
+            count = 0
+        elif e.payload.get("outcome") == "stalled":
+            count += 1
+    return count
 
 
 def work_for(status: dict, history, max_failures: int = 3):
@@ -110,7 +126,9 @@ def work_for(status: dict, history, max_failures: int = 3):
             continue
         if not (task.get("acceptance") or {}).get("commands"):
             continue
-        if failed_attempts_since_human(history, status["project_id"], task["id"]) >= max_failures:
+        if (failed_attempts_since_human(history, status["project_id"], task["id"]) >= max_failures
+                or stalls_since_human(history, status["project_id"], task["id"]) >= MAX_STALLS):
+            # Stalls are not failures, but a task the worker keeps stalling on needs a human.
             exhausted.append(task["id"])
         else:
             runnable.append(task["id"])

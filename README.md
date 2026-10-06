@@ -283,6 +283,7 @@ ever run as a command.
 | `ms backlog <project> [add "<title>" [--summary …] [--priority N] \| priority <epic> <N>]` | List the backlog in priority order; add a proposed epic; change an epic's priority (lower runs first). |
 | `ms lessons <project> [--approve all\|IDS] [--reject IDS\|rest]` | Review lessons workers proposed; only approved lessons are used. |
 | `ms pick <project> <task> <asset> <n>` | Choose one of a task's generated image candidates; it is committed and the task can run. |
+| `ms reopen <project> <task> [--reason …]` | Put a blocked task back in the queue (spec unchanged, recorded); its attempt budget starts over. |
 | `ms telegram pair\|status\|test\|unpair` | Pair the Telegram bot with your account (one-time code), check it, send a test message, or forget the owner. |
 | `ms limit <project> [wait\|free\|paid]` | Show or answer a worker limit: wait for the reset, switch to the next free worker profile, or use the paid one (counts toward the daily cap). |
 | `ms publish <project>` | Push `develop` and the preview site now (the service also does this after every run). |
@@ -343,6 +344,7 @@ Settings live in `~/.config/master-system/config.toml`. Every key is optional.
 | | `max_auto_wait_minutes` | `120` | A worker limit whose reset is this close is waited for automatically |
 | | `unknown_limit_wait_minutes` | `60` | A limit without a known reset is waited for this long, once |
 | | `model_check_days` | `7` | How often free worker models are checked |
+| | `stall_minutes` | `5` | A worker that changes no file for this long (or is cut off) has stalled: not a failure; 3 stalls in a row wait for you |
 | `[worker.profiles.<name>]` | `model`, `home`, `paid`, `label` | — | One worker profile: model, worker home, whether it costs money, a readable name |
 | `[run]` | `max_steps` | `20` | Master decisions per run |
 | | `max_retries` | `1` | Retries after an unusable model reply |

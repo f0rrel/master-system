@@ -139,6 +139,8 @@ class WorkerConfig:
     unknown_limit_wait_minutes: float = 60
     #: How often the free worker models are checked (still listed, still free).
     model_check_days: float = 7
+    #: A worker that changes nothing for this long (or is cut off) has stalled.
+    stall_minutes: float = 5
 
 
 @dataclass(frozen=True)
@@ -279,7 +281,8 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
     w = _section(data, "worker", ("opencode_bin", "model", "home", "extra_args",
                                   "node_min_major", "playwright_browsers_path", "profiles",
                                   "ladder", "workers", "max_auto_wait_minutes",
-                                  "unknown_limit_wait_minutes", "model_check_days"))
+                                  "unknown_limit_wait_minutes", "model_check_days",
+                                  "stall_minutes"))
     profiles = {}
     for name, value in (w.get("profiles") or {}).items():
         if not isinstance(value, dict) or set(value) - {"model", "home", "paid", "label"}:
@@ -317,6 +320,7 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
         unknown_limit_wait_minutes=_positive(w, "worker", "unknown_limit_wait_minutes",
                                              defaults.unknown_limit_wait_minutes),
         model_check_days=_positive(w, "worker", "model_check_days", defaults.model_check_days),
+        stall_minutes=_positive(w, "worker", "stall_minutes", defaults.stall_minutes),
     )
 
     r = _section(data, "run", ("max_steps", "max_retries", "max_attempts_per_task",

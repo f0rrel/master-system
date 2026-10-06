@@ -5,6 +5,16 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Stalled workers
+- Fixed: a task creating a large new file (six SVG drawings) failed three times without
+  changing anything: the free model spent its whole 32,000-token output budget on
+  thinking and was cut off before writing. Workers are now told to write early and in
+  pieces, and such attempts are `stalled` (not failures) with an excerpt in `ms report`;
+  three stalls in a row wait for the owner.
+- Fixed: the `docs` task type disabled `bash`, which OpenCode's free tier refuses
+  (HTTP 403); every type now keeps `bash`, and paths still limit what a type may change.
+- `ms reopen <project> <task>` puts a blocked task back in the queue, recorded.
+
 ### Telegram bot
 - A Telegram bot is the phone interface: status, summary with screenshots, report,
   backlog, spend (with the DeepSeek balance), the planner chat (messages and .md/.txt

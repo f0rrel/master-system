@@ -212,6 +212,18 @@ A run stops as soon as its project is paused (`run_cli.limit_check`, part of the
 check); the service skips paused projects and holds the morning summary while an
 automatic wait is pending. `record_success` clears the limit when the worker works again.
 
+**Stalled workers.** An attempt whose worker ends without changing any file is
+`stalled` (not verified, not a failure) when the model was cut off (`finish_reason:
+length`, typically its whole output budget spent on thinking) or it ran for at least
+`[worker] stall_minutes`. The record keeps an excerpt: the reason, minutes, reasoning
+tokens and the last tool calls (`ms report` shows it). Three stalls since the last
+human action make the task wait for the owner. Workers are told to write files early
+and in pieces, so a long plan is not lost to the output limit.
+
+**Tools every type keeps.** OpenCode's free tier answers HTTP 403 ("can only be used
+from within OpenCode") when the `bash` tool is disabled, so every type keeps `bash`;
+path limits (`allowed_paths`, enforced by the verifier) keep each type to its files.
+
 **Weekly model check.** `FreeModelCheck` runs `opencode models <provider> --verbose
 --refresh` in each free profile's home every `model_check_days` and notifies the owner
 when a model is no longer offered, no longer active, or no longer free.

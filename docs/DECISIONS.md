@@ -151,3 +151,13 @@ choice* — made during implementation and recorded here for review.
 | Approve, release and worker-limit choices need a confirmation button; there are no payment actions at all | Consequential actions need a deliberate second tap; money stays manual | Approved |
 | Bot actions reuse the `ms` commands with `--actor telegram`; others are recorded directly; system-wide actions use project `_service` | Same behaviour and audit trail as the terminal | Implementation choice |
 | `/spend` shows DeepSeek's balance from its read-only `GET /user/balance` | Information only | Approved |
+
+## Stalled workers
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| An attempt that changes no file is `stalled` (infrastructure, not a failure) when the model was cut off or ran at least `stall_minutes` (5); its excerpt (reason, reasoning tokens, last tool calls) is recorded and shown in `ms report` | Found on a real task: three attempts spent Big Pickle's 32,000-token output limit on reasoning and wrote nothing, and were counted as failures | Approved |
+| Three stalls since the last human action make the task wait for the owner | Stalls must not loop forever at no visible cost | Implementation choice |
+| Workers are told to write files early and in pieces | The cut-off happened while composing six SVG drawings in one go | Implementation choice |
+| Every task type keeps the `bash` tool | OpenCode's free tier refuses requests without it (HTTP 403); found by a live test creating a file under each type | Implementation choice |
+| `ms reopen` puts a blocked task back to planned with a recorded human action, spec unchanged | A retry after an infrastructure fix needs no spec change | Approved |

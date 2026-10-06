@@ -181,6 +181,7 @@ class AutonomousLoop:
         tiers=None,
         limits=None,
         limit_policy=None,
+        stall_minutes: float = 5,
     ):
         if not isinstance(master, Master):
             raise TypeError(f"expected a Master, got {type(master).__name__}")
@@ -233,6 +234,7 @@ class AutonomousLoop:
             tiers=tiers,
             limits=limits,
             limit_policy=limit_policy,
+            stall_minutes=stall_minutes,
         )
 
     @property

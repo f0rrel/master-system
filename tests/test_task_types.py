@@ -28,10 +28,11 @@ def test_types_have_defaults_and_project_overrides():
     assert TYPES == ("developer", "visual", "logic", "docs")
     assert type_settings({}, "developer")["allowed_paths"] == ["*"]
     assert type_settings({}, "docs")["allowed_paths"] == ["*.md", "docs/*"]
-    assert "bash" not in type_settings({}, "docs")["tools"]
+    assert "bash" in type_settings({}, "docs")["tools"]  # the free tier requires it
+    assert "webfetch" not in type_settings({}, "docs")["tools"]
     visual = type_settings(PROJECT, "visual")
     assert visual == {"type": "visual", "allowed_paths": ["www/css/*", "www/assets/*"],
-                      "tools": ["read", "edit"], "skill": "docs/skills/visual.md"}
+                      "tools": ["read", "edit", "bash"], "skill": "docs/skills/visual.md"}
     assert frozen_allowed_paths(visual) == ["www/css/*", "www/assets/*"]
     assert frozen_allowed_paths(type_settings({}, "logic")) is None
     with pytest.raises(ValueError):
@@ -155,10 +156,10 @@ def test_the_orchestrator_briefs_the_worker_and_limits_its_tools(tmp_path):
     assert "Project visual skill." in briefing["skill"]
     assert briefing["lessons"] == ["Approved one"]  # never the pending one
     config = json.loads(call["env"]["OPENCODE_CONFIG_CONTENT"])
-    assert config["tools"]["bash"] is False
+    assert config["tools"]["webfetch"] is False and "bash" not in config["tools"]
     [started] = history.events(types=[EventType.ATTEMPT_STARTED])
     assert started.payload["task_type"] == "visual"
-    assert started.payload["allowed_tools"] == ["read", "edit"]
+    assert started.payload["allowed_tools"] == ["read", "edit", "bash"]
     assert started.payload["lessons_used"] == 1
 
 
