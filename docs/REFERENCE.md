@@ -392,7 +392,7 @@ Per-project options (`repository`, `base_branch`, `auto_integrate`, `github`, `p
 | No secrets in the worker's environment | An allowlisted environment: toolchain `PATH`, a dedicated worker home, no keys. Workers still run as the same OS user and can read that user's files, including `master.env` and `github-app.pem` |
 | Bounded execution | `timeout --kill-after` in a separate process group; one run per project (`flock`) |
 | Intent before side effects | Decisions and attempt starts are recorded before they act; interrupted attempts are never replayed |
-| The release branch is human-only | The system's code never merges to `main`, and the ruleset from [GITHUB-SETUP.md](GITHUB-SETUP.md) blocks direct pushes (pull request required, no bypass); the GitHub App has no Administration permission |
+| The release branch is human-only | The system's code never merges to `main`, and the ruleset from [GITHUB-SETUP.md](GITHUB-SETUP.md) blocks direct pushes (pull request with one approval required, no bypass); the GitHub App opens the release pull request, so it cannot approve it, and has no Administration permission |
 | One phone owner, fixed actions | The Telegram bot answers only the user paired with a one-time code, offers fixed operations behind single-use buttons, asks to confirm approvals, releases and limit choices, and has no payment actions |
 | Least-privilege publishing | One-hour installation tokens, passed only to the `git push` that needs them |
 | Work stays within its type | A task's type freezes `allowed_paths` into its acceptance, and the verifier fails changes elsewhere. Tools are limited through a per-attempt OpenCode config, but `bash` is always enabled, so tool limits are not a security boundary; path limits are |

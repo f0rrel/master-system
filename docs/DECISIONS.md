@@ -211,3 +211,4 @@ choice* — made during implementation and recorded here for review.
 | Decision | Rationale | Status |
 | --- | --- | --- |
 | CI runs the offline suite on Python 3.12 and 3.13 with Node 22, linked into `~/.nvm/versions/node/` | Without Node two tests skip (the quickstart's base check, the worker Node test); nvm's layout is where workers look first after `node_bin` | Implementation choice |
+| **Reversed:** the `main` ruleset needs 1 required approval, not 0 | GitHub never lets a pull request's author approve it, and the App authors the release pull request; with 0 approvals the App's token (Contents write, which the merge endpoint accepts from installation tokens) could merge it through the API | Approved |

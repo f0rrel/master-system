@@ -296,7 +296,7 @@ stdlib `urllib`; every error has the token replaced by `<token>`.
 
 | Branch | Changed by |
 | --- | --- |
-| `main` (release branch) | Only a human, by merging a release pull request (ruleset: PR required, no force push, no deletion, no bypass) |
+| `main` (release branch) | Only a human, by approving and merging a release pull request (ruleset: PR with one approval required, no force push, no deletion, no bypass) |
 | `develop` | The system: verified attempts, planner tests, changelog entries (ruleset: no force push, no deletion) |
 | `gh-pages` | The system: the published preview and live site (only with `site_dir`) |
 | `attempt/*`, `planner/*` | Local only, in the dedicated clone |
@@ -340,7 +340,7 @@ Master's context never names them. Reports show attempts, passes and cost per ti
 | One run per project | Non-blocking `flock`, inherited by workers, never unlocked early |
 | Deadlines | Workers run under `timeout --kill-after` in their own process group; leftovers in the group are killed |
 | No secrets for workers | Allowlisted environment (`core/worker_env.py`): toolchain on `PATH`, the worker home, no keys; secret-looking extras are refused |
-| The release branch changes only by a human merge | The App has no Administration permission; a ruleset on `main` requires a PR with no bypass |
+| The release branch changes only by a human merge | The App has no Administration permission; a ruleset on `main` requires a PR with one approval and no bypass (the App opens the PR, so it cannot approve it) |
 | A task stays within its type | `acceptance.allowed_paths` (verifier) and a per-attempt OpenCode tool config |
 | Reviewers and memory cannot widen authority | The visual reviewer can only block; lessons are used only after approval; image keys never reach workers |
 | Provider limits are not failures, and money is not spent without the owner | `limited` attempts are excluded from every budget; switching workers or using a paid one is the owner's choice |

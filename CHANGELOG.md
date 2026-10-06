@@ -11,6 +11,9 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
   README badge.
 - `pyproject.toml`: the package is named `master-system`, described with the README's
   tagline (`uv.lock` updated; no dependency changed).
+- `docs/GITHUB-SETUP.md` recommends 1 required approval on `main` (was 0): the App opens
+  the release pull request and cannot approve it, but with 0 approvals its token could
+  merge it through the API. Existing installations: edit the `main` ruleset.
 - Issue templates for bypasses and setup problems, asking for the fields in the README's
   "useful feedback" list, and links to the README sections and troubleshooting.
 

@@ -59,6 +59,7 @@ Paths: `$MS_HOME` is the repository; `<clone>` is a managed project's dedicated 
 | The preview did not update after "batch done" | GitHub Pages builds take 1–2 minutes, or publishing failed | Wait and reload; `ms publish <project>` shows any error; `ms github check` |
 | "Publishing is not set up yet (GitHub App)" | App id or private key missing | `ms github check`; [GITHUB-SETUP.md](GITHUB-SETUP.md) |
 | `ms github check`: the App cannot sign in | Wrong key file or App ID, or the App was uninstalled | Repeat steps 3–5 of [GITHUB-SETUP.md](GITHUB-SETUP.md) |
+| GitHub: "Review required" / merging is blocked on the release pull request | The `main` ruleset requires one approval ([GITHUB-SETUP.md](GITHUB-SETUP.md), step 6) | Approve it (**Files changed** → **Review changes** → **Approve**), then merge |
 | `ms status` still shows a release waiting for a merge | GitHub has not been checked since the merge | Run `ms status` again (it checks at most once a minute) |
 | Release: "main's files differ from the reviewed develop; not tagged" | The merge on GitHub is not exactly the reviewed `develop` (e.g. edited during the merge) | Inspect the merge on GitHub; correct `main` with a new release pull request |
 | `integration_refused` / "conflicts with newer work" in a report | Two tasks changed the same code; the later one is retried from the new `develop` automatically | Nothing, unless it repeats (it then surfaces as "needs you") |

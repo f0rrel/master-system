@@ -99,8 +99,13 @@ App's page and generate a new one.
    | Bypass list | **Empty** (not even the App) |
    | Target branches | **Add target** → **Include by pattern** → `main` |
    | Restrict deletions | Ticked |
-   | Require a pull request before merging | Ticked; required approvals `0` if you are the only reviewer |
+   | Require a pull request before merging | Ticked; required approvals **`1`** |
    | Block force pushes | Ticked |
+
+   Why one approval: the App opens the release pull request, GitHub never lets a pull
+   request's author approve it, and with `0` approvals the App's own token (Contents write)
+   could merge it through the API; with `1`, a merge needs your approval. To release,
+   open the pull request, **Files changed** → **Review changes** → **Approve**, then merge.
 
 3. **New ruleset** → **New branch ruleset** again:
 
