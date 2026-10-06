@@ -205,3 +205,9 @@ choice* — made during implementation and recorded here for review.
 | `[worker] path_dirs` adds existing directories (checked at load, `~` expanded) to the worker and verification `PATH`; the secret-name check for environment extras is unchanged | Project toolchains such as uv live outside the system `PATH`; the environment stays an allowlist | Approved |
 | A Node binary's version is read by running `node --version` from `core/host.py`; the lookup in `core/worker_env.py` starts no process | Keeps the process-starting modules as they are (boundary test) | Implementation choice |
 | A quickstart project in `examples/quickstart/` with zero dependencies, whose `init.sh` writes only the target repository and prints the remaining steps | A new user can try the whole loop with nothing to install beyond Node; never touching `~/.config` keeps the script safe to run | Approved |
+
+## Project hygiene
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| CI runs the offline suite on Python 3.12 and 3.13 with Node 22, linked into `~/.nvm/versions/node/` | Without Node two tests skip (the quickstart's base check, the worker Node test); nvm's layout is where workers look first after `node_bin` | Implementation choice |

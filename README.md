@@ -2,6 +2,7 @@
 
 **Unattended AI coding where the agent never decides when it's done.**
 
+[![tests](https://github.com/f0rrel/master-system/actions/workflows/tests.yml/badge.svg)](https://github.com/f0rrel/master-system/actions/workflows/tests.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-informational)
 

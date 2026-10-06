@@ -5,6 +5,11 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Project hygiene
+- Continuous integration: `.github/workflows/tests.yml` runs the offline suite on
+  Python 3.12 and 3.13 with Node 22 (exposed in nvm's layout, as workers find it);
+  README badge.
+
 ### The first ten minutes
 - Without a projects root, `ms status` and `ms doctor` print a one-line hint instead of a
   traceback, and the service idles and logs the hint instead of exiting (systemd no

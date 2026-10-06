@@ -1,0 +1,33 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Node 22 for the quickstart's base check and the worker-environment test. Workers
+      # find Node through nvm's install directory, so expose it in that layout too.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Expose Node in nvm's layout
+        run: |
+          mkdir -p "$HOME/.nvm/versions/node"
+          ln -s "$(dirname "$(dirname "$(command -v node)")")" \
+            "$HOME/.nvm/versions/node/v$(node -p process.versions.node)"
+      - run: uv sync --extra dev
+      - run: uv run python -m pytest -q -rs
