@@ -5,3 +5,6 @@ milestones:
 - id: m2-batch-2
   name: 'Second batch: resume, debug panel, stars'
   status: in_progress
+- id: epic-juice
+  name: Juicier matches
+  status: planned

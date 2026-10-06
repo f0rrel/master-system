@@ -190,3 +190,138 @@ tasks:
     2. Win a level with 1.5 x the target or more: ★★★.
 
     3. Run out of moves: ☆☆☆.'
+- id: ml-9
+  milestone: epic-juice
+  title: Effects toggle next to the sound toggle
+  status: completed
+  size: small
+  description: 'In www/index.html only, add the shared effects setting and a visible
+    toggle. Add one clearly marked block (// ==== ML-JUICE: effects switch ====) at
+    the end of the game script that defines window.effectsEnabled() returning the
+    current boolean (true unless the player turned it off) and window.setEffectsEnabled(on)
+    which sets it and stores it the same way the existing sound setting is stored,
+    so it survives closing and reopening the game (a fresh start defaults to on).
+    Add a small button next to the existing 🔊 sound toggle, in the same row and with
+    the same look, with the accessible name ''Effects'' (e.g. aria-label=''Effects''
+    and a visible on/off state), which flips the setting and re-renders its own state.
+    It must not change the volume or the behaviour of the sound toggle, the debug
+    panel or any game logic, and add no CSS animation. Replace old code; don''t leave
+    the previous implementation behind as a fallback.'
+  acceptance:
+    commands:
+    - npm ci --prefer-offline --no-audit --no-fund
+    - npx playwright test tests/tasks/ml-9-effects-toggle.spec.js
+    - node --test tests/unit/*.test.js
+    - npx playwright test tests/smoke
+    protected_paths:
+    - tests/*
+    - package.json
+    - package-lock.json
+    - playwright.config.js
+    - .nvmrc
+  manual_check: 1. Open the preview link. 2. A small 'Effects' toggle sits next to
+    the 🔊 button; tap it — it turns off. 3. Reload the page — it is still off. 4.
+    In the console type effectsEnabled() — it prints false; type setEffectsEnabled(true)
+    — it prints true. 5. The 🔊 button still mutes and unmutes exactly as before.
+- id: ml-10
+  milestone: epic-juice
+  title: Tile clear pop (extend matchPop)
+  status: completed
+  size: small
+  description: 'In www/index.html only, extend the existing matchPop effect so a cleared
+    tile visibly pops. While a tile is being cleared it keeps the existing ''matchPop''
+    class with a pop keyframe (scale up, then out) lasting 400 ms or less, and the
+    class is removed when the pop ends (animationend plus a setTimeout fallback) so
+    it never sticks. Keep the existing clearing timing and behaviour — do not add
+    a second clearing pass and do not delay gravity. Do not delay the game: no awaits,
+    no blocking, the next move must work immediately. When the player prefers reduced
+    motion (matchMedia(''(prefers-reduced-motion: reduce)'').matches) add no class
+    and no animation (the tiles just clear), and when window.effectsEnabled exists
+    and returns false skip it too; guard for the switch not existing yet. Add the
+    pop CSS in its own clearly marked block (/* ==== ML-JUICE: tile clear pop ====
+    */) and the JS in a matching marked block at the end of the script. Replace old
+    code; don''t leave the previous implementation behind as a fallback.'
+  acceptance:
+    commands:
+    - npm ci --prefer-offline --no-audit --no-fund
+    - npx playwright test tests/tasks/ml-10-tile-clear-pop.spec.js
+    - node --test tests/unit/*.test.js
+    - npx playwright test tests/smoke
+    protected_paths:
+    - tests/*
+    - package.json
+    - package-lock.json
+    - playwright.config.js
+    - .nvmrc
+  manual_check: 1. Open the preview link and start Chapter 1. 2. Swap two tiles to
+    make a match — the matched tiles visibly pop before they vanish. 3. Make another
+    match straight away — the next move is accepted immediately. 4. Turn on 'reduce
+    motion' and repeat — the tiles just clear, no pop, and the game still plays.
+- id: ml-13
+  milestone: epic-juice
+  title: Burst on the win screen only
+  status: completed
+  size: small
+  description: 'In www/index.html only, add a CSS-only burst on the win screen and
+    none on the loss screen. The results overlay the game already shows (its existing
+    element, keeping every class it already has) gets the class ''win'' when the player
+    won and ''lose'' when they lost — add these two classes if they are not there
+    yet. In your own clearly marked CSS block (/* ==== ML-JUICE: win burst ==== */)
+    give the overlay''s .win state a short CSS-keyframe burst (a radial flash and
+    slight scale-out on the overlay, or on a burst element inside it) lasting 400
+    ms or less, and make sure the .lose state has no burst at all. Add no JavaScript
+    beyond choosing the win/lose class, block nothing (the results screen works exactly
+    as before), and respect the rules: no burst when the player prefers reduced motion
+    (matchMedia(''(prefers-reduced-motion: reduce)'').matches) and no burst when window.effectsEnabled
+    exists and returns false; guard for the switch not existing yet. Replace old code;
+    don''t leave the previous implementation behind as a fallback.'
+  acceptance:
+    commands:
+    - npm ci --prefer-offline --no-audit --no-fund
+    - npx playwright test tests/tasks/ml-13-win-burst.spec.js
+    - node --test tests/unit/*.test.js
+    - npx playwright test tests/smoke
+    protected_paths:
+    - tests/*
+    - package.json
+    - package-lock.json
+    - playwright.config.js
+    - .nvmrc
+  manual_check: 1. Open the preview link and finish Chapter 1 with a win — the win
+    screen flashes outward once. 2. Fail a level — the loss screen shows no burst.
+    3. Tap Play again straight away — the results screen still works exactly as before.
+    4. With 'reduce motion' on, the win screen shows with no burst.
+- id: ml-14
+  milestone: epic-juice
+  title: Tile colours from CSS variables, a bit brighter
+  status: completed
+  size: small
+  description: 'In www/index.html only, move the six tile-type colours into CSS custom
+    properties defined in one place and make them moderately brighter while keeping
+    all six clearly distinct. In your own clearly marked CSS block (/* ==== ML-JUICE:
+    tile colours ==== */) add --tile-1 … --tile-6 on :root (one per matchable tile
+    type, keeping the number/order the game already uses) and change the existing
+    tile colour rules to paint from them (background-color: var(--tile-N)), deleting
+    the old hard-coded colours from those rules. Brighten each colour moderately —
+    roughly 10–20% lighter is enough, do not go neon — and keep all six clearly distinguishable
+    from each other and from the empty board background. Change nothing that is not
+    a tile-type colour: no other colour, no rule, no layout, no logic. Delete the
+    old hard-coded tile colours — do not leave them behind as a fallback. Replace
+    old code; don''t leave the previous implementation behind as a fallback.'
+  acceptance:
+    commands:
+    - npm ci --prefer-offline --no-audit --no-fund
+    - npx playwright test tests/tasks/ml-14-tile-color-vars.spec.js
+    - node --test tests/unit/*.test.js
+    - npx playwright test tests/smoke
+    protected_paths:
+    - tests/*
+    - package.json
+    - package-lock.json
+    - playwright.config.js
+    - .nvmrc
+  manual_check: 1. Open the preview link and start Chapter 1. 2. The tiles look a
+    little brighter than before, but all six types are still clearly different from
+    one another and from the empty spaces. 3. Nothing else on the screen changed colour
+    (buttons, background, gold accents). 4. In the console, getComputedStyle(document.documentElement).getPropertyValue('--tile-1')
+    prints a colour.
