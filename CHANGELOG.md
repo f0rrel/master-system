@@ -5,6 +5,17 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Worker probes before switching
+- `ms limit <project> free|paid` (and Telegram's limit buttons) first sends the target
+  worker profile one small test request: same OpenCode binary, model, home and
+  environment, in an empty temporary directory, with tools except `bash` disabled and a
+  90-second timeout. The switch happens only if it answers correctly with the profile's
+  model. Otherwise the project stays paused and you are told why (`rate_limited`,
+  `model_unavailable`, `not_configured`, `provider_error`, timeout or a wrong answer) and
+  what to choose next.
+- Probes are recorded in history (`human_action` `worker_probe`). A paid profile's probe
+  counts toward the daily cap; the confirmation says so.
+
 ### Planner: what must not happen
 - Every drafted task states 1–3 short "must not" conditions in the owner's terms, and the
   planner is told that at least one test command must check one of them. A draft task

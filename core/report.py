@@ -98,8 +98,15 @@ def spend_since(history: HistoryStore, since_iso: str, prices: Mapping,
     unpriced = 0
     for e in history.events(types=[EventType.DECISION, EventType.RUN_STOPPED,
                                    EventType.ATTEMPT_FINISHED, EventType.PLANNER_TURN,
-                                   EventType.VERIFICATION]):
+                                   EventType.VERIFICATION, EventType.HUMAN_ACTION]):
         if e.created_at < since_iso:
+            continue
+        if e.type is EventType.HUMAN_ACTION:
+            if e.payload.get("action") == "worker_probe":  # a probe is a worker call
+                usage = e.payload.get("usage") or {}
+                model = e.payload.get("model")
+                cost = _price(usage, model, prices) if model else None
+                worker += cost if cost is not None else float(usage.get("reported_cost_usd") or 0)
             continue
         if e.type is EventType.VERIFICATION:
             review = (e.payload.get("evidence") or {}).get("visual_review") or {}

@@ -188,7 +188,8 @@ def test_limit_choices_ask_to_confirm(bot):
     assert [i["text"] for i in ids] == ["Wait", "Free", "Paid"]
     b.handle(press(OWNER, ids[2]["callback_data"]))
     prompt = api.out[-1]
-    assert "Use the paid worker (counts toward the daily cap)?" in prompt["text"]
+    assert ("Use the paid worker after a test request (both count toward the daily cap)?"
+            in prompt["text"])
     assert not any("limit" in c for c in ops.calls)
     b.handle(press(OWNER, prompt["buttons"][0][0]["callback_data"]))
     assert ops.calls[-1] == ["--actor", "telegram", "limit", "app", "paid"]

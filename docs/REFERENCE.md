@@ -223,7 +223,7 @@ ever run as a command.
 | `ms reopen <project> <task> [--reason …]` | Put a blocked or open task back in the queue (spec unchanged, recorded); its attempt budget starts over. Also keeps a task whose cancellation the orchestrating model proposed. |
 | `ms cancel <project> <task> --reason …` | Cancel an open task (recorded as a human action). Lists tasks that depend on it; they are not changed and cannot start while it is cancelled. The orchestrating model can only propose a cancellation; this is how you accept one. |
 | `ms telegram pair\|status\|test\|unpair` | Pair the Telegram bot with your account (one-time code), check it, send a test message, or forget the owner. |
-| `ms limit <project> [wait\|free\|paid]` | Show or answer a worker limit: wait for the reset, switch to the next free worker profile, or use the paid one (counts toward the daily cap). |
+| `ms limit <project> [wait\|free\|paid]` | Show or answer a worker limit: wait for the reset, switch to the next free worker profile, or use the paid one (counts toward the daily cap). `free` and `paid` first send the target profile one small test request (90 s at most); only if it answers correctly does the switch happen. If it fails, the project stays paused and the command says why (`rate_limited`, `model_unavailable`, `not_configured`, `provider_error`, or no usable answer) and what to choose next. A paid profile's test request counts toward the daily cap. Telegram's limit buttons do the same. |
 | `ms publish <project> [--accept-tip]` | Push `develop` and the preview site now (the service also does this after every run). `develop` is pushed only at a tip the system set; `--accept-tip` accepts a change you made outside Master System (recorded as a human action). |
 | `ms pause` / `ms resume` | Start no new work (a running task finishes) / allow new work. |
 | `ms stop` | Stop the current run now, keeping its work, and pause. |
@@ -318,7 +318,8 @@ failure, no cost. The reset time is read from the provider's answer when it give
 A known reset within `max_auto_wait_minutes` pauses the project until then (plus two
 minutes) and the same worker continues; an unknown reset is waited for once
 (`unknown_limit_wait_minutes`). Anything longer, and any model that is gone or not set
-up, pauses the project and asks: `ms limit <project> wait | free | paid`. Waits and
+up, pauses the project and asks: `ms limit <project> wait | free | paid` (`free` and `paid`
+switch only after the target profile answers a test request). Waits and
 pending choices appear in `ms status` and the morning summary; other projects keep
 working. Example worker order:
 

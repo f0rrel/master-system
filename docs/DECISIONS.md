@@ -226,6 +226,16 @@ choice* — made during implementation and recorded here for review.
 | Their meaning is not verified automatically | A model cannot reliably judge a test against a condition; the human approval covers it | Approved |
 | `task_records` tolerates a draft task without `must_not` (description unchanged); `draft_problems` is what enforces it | Validation lives in one place; record building stays total | Implementation choice |
 
+## Worker probes
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| An owner-chosen switch (`ms limit free\|paid`, Telegram buttons) takes effect only after the target profile answers one probe; on failure nothing changes and the project stays paused | A listed model can still fail (no login, quota gone, wrong route); switching to it would only produce another limit, possibly overnight | Approved |
+| The probe runs like an attempt (same binary, model, home and environment) but in an empty temporary directory with a fixed prompt and a 90 s timeout | It tests the real route; there is nothing in the directory to read or change | Approved |
+| The probe keeps `bash` and disables every other tool | Disabling `bash` makes OpenCode's free tier answer HTTP 403, which would fail every free probe; this is the same rule as task types | Implementation choice |
+| The probe passes on a successful run with the expected answer and, if OpenCode reports a model, the profile's model; a different model counts as `model_unavailable` | A wrong route can answer correctly with another model | Implementation choice |
+| Probes are recorded as `human_action` `worker_probe` (the owner started them), and `spend_since` prices them like worker attempts | One history, and a paid probe counts toward the daily cap like any paid call | Implementation choice |
+
 ## Project hygiene
 
 | Decision | Rationale | Status |

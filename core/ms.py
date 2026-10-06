@@ -1486,6 +1486,28 @@ def _command_limit(args, out):
         return 1
     order = project.get("workers") or config.worker.workers
     profile = choice_profile(args.choice, order, config.worker.profiles, state.get("profile"))
+    if state.get("phase") not in LimitState.CHOICE_PHASES:
+        print("error: no worker limit waits for a choice in this project", file=out)
+        return 1
+    if args.choice != "wait" and profile:
+        probe = _probe_worker(config, paths, profile)
+        SQLiteHistoryStore(paths.history_path).append(
+            type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex, project_id=args.project,
+            payload={"actor": args.actor, "action": "worker_probe", "choice": args.choice,
+                     "profile": profile,
+                     "paid": bool(config.worker.profiles[profile].get("paid")), **probe})
+        label = labels.get(profile, profile)
+        if not probe["ok"]:
+            other = "free" if args.choice == "paid" else "paid"
+            nexts = [c for c in (other,) if choice_profile(
+                c, order, config.worker.profiles, state.get("profile")) not in (None, profile)]
+            print(f"{label} failed a test request ({probe['kind'] or 'no usable answer'}): "
+                  f"{probe['reason']}\nNot switched; the project stays paused. Next: "
+                  + " or ".join(f"ms limit {args.project} {c}" for c in [*nexts, "wait"]),
+                  file=out)
+            return 1
+        print(f"{label} answered a test request ({probe['model'] or 'its default model'}).",
+              file=out)
     try:
         state = limits.choose(args.project, args.choice, profile)
     except ValueError as error:
@@ -1500,11 +1522,23 @@ def _command_limit(args, out):
         print(f"The project waits until {_local_time(state['until'])}, then continues with "
               f"{labels.get(state.get('profile'), state.get('profile'))}.", file=out)
     else:
-        paid = " It is paid: its cost counts toward the daily cap." if args.choice == "paid" \
-            else ""
+        paid = (" It is paid: the test request counts toward the daily cap, like everything "
+                "it does from now on." if args.choice == "paid" else "")
         print(f"The project continues with {labels.get(profile, profile)} until "
               f"{_local_time(state['override_until'])}.{paid}", file=out)
     return 0
+
+
+def _probe_worker(config, paths, profile: str) -> dict:
+    """One small request through a worker profile before switching to it."""
+    from core.run_cli import build_worker_env
+    from core.worker_limits import probe_profile
+
+    w = config.worker
+    settings = w.profiles[profile]
+    return probe_profile(settings, opencode_bin=w.opencode_bin, extra_args=w.extra_args,
+                         env=build_worker_env(config, home=settings.get("home") or w.home),
+                         log_dir=paths.state_dir / "logs" / "probes")
 
 
 def _command_telegram(args, out):

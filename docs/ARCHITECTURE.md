@@ -259,11 +259,25 @@ session attempt limit skip it. `LimitState.record_limit` decides:
 | Unknown reset, first time | `auto_wait` | Paused `unknown_limit_wait_minutes` |
 | Longer, still limited, model gone, not configured | `needs_choice` | Paused; one immediate notification |
 | Owner chose `wait` | `chosen_wait` | Paused until the reset (or hourly); not asked again |
-| Owner chose `free` / `paid` | — | `override` profile until the limited worker's reset (or 24 h) |
+| Owner chose `free` / `paid` | — | `override` profile until the limited worker's reset (or 24 h), only after the profile passed its probe |
 
 A run stops as soon as its project is paused (`run_cli.limit_check`, part of the stop
 check); the service skips paused projects and holds the morning summary while an
 automatic wait is pending. `record_success` clears the limit when the worker works again.
+
+**Probe before an owner-chosen switch** (`worker_limits.probe_profile`). `ms limit
+<project> free|paid`, which Telegram's limit buttons also call, first sends the target
+profile one request the way an attempt would run it: the same OpenCode binary, the
+profile's model, home and worker environment, in an empty temporary directory outside
+every worktree and repository, with every tool but `bash` disabled through
+`OPENCODE_CONFIG_CONTENT` (the free tier refuses requests without `bash`), a fixed prompt
+with a known answer, and a 90-second timeout. It passes only if the run succeeds, the
+reply contains the answer and the model OpenCode reports (if it reports one) is the
+profile's. Otherwise nothing is switched: the project stays paused, and the owner is told
+why (using `classify_failure`'s kinds where one applies) and what to choose next. Every
+probe is recorded as a `human_action` `worker_probe` with its usage; `spend_since`
+counts it as a worker call, so a paid probe counts toward the daily cap. `wait` sends no
+probe.
 
 **Stalled workers.** An attempt whose worker ends without changing any file is
 `stalled` (not verified, not a failure) when the model was cut off (`finish_reason:
