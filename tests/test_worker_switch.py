@@ -419,3 +419,77 @@ def test_an_automatic_switch_is_recorded_as_a_fallback(tmp_path, limits):
     limits.choose("p", "paid", "deepseek-flash", source="auto")
     orch.orchestrate("p", "t1", run_id="r")
     assert started(history) == ("deepseek-flash", "fallback")
+
+
+# --- 5. Telegram: /worker ---
+
+
+@pytest.fixture
+def phone(switch, tmp_path):
+    from test_telegram import OWNER, FakeAPI, message
+
+    from core.telegram import TelegramState
+    from core.telegram_bot import BotOps, TelegramBot
+
+    state = TelegramState(RuntimePaths.default().state_dir)
+    api = FakeAPI()
+    bot = TelegramBot(api, state, BotOps(state, config_path=switch["config"]),
+                      log=lambda line: None)
+    bot.handle(message(OWNER, f"/pair {state.new_pairing_code()}"))
+    api.out.clear()
+    return bot, api, state
+
+
+def buttons(api):
+    return [(b["text"], b["callback_data"]) for b in api.out[-1]["buttons"][0]]
+
+
+def test_worker_command_has_a_button_per_profile_and_auto(phone):
+    from test_telegram import OWNER, message
+
+    bot, api, _ = phone
+    bot.handle(message(OWNER, f"/worker {PROJECT}"))
+    assert "Active: Free A (order)" in api.out[-1]["text"]
+    assert [text for text, _ in buttons(api)] == ["Free A", "Free B", "Paid C (paid)", "Auto"]
+    assert "worker" in __import__("core.telegram_bot", fromlist=["COMMANDS"]).COMMANDS
+
+
+def test_a_free_worker_button_pins_through_the_cli_function(phone, switch):
+    from test_telegram import OWNER, message, press
+
+    bot, api, _ = phone
+    bot.handle(message(OWNER, f"/worker {PROJECT}"))
+    free_b = dict(buttons(api))["Free B"]
+    bot.handle(press(OWNER, free_b))
+    assert "Free B is pinned" in api.out[-1]["text"]
+    assert switch["limits"].pin(PROJECT) == "free-b"
+    [pinned] = human_actions(switch, "worker_pin")
+    assert pinned["actor"] == "telegram"
+    assert len(switch["fake"].calls) == 1  # the same probe as the CLI
+
+
+def test_the_paid_button_asks_to_confirm_first_and_auto_does_not(phone, switch):
+    from test_telegram import OWNER, message, press
+
+    bot, api, _ = phone
+    bot.handle(message(OWNER, f"/worker {PROJECT}"))
+    choices = dict(buttons(api))
+    bot.handle(press(OWNER, choices["Paid C (paid)"]))
+    prompt = api.out[-1]
+    assert "Paid C" in prompt["text"] and "daily cap" in prompt["text"]
+    assert switch["limits"].pin(PROJECT) is None and switch["fake"].calls == []
+    bot.handle(press(OWNER, prompt["buttons"][0][0]["callback_data"]))
+    assert switch["limits"].pin(PROJECT) == "paid-c"
+    bot.handle(press(OWNER, choices["Auto"]))
+    assert "no longer pinned" in api.out[-1]["text"]
+    assert switch["limits"].pin(PROJECT) is None
+
+
+def test_a_failing_probe_is_reported_on_the_phone(phone, switch):
+    from test_telegram import OWNER, message, press
+
+    bot, api, _ = phone
+    switch["fake"].stdout = reply("no idea")
+    bot.handle(message(OWNER, f"/worker {PROJECT}"))
+    bot.handle(press(OWNER, dict(buttons(api))["Free B"]))
+    assert "Not pinned" in api.out[-1]["text"] and switch["limits"].pin(PROJECT) is None
