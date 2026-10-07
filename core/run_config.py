@@ -29,6 +29,8 @@ playwright_browsers_path = "~/.cache/ms-playwright"
 # [worker.profiles.deepseek-flash] model = "deepseek/deepseek-flash"; paid = true
 #                                  home = "~/.local/share/master-system-worker-paid"
 # max_auto_wait_minutes = 120       # wait automatically for a known reset this close
+# auto_paid_fallback = false        # true: a longer limit of a free worker switches to the
+#                                   # first paid profile (inside the daily cap), no question
 # Worker tiers (optional): cheapest first; a task moves up after 2 failed attempts.
 # [worker]  ladder = ["tier0", "tier1", "tier2"]
 # [worker.profiles.tier0]          # OpenCode's free default model
@@ -143,6 +145,9 @@ class WorkerConfig:
     max_auto_wait_minutes: float = 120
     #: An unknown reset is waited for this long, once.
     unknown_limit_wait_minutes: float = 60
+    #: When the active free worker hits a limit longer than ``max_auto_wait_minutes``,
+    #: switch to the first paid profile (inside the daily cap) instead of asking the owner.
+    auto_paid_fallback: bool = False
     #: How often the free worker models are checked (still listed, still free).
     model_check_days: float = 7
     #: A worker that changes nothing for this long (or is cut off) has stalled.
@@ -302,7 +307,7 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
                                   "playwright_browsers_path", "profiles",
                                   "ladder", "workers", "max_auto_wait_minutes",
                                   "unknown_limit_wait_minutes", "model_check_days",
-                                  "stall_minutes"))
+                                  "stall_minutes", "auto_paid_fallback"))
     profiles = {}
     for name, value in (w.get("profiles") or {}).items():
         if not isinstance(value, dict) or set(value) - {"model", "home", "paid", "label"}:
@@ -313,6 +318,9 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
                           "home": _path(value["home"]) if value.get("home") else None,
                           "paid": value.get("paid", False),
                           "label": str(value.get("label") or name)}
+    fallback = w.get("auto_paid_fallback", WorkerConfig.auto_paid_fallback)
+    if not isinstance(fallback, bool):
+        raise ConfigError("[worker] auto_paid_fallback must be true or false")
     ladder = tuple(w.get("ladder") or ())
     workers = tuple(w.get("workers") or ())
     unknown_profiles = [name for name in (*ladder, *workers) if name not in profiles]
@@ -343,6 +351,7 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
                                              defaults.unknown_limit_wait_minutes),
         model_check_days=_positive(w, "worker", "model_check_days", defaults.model_check_days),
         stall_minutes=_positive(w, "worker", "stall_minutes", defaults.stall_minutes),
+        auto_paid_fallback=fallback,
     )
 
     r = _section(data, "run", ("max_steps", "max_retries", "max_attempts_per_task",

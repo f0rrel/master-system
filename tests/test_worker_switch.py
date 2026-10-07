@@ -1,6 +1,7 @@
 """The owner's worker switch: ms worker, the pin, the priority, the fallback."""
 
 import io
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -230,7 +231,8 @@ def test_an_override_stays_after_its_time_while_the_original_has_no_end_in_sight
     state = override_for_a_gone_model(limits)
     clock.now = NOW + timedelta(hours=23)
     assert limits.override_info("app") == {"profile": "space-bunny", "for": "big-pickle",
-                                           "until": state["override_until"], "kept": False}
+                                           "until": state["override_until"], "kept": False,
+                                           "source": "owner"}
     clock.now = NOW + timedelta(hours=25)
     assert limits.override("app") == "space-bunny"
     assert limits.override_info("app")["kept"] is True
@@ -299,3 +301,121 @@ def test_pinning_the_limited_worker_after_a_passing_probe_ends_the_override(swit
     assert code == 0, out
     assert switch["limits"].override(PROJECT) is None
     assert "Active: Free A (pinned)" in run_worker(switch)[1]
+
+
+# --- 4. [worker] auto_paid_fallback ---
+
+import yaml  # noqa: E402
+
+from core.master import Master  # noqa: E402
+from core.run_config import ConfigError, load_config  # noqa: E402
+
+
+def fallback_config(tmp_path, on=True, workers=("free-a", "free-b", "paid-c")):
+    path = tmp_path / "fallback.toml"
+    path.write_text(CONFIG.replace(
+        'workers = ["free-a", "free-b", "paid-c"]',
+        f"workers = {json.dumps(list(workers))}\nauto_paid_fallback = {str(on).lower()}"))
+    return load_config(path)
+
+
+def test_the_fallback_is_off_by_default_and_must_be_a_boolean(tmp_path):
+    assert load_config(tmp_path / "none.toml").worker.auto_paid_fallback is False
+    assert fallback_config(tmp_path, on=True).worker.auto_paid_fallback is True
+    bad = tmp_path / "bad.toml"
+    bad.write_text('[worker]\nauto_paid_fallback = "yes"\n')
+    with pytest.raises(ConfigError, match="auto_paid_fallback must be true or false"):
+        load_config(bad)
+
+
+def fallback_daemon(tmp_path, limits, config, notifier):
+    root = tmp_path / "projects"
+    (root / "app").mkdir(parents=True)
+    (root / "app" / "project.yaml").write_text(yaml.safe_dump(
+        {"id": "app", "name": "App", "status": "active", "auto_integrate": True}))
+    (root / "app" / "milestones.yaml").write_text(
+        "milestones:\n  - {id: m, name: M, status: planned}\n")
+    (root / "app" / "tasks.yaml").write_text(yaml.safe_dump({"tasks": [
+        {"id": "t1", "milestone": "m", "title": "T", "status": "planned",
+         "acceptance": {"commands": ["true"]}}]}))
+    runs = []
+    d = Daemon(master=Master(root), history=InMemoryHistoryStore(), config=config,
+               state_dir=tmp_path / "state", notifier=notifier,
+               run=lambda r: runs.append(r) or 0, now=lambda: NOW, limits=limits)
+    return d, runs
+
+
+ORDER = ["free-a", "free-b", "paid-c"]
+
+
+def test_without_the_switch_a_long_limit_still_asks(tmp_path, limits):
+    notifier = Notifier(topic=None)
+    config = fallback_config(tmp_path, on=False, workers=ORDER)
+    d, runs = fallback_daemon(tmp_path, limits, config, notifier)
+    limits.record_limit("app", "free-a", limit(500))
+    d.cycle()
+    assert runs == [] and limits.override("app") is None
+    assert notifier.sent[0]["title"] == "app: needs you"
+
+
+def test_a_long_limit_of_a_free_worker_switches_to_the_paid_one_and_says_so(tmp_path, limits):
+    notifier = Notifier(topic=None)
+    d, runs = fallback_daemon(tmp_path, limits, fallback_config(tmp_path, workers=ORDER),
+                              notifier)
+    limits.record_limit("app", "free-a", limit(500))
+    d.cycle()
+    d.cycle()
+    assert limits.override_info("app")["profile"] == "paid-c"
+    assert limits.paused("app") is None and len(runs) == 1  # it ran at once, did not ask
+    [sent] = notifier.sent
+    assert sent["title"] == "app: switched to Paid C"
+    assert "Free A is rate-limited" in sent["message"] and "daily" in sent["message"]
+    assert "ms worker app free-a" in sent["message"]
+
+
+def test_a_short_limit_is_still_waited_for(tmp_path, limits):
+    notifier = Notifier(topic=None)
+    d, runs = fallback_daemon(tmp_path, limits, fallback_config(tmp_path, workers=ORDER),
+                              notifier)
+    limits.record_limit("app", "free-a", limit(50))
+    d.cycle()
+    assert runs == [] and limits.override("app") is None and notifier.sent == []
+
+
+def test_a_limited_paid_worker_still_asks(tmp_path, limits):
+    notifier = Notifier(topic=None)
+    d, runs = fallback_daemon(tmp_path, limits, fallback_config(tmp_path, workers=ORDER),
+                              notifier)
+    limits.record_limit("app", "paid-c", limit(500))
+    d.cycle()
+    assert runs == [] and notifier.sent[0]["title"] == "app: needs you"
+
+
+def test_without_a_paid_profile_it_asks(tmp_path, limits):
+    notifier = Notifier(topic=None)
+    path = tmp_path / "free-only.toml"
+    path.write_text('[worker]\nauto_paid_fallback = true\nworkers = ["free-a", "free-b"]\n'
+                    '[worker.profiles.free-a]\nmodel = "acme/free-1"\n'
+                    '[worker.profiles.free-b]\nmodel = "acme/free-2"\n')
+    d, runs = fallback_daemon(tmp_path, limits, load_config(path), notifier)
+    limits.record_limit("app", "free-a", limit(500))
+    d.cycle()
+    assert runs == [] and notifier.sent[0]["title"] == "app: needs you"
+
+
+def test_the_daily_cap_still_stops_everything(tmp_path, limits):
+    notifier = Notifier(topic=None)
+    d, runs = fallback_daemon(tmp_path, limits, fallback_config(tmp_path, workers=ORDER),
+                              notifier)
+    d.spent_today = lambda: 99
+    limits.record_limit("app", "free-a", limit(500))
+    d.cycle()
+    assert runs == [] and limits.override("app") is None
+
+
+def test_an_automatic_switch_is_recorded_as_a_fallback(tmp_path, limits):
+    orch, history = three_workers(tmp_path, limits, LimitedWorker(limited=False))
+    limits.record_limit("p", "big-pickle", limit(500))
+    limits.choose("p", "paid", "deepseek-flash", source="auto")
+    orch.orchestrate("p", "t1", run_id="r")
+    assert started(history) == ("deepseek-flash", "fallback")
