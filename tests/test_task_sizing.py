@@ -79,6 +79,16 @@ def test_split_task_replaces_in_place_and_rewires_dependents(root):
         master.split_task("app", "a-2", [{**record("a-7"), "milestone": "other"}])
 
 
+def test_split_task_replaces_a_task_that_keeps_its_id(root):
+    master = Master(root)
+    master.split_task("app", "a-1", [{**record("a-1"), "title": "Re-planned"}])
+    tasks = master.status("app")["tasks"]
+    assert [t["id"] for t in tasks] == ["a-1", "a-2"]  # updated in place, not duplicated
+    assert tasks[0]["title"] == "Re-planned" and tasks[0]["status"] == "planned"
+    assert "replaced_by" not in tasks[0]
+    assert tasks[1]["depends_on"] == ["a-1"]  # the id is unchanged: dependents stay valid
+
+
 def test_set_task_size_is_validated(root):
     master = Master(root)
     assert master.set_task_size("app", "a-2", "hard")["size"] == "hard"

@@ -389,8 +389,9 @@ class WorkManager:
     def split_task(self, task_id, records):
         """Replace an open task with an ordered sequence of smaller tasks. Human-only.
 
-        The task is cancelled (``replaced_by`` names the new ids), the new records go in
-        its place, and every task that depended on it depends on all of them. All or
+        A record that reuses the task's own id replaces it in place; otherwise the task
+        is cancelled (``replaced_by`` names the new ids), the new records go in its
+        place, and every task that depended on it depends on all of them. All or
         nothing, like add_planned_work.
         """
         snapshot = self._state.snapshot()
@@ -403,20 +404,28 @@ class WorkManager:
         if old.get("status") not in ("planned", "in_progress", "blocked"):
             raise InvalidFieldError(f"Task {task_id} is {old.get('status')}; only open or "
                                     "blocked tasks can be split")
-        existing = {t.get("id") for t in tasks}
+        existing = {t.get("id") for t in tasks if t.get("id") != task_id}
         new_ids = [r.get("id") for r in records]
         for record in records:
             if record.get("id") in existing:
                 raise DuplicateRecordError(f"Task already exists: {record.get('id')}")
             if record.get("milestone") != old.get("milestone"):
                 raise InvalidFieldError("the replacement tasks must stay in the task's epic")
-        old.update(status="cancelled", replaced_by=new_ids)
-        tasks[index + 1:index + 1] = deepcopy(list(records))
-        for task in tasks:
-            deps = task.get("depends_on") or []
-            if task_id in deps and task.get("id") not in new_ids:
-                task["depends_on"] = [d for d in deps if d != task_id] + [
-                    i for i in new_ids if i not in deps]
+        if task_id in new_ids:
+            # A replacement that keeps the task's id: update it in place. Any other
+            # records are inserted after it as new tasks.
+            replacement = next(r for r in records if r.get("id") == task_id)
+            old.update(deepcopy(replacement))
+            tasks[index + 1:index + 1] = deepcopy(
+                [r for r in records if r.get("id") != task_id])
+        else:
+            old.update(status="cancelled", replaced_by=new_ids)
+            tasks[index + 1:index + 1] = deepcopy(list(records))
+            for task in tasks:
+                deps = task.get("depends_on") or []
+                if task_id in deps and task.get("id") not in new_ids:
+                    task["depends_on"] = [d for d in deps if d != task_id] + [
+                        i for i in new_ids if i not in deps]
         previous = deepcopy(snapshot.tasks_doc)
         write_yaml_atomically(self._tasks_path, tasks_doc)
         try:
