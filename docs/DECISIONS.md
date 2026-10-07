@@ -236,6 +236,18 @@ choice* — made during implementation and recorded here for review.
 | The probe passes on a successful run with the expected answer and, if OpenCode reports a model, the profile's model; a different model counts as `model_unavailable` | A wrong route can answer correctly with another model | Implementation choice |
 | Probes are recorded as `human_action` `worker_probe` (the owner started them), and `spend_since` prices them like worker attempts | One history, and a paid probe counts toward the daily cap like any paid call | Implementation choice |
 
+## Worker switch
+
+| Decision | Rationale | Status |
+| --- | --- | --- |
+| The owner can pin a worker per project (`ms worker`, Telegram `/worker`) until changed; priority is pin, then temporary override, then the configured order | The owner knows things the order does not (a model that behaves better on this project); a limit choice is temporary and must not override a deliberate pin | Approved |
+| Pinning runs the existing probe first and pins nothing if it fails; an unknown profile is refused | The same reasoning as for `ms limit`: a worker that cannot answer would only produce a limit later, possibly overnight | Approved |
+| A pin is stored in `<state dir>/pins/<project>.json`, apart from the limit state, and every change is a `human_action` | Limit state is rewritten on every limit and success and must not be able to drop a pin; a human action clears the "no progress" stall | Approved |
+| If the pinned worker is limited, the limit flow is unchanged; an override made for the pinned worker's own limit stands in for the pin until its end | Otherwise `free`/`paid` after a limit would have no effect while pinned, and the project would hit the same limit again | Implementation choice |
+| A temporary override whose original has no end in sight (model gone, no credential, unknown reset) is kept after its time, with one notification; it ends with `ms worker auto`, the original working, or pinning it | Going back would silently run into the same limit; a known reset ends the override at the reset as before | Approved |
+| `auto_paid_fallback` is off by default, switches to the first paid profile without a probe, and applies to any free worker's `needs_choice` | A paid worker costs money, so the owner opts in; a probe would spend before the decision and the daily cap still stops the cycle; a gone model is as long as a long limit | Approved (default off); probe and scope: implementation choice |
+| `ms worker auto` also ends a kept temporary worker | Without it the owner would have no way back short of pinning the original | Implementation choice |
+
 ## Project hygiene
 
 | Decision | Rationale | Status |

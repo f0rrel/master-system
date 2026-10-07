@@ -324,7 +324,7 @@ Operational features, described in [docs/REFERENCE.md](docs/REFERENCE.md):
 - [Backlog](docs/REFERENCE.md#daily-workflow): epics in priority order, planned one at a time.
 - [Generated images](docs/REFERENCE.md#adding-a-project): candidates the owner picks for visual tasks.
 - [Lessons](docs/REFERENCE.md#command-reference): worker suggestions used only after approval.
-- [Worker limits and tiers](docs/REFERENCE.md#configuration): waits, owner choices, escalation.
+- [Worker limits and tiers](docs/REFERENCE.md#configuration): waits, owner choices, `ms worker` pins, optional paid fallback, escalation.
 - [Morning summary](docs/REFERENCE.md#notifications): one report when the work runs out.
 
 ## For engineers
