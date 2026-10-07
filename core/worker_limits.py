@@ -34,7 +34,8 @@ from pathlib import Path
 from typing import Optional
 
 __all__ = ["classify_failure", "parse_reset", "LimitState", "KINDS", "ASK_KINDS",
-           "RESET_MARGIN", "describe", "choice_profile", "probe_profile", "PROBE_ANSWER"]
+           "RESET_MARGIN", "describe", "choice_profile", "probe_profile", "PROBE_ANSWER",
+           "pick_worker"]
 
 KINDS = ("rate_limited", "model_unavailable", "not_configured", "provider_error")
 #: Kinds that always wait for the owner: waiting would not help.
@@ -169,6 +170,8 @@ class LimitState:
 
     def __init__(self, state_dir: Path, now=lambda: datetime.now(timezone.utc)):
         self._dir = Path(state_dir) / "limits"
+        #: The owner's pins live beside the limit state; limits never touch them.
+        self._pins = Path(state_dir) / "pins"
         self._now = now
 
     # --- storage ---
@@ -263,6 +266,29 @@ class LimitState:
             raise ValueError("choose wait, free or paid")
         self._save(project_id, state)
         return state
+
+    # --- the owner's pin ---
+
+    def pin(self, project_id: str) -> Optional[str]:
+        """The profile the owner pinned as the project's worker, or None."""
+        try:
+            return json.loads((self._pins / f"{project_id}.json").read_text()).get("profile")
+        except (OSError, ValueError, AttributeError):
+            return None
+
+    def set_pin(self, project_id: str, profile: str) -> None:
+        self._pins.mkdir(parents=True, exist_ok=True)
+        path = self._pins / f"{project_id}.json"
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"profile": profile,
+                                   "since": self._now().isoformat(timespec="seconds")}))
+        tmp.replace(path)
+
+    def clear_pin(self, project_id: str) -> Optional[str]:
+        """Remove the pin; the profile it named, or None when there was none."""
+        previous = self.pin(project_id)
+        (self._pins / f"{project_id}.json").unlink(missing_ok=True)
+        return previous
 
     # --- questions ---
 
@@ -412,3 +438,11 @@ def probe_profile(profile: dict, *, opencode_bin, extra_args, env: dict, log_dir
     else:
         result["ok"] = True
     return result
+
+
+def pick_worker(order, pin: Optional[str] = None) -> Optional[tuple]:
+    """``(profile, why)`` for the project's worker: the owner's pin, else the first in order."""
+    if pin:
+        return pin, "pinned"
+    order = list(order)
+    return (order[0], "order") if order else None

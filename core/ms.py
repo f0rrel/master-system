@@ -12,6 +12,7 @@
                                --reject IDS|rest (IDS may name approved lessons)
     ms pick <project> <task> <asset> <n>   choose one of a task's generated images
     ms limit <project> [wait|free|paid]    answer a worker limit (see ms status)
+    ms worker <project> [PROFILE|auto]     show or pin the project's worker
     ms telegram pair|status|test|unpair    the Telegram bot (the phone interface)
     ms reopen <project> <task> [--reason]  put a blocked task back in the queue (recorded)
     ms split <project> <task> draft [guidance] | approve [anyway] | reject | escalate
@@ -1490,12 +1491,7 @@ def _command_limit(args, out):
         print("error: no worker limit waits for a choice in this project", file=out)
         return 1
     if args.choice != "wait" and profile:
-        probe = _probe_worker(config, paths, profile)
-        SQLiteHistoryStore(paths.history_path).append(
-            type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex, project_id=args.project,
-            payload={"actor": args.actor, "action": "worker_probe", "choice": args.choice,
-                     "profile": profile,
-                     "paid": bool(config.worker.profiles[profile].get("paid")), **probe})
+        probe = _probe_and_record(config, paths, args, profile, args.choice)
         label = labels.get(profile, profile)
         if not probe["ok"]:
             other = "free" if args.choice == "paid" else "paid"
@@ -1526,6 +1522,78 @@ def _command_limit(args, out):
                 "it does from now on." if args.choice == "paid" else "")
         print(f"The project continues with {labels.get(profile, profile)} until "
               f"{_local_time(state['override_until'])}.{paid}", file=out)
+    return 0
+
+
+def _record_human(args, **payload) -> None:
+    """A human_action of the project: it clears the service's "no progress" stall."""
+    from core.history import EventType
+    from core.sqlite_history import SQLiteHistoryStore
+
+    SQLiteHistoryStore(_paths().history_path).append(
+        type=EventType.HUMAN_ACTION, run_id=uuid.uuid4().hex, project_id=args.project,
+        payload={"actor": args.actor, **payload})
+
+
+def _probe_and_record(config, paths, args, profile: str, choice: str) -> dict:
+    """Probe a profile and record the probe as the owner's action (it may cost money)."""
+    probe = _probe_worker(config, paths, profile)
+    _record_human(args, action="worker_probe", choice=choice, profile=profile,
+                  paid=bool(config.worker.profiles[profile].get("paid")), **probe)
+    return probe
+
+
+def _command_worker(args, out):
+    from core.master import EXPECTED_ERRORS, Master
+    from core.worker_limits import LimitState, describe, pick_worker
+
+    config, paths = _config(args), _paths()
+    profiles = config.worker.profiles
+    labels = {n: p.get("label", n) for n, p in profiles.items()}
+    limits = LimitState(paths.state_dir)
+    try:
+        project = Master(config.run.projects_root).project_state(args.project).project()
+    except EXPECTED_ERRORS as error:
+        print(f"error: {error}", file=out)
+        return 1
+    order = list(project.get("workers") or config.worker.workers)
+
+    def active() -> str:
+        picked = pick_worker(order, limits.pin(args.project))
+        if picked is None:
+            return "the default worker"
+        why = {"pinned": "pinned by you", "order": "the configured order"}[picked[1]]
+        return f"{labels.get(picked[0], picked[0])} ({why})"
+
+    if args.profile is None:
+        print(f"Worker order: {', '.join(labels.get(n, n) for n in order) or '(none configured)'}",
+              file=out)
+        print(f"Active: {active()}", file=out)
+        return 0
+    if args.profile == "auto":
+        previous = limits.clear_pin(args.project)
+        if previous:
+            _record_human(args, action="worker_unpin", previous=previous)
+        print((f"{labels.get(previous, previous)} is no longer pinned; " if previous
+               else "No worker was pinned; ") + f"the worker is {active()}.", file=out)
+        return 0
+    if args.profile not in profiles:
+        print(f"error: unknown worker profile {args.profile!r}; known: "
+              f"{', '.join(profiles) or '(none configured)'}", file=out)
+        return 1
+    label = labels[args.profile]
+    probe = _probe_and_record(config, paths, args, args.profile, "pin")
+    if not probe["ok"]:
+        print(f"{label} failed a test request ({probe['kind'] or 'no usable answer'}): "
+              f"{probe['reason']}\nNot pinned; the worker stays {active()}.", file=out)
+        return 1
+    limits.set_pin(args.project, args.profile)
+    _record_human(args, action="worker_pin", profile=args.profile)
+    paid = (" It is paid: its cost counts toward the daily cap." if profiles[args.profile].get(
+        "paid") else "")
+    print(f"{label} answered a test request ({probe['model'] or 'its default model'}).\n"
+          f"{label} is pinned as the worker of {args.project} until you change it "
+          f"(ms worker {args.project} auto).{paid}", file=out)
     return 0
 
 
@@ -1891,6 +1959,10 @@ def build_parser():
     limit.add_argument("project")
     limit.add_argument("choice", nargs="?", choices=["wait", "free", "paid"])
     limit.set_defaults(handler=_command_limit)
+    worker = commands.add_parser("worker", help="Show or pin the project's worker.")
+    worker.add_argument("project")
+    worker.add_argument("profile", nargs="?", help="A worker profile to pin, or auto.")
+    worker.set_defaults(handler=_command_worker)
     pick = commands.add_parser("pick", help="Choose a generated image for a task.")
     pick.add_argument("project")
     pick.add_argument("task")
