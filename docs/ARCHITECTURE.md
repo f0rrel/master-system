@@ -292,6 +292,13 @@ the one it stalled on, so a pin clears the "no progress" stall. An unknown profi
 failed probe pins nothing. Telegram's `/worker` calls the same command in-process
 (`actor: telegram`).
 
+**A limit pause belongs to its worker.** `LimitState.paused` / `current` take the project's
+worker order and apply a pause only while `pick_worker` (pin, override, order) names the
+limited profile; the service, `run_cli.limit_check` and `ms status` all go through it.
+Pinning another profile after its probe also ends the pending question or wait
+(`LimitState.release`, closed into `history` like `record_success`); `worker_pin` records
+`released_limit`.
+
 **A temporary worker is not dropped silently.** `choose` records the limited worker's kind
 and reset next to the override (`override_kind`, `override_reset`). When `override_until`
 passes and that limit has no end in sight (`model_unavailable`, `not_configured`, or an

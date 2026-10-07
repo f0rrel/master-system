@@ -35,7 +35,7 @@ from typing import Optional
 
 __all__ = ["classify_failure", "parse_reset", "LimitState", "KINDS", "ASK_KINDS",
            "RESET_MARGIN", "describe", "choice_profile", "probe_profile", "PROBE_ANSWER",
-           "pick_worker", "active_worker", "limit_words"]
+           "pick_worker", "active_worker", "limit_words", "project_order"]
 
 KINDS = ("rate_limited", "model_unavailable", "not_configured", "provider_error")
 #: Kinds that always wait for the owner: waiting would not help.
@@ -240,14 +240,29 @@ class LimitState:
         """A worker profile worked again: its limit is over."""
         state = self.get(project_id)
         if state.get("profile") == profile and state.get("phase"):
-            history = state.get("history", []) + [{k: state.get(k) for k in (
-                "profile", "kind", "reset_at", "since")} | {"ended": self._now().isoformat(
-                    timespec="seconds")}]
-            keep = {k: state[k] for k in OVERRIDE_KEYS if k in state}
-            self._save(project_id, {**keep, "history": history[-20:]})
+            self._end_limit(project_id, state)
         elif state.get("override_for") == profile:
             # The worker an override stands in for works again: the override is not needed.
             self.clear_override(project_id)
+
+    def _end_limit(self, project_id: str, state: dict) -> None:
+        """Close the limit record into the history; an override stays."""
+        history = state.get("history", []) + [{k: state.get(k) for k in (
+            "profile", "kind", "reset_at", "since")} | {"ended": self._now().isoformat(
+                timespec="seconds")}]
+        keep = {k: state[k] for k in OVERRIDE_KEYS if k in state}
+        self._save(project_id, {**keep, "history": history[-20:]})
+
+    def release(self, project_id: str, active: str) -> Optional[str]:
+        """End a pending limit question or wait that belongs to another profile.
+
+        Used when the owner pins ``active``: the project no longer waits for the limited
+        profile. Returns that profile, or None when nothing was released."""
+        state = self.get(project_id)
+        if state.get("phase") and state.get("profile") != active:
+            self._end_limit(project_id, state)
+            return state.get("profile")
+        return None
 
     def choose(self, project_id: str, choice: str, profile: Optional[str] = None,
                source: str = "owner") -> dict:
@@ -303,9 +318,22 @@ class LimitState:
 
     # --- questions ---
 
-    def paused(self, project_id: str) -> Optional[str]:
-        """Why the project waits now, or None."""
+    def current(self, project_id: str, order=None) -> dict:
+        """The limit state as it applies now.
+
+        A pause belongs to the limited profile: while the worker the project would use
+        (``pick_worker``: pin, override, ``order``) is another one, the pause is left out."""
         state = self.get(project_id)
+        if not state.get("phase"):
+            return state
+        picked = pick_worker(order or [], self.pin(project_id), self.override_info(project_id))
+        if picked and picked[0] != state.get("profile"):
+            return {k: v for k, v in state.items() if k not in ("phase", "until")}
+        return state
+
+    def paused(self, project_id: str, order=None) -> Optional[str]:
+        """Why the project waits now, or None. ``order``: the project's worker order."""
+        state = self.current(project_id, order)
         phase = state.get("phase")
         if phase == "needs_choice":
             return "needs_choice"
@@ -485,6 +513,11 @@ def probe_profile(profile: dict, *, opencode_bin, extra_args, env: dict, log_dir
     else:
         result["ok"] = True
     return result
+
+
+def project_order(project: dict, config) -> list:
+    """The project's worker profiles in order: ``workers`` in project.yaml, else [worker]."""
+    return list(project.get("workers") or config.worker.workers)
 
 
 def pick_worker(order, pin: Optional[str] = None,
