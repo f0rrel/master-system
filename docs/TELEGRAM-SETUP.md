@@ -51,6 +51,7 @@ answers only your Telegram user; messages from anyone else get no answer at all.
 | `/pick` | Each image candidate as a photo with a **Pick n** button. |
 | `/lessons` | Each pending lesson with **Approve** / **Reject** buttons. |
 | `/limit` | The current worker limit with **Wait** / **Free** / **Paid** buttons (each asks to confirm). |
+| `/worker [project]` | The active worker and why, with one button per worker profile and **Auto** (the same as `ms worker`: a profile is tested first and then pinned; **Auto** removes the pin; a paid profile asks to confirm). |
 | `/menu` | The command list and the button keyboard. |
 
 There are no payment or billing actions; top up provider balances on their websites.

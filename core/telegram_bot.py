@@ -45,6 +45,7 @@ COMMANDS = {
     "pick": "Choose generated images",
     "lessons": "Review lessons workers proposed",
     "limit": "Answer a worker limit",
+    "worker": "Show or pin the project's worker: /worker <project>",
     "splits": "Splits of too-big tasks waiting for you",
     "pause": "Start nothing new",
     "resume": "Allow new work",
@@ -335,6 +336,14 @@ class BotOps:
         code, text = self.ms("limit", project)
         return [{"text": esc(text), "buttons": limit_buttons(project)}]
 
+    def worker_menu(self, arg=None) -> list:
+        project = self.project(arg)
+        code, text = self.ms("worker", project)
+        return [{"text": esc(text), "buttons": worker_buttons(project, self.config().worker)}]
+
+    def worker(self, action) -> list:
+        return [{"text": esc(self.ms("worker", action["project"], action["profile"])[1])}]
+
     def splits_menu(self, _arg=None) -> list:
         from core.ms import _paths
         from core.splits import SplitStore
@@ -377,6 +386,15 @@ def limit_buttons(project: str) -> list:
             for label, choice in (("Wait", "wait"), ("Free", "free"), ("Paid", "paid"))]
 
 
+def worker_buttons(project: str, worker) -> list:
+    """One button per worker profile, and auto (no pin)."""
+    return [(f"{p['label']} (paid)" if p.get("paid") else p["label"],
+             {"op": "worker", "project": project, "profile": name, "label": p["label"],
+              "paid": bool(p.get("paid"))})
+            for name, p in worker.profiles.items()] + [
+        ("Auto", {"op": "worker", "project": project, "profile": "auto"})]
+
+
 def deepseek_balance() -> Optional[str]:
     """DeepSeek's read-only balance, when its endpoint answers; None otherwise."""
     import os
@@ -404,10 +422,12 @@ class TelegramBot:
             "spend": ops.spend, "backlog": ops.backlog, "project": ops.set_project,
             "show": ops.show, "check": ops.check, "discard": ops.discard,
             "pick": ops.pick_menu, "lessons": ops.lessons_menu, "limit": ops.limit_menu,
+            "worker": ops.worker_menu,
             "pause": ops.pause, "resume": ops.resume, "stop": ops.stop, "doctor": ops.doctor,
             "splits": ops.splits_menu,
         }
         self._actions = {"pick": ops.pick, "lesson": ops.lesson, "limit": ops.limit,
+                         "worker": ops.worker,
                          "split": ops.split,
                          "approve": lambda a: ops.approve("anyway" if a.get("anyway") else None),
                          "release": lambda a: ops.release()}
@@ -507,7 +527,8 @@ class TelegramBot:
             self.api.send_message(chat, "Cancelled.")
             return
         needs_confirm = op in ("approve", "release", "limit") or (
-            op == "split" and action.get("decision") in ("approve", "escalate"))
+            op == "split" and action.get("decision") in ("approve", "escalate")) or (
+            op == "worker" and action.get("paid"))
         if needs_confirm and not action.get("confirmed"):
             label = {"wait": "Keep waiting for the reset",
                      "free": "Switch to the next free worker after a test request",
@@ -518,6 +539,9 @@ class TelegramBot:
                 label = {"approve": f"Replace {action['task']} with the drafted split",
                          "escalate": f"Run {action['task']} again on the strongest worker"}[
                     action["decision"]]
+            if op == "worker":
+                label = (f"Pin {action.get('label', action['profile'])} as the worker after a "
+                         "test request (it is paid: both count toward the daily cap)")
             self.send(chat, [{"text": esc(f"{action.get('project', '')}: {label}?"),
                               "buttons": [("Confirm", {**action, "confirmed": True}),
                                           ("Cancel", {"op": "cancel"})]}])

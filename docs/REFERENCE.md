@@ -224,6 +224,7 @@ ever run as a command.
 | `ms cancel <project> <task> --reason …` | Cancel an open task (recorded as a human action). Lists tasks that depend on it; they are not changed and cannot start while it is cancelled. The orchestrating model can only propose a cancellation; this is how you accept one. |
 | `ms telegram pair\|status\|test\|unpair` | Pair the Telegram bot with your account (one-time code), check it, send a test message, or forget the owner. |
 | `ms limit <project> [wait\|free\|paid]` | Show or answer a worker limit: wait for the reset, switch to the next free worker profile, or use the paid one (counts toward the daily cap). `free` and `paid` first send the target profile one small test request (90 s at most); only if it answers correctly does the switch happen. If it fails, the project stays paused and the command says why (`rate_limited`, `model_unavailable`, `not_configured`, `provider_error`, or no usable answer) and what to choose next. A paid profile's test request counts toward the daily cap. Telegram's limit buttons do the same. |
+| `ms worker <project> [PROFILE\|auto]` | Show the project's worker order, the active worker and why (`pinned`, `order` or `temporary until HH:MM`). With a profile: send it one test request (the same probe as `ms limit free\|paid`) and, only if it answers correctly, pin it as the project's worker until you change it; a failed test pins nothing and says why. `auto` removes the pin (and ends a temporary worker that was kept because the original is still limited). Unknown profiles are refused. Every change is a human action, so it also clears a "no progress" stall. A paid profile's test request counts toward the daily cap. Telegram's `/worker` does the same. |
 | `ms publish <project> [--accept-tip]` | Push `develop` and the preview site now (the service also does this after every run). `develop` is pushed only at a tip the system set; `--accept-tip` accepts a change you made outside Master System (recorded as a human action). |
 | `ms pause` / `ms resume` | Start no new work (a running task finishes) / allow new work. |
 | `ms stop` | Stop the current run now, keeping its work, and pause. |
@@ -285,6 +286,7 @@ Settings live in `~/.config/master-system/config.toml`. Every key is optional.
 | | `ladder` | `[]` | Worker tiers, cheapest first; empty disables tiers |
 | | `workers` | `[]` | Worker profiles in order of preference; the first is used (per project: `workers` in `project.yaml`) |
 | | `max_auto_wait_minutes` | `120` | A worker limit whose reset is this close is waited for automatically |
+| | `auto_paid_fallback` | `false` | `true`: when the active free worker hits a limit longer than `max_auto_wait_minutes` (or its model is gone), switch to the first paid profile instead of asking, and notify you; the daily cap still applies |
 | | `unknown_limit_wait_minutes` | `60` | A limit without a known reset is waited for this long, once |
 | | `model_check_days` | `7` | How often free worker models are checked |
 | | `stall_minutes` | `5` | A worker that changes no file for this long (or is cut off) has stalled: not a failure; 3 stalls in a row wait for you |
@@ -321,7 +323,22 @@ minutes) and the same worker continues; an unknown reset is waited for once
 up, pauses the project and asks: `ms limit <project> wait | free | paid` (`free` and `paid`
 switch only after the target profile answers a test request). Waits and
 pending choices appear in `ms status` and the morning summary; other projects keep
-working. Example worker order:
+working.
+
+**Choosing the worker.** The project's worker is, in this order: the profile you pinned
+with `ms worker <project> <profile>` (until `ms worker <project> auto`), the temporary
+worker you chose for a limit with `ms limit <project> free|paid` (until that limit's reset,
+or 24 hours), then the first profile in `workers`. If the pinned worker is limited, the
+usual wait / ask applies; if you answer with `free` or `paid`, that choice stands in for
+the pinned worker until the reset, then the pin applies again. A temporary worker whose
+original is still limited when its time is over (model gone, no credential, reset unknown)
+is not left silently: it stays, you get one notification, and `ms worker <project> auto`
+(or pinning the original, after its test request) ends it. `ms status` shows
+`Worker: <label> (pinned | order | temporary until HH:MM)` for each project. With
+`[worker] auto_paid_fallback = true` a long limit of a free worker moves the project to
+the first paid profile at once (and says so) instead of waiting for your answer.
+
+Example worker order:
 
 ```toml
 [worker]

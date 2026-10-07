@@ -34,12 +34,18 @@ from pathlib import Path
 from typing import Optional
 
 __all__ = ["classify_failure", "parse_reset", "LimitState", "KINDS", "ASK_KINDS",
-           "RESET_MARGIN", "describe", "choice_profile", "probe_profile", "PROBE_ANSWER"]
+           "RESET_MARGIN", "describe", "choice_profile", "probe_profile", "PROBE_ANSWER",
+           "pick_worker", "active_worker", "limit_words"]
 
 KINDS = ("rate_limited", "model_unavailable", "not_configured", "provider_error")
 #: Kinds that always wait for the owner: waiting would not help.
 ASK_KINDS = ("model_unavailable", "not_configured")
 RESET_MARGIN = timedelta(minutes=2)
+#: What an override keeps in the limit state: the profile, its end, the limited profile
+#: it stands in for, that limit's kind and reset (``override_reset``: ISO or "unknown"),
+#: and who chose it (``override_source``: "owner" or "auto", the automatic paid fallback).
+OVERRIDE_KEYS = ("override", "override_until", "override_for", "override_kind",
+                 "override_reset", "override_source")
 
 _PATTERNS = (
     ("model_unavailable", re.compile(
@@ -169,6 +175,8 @@ class LimitState:
 
     def __init__(self, state_dir: Path, now=lambda: datetime.now(timezone.utc)):
         self._dir = Path(state_dir) / "limits"
+        #: The owner's pins live beside the limit state; limits never touch them.
+        self._pins = Path(state_dir) / "pins"
         self._now = now
 
     # --- storage ---
@@ -208,8 +216,7 @@ class LimitState:
                       "reset_at": info.get("reset_at") or "unknown"}]}
         if state.get("override") and state["override"] != profile:
             # An override for another limited profile still applies.
-            record.update({k: state[k] for k in ("override", "override_until", "override_for")
-                           if k in state})
+            record.update({k: state[k] for k in OVERRIDE_KEYS if k in state})
         if same and state.get("choice") == "wait" and info.get("kind") not in ASK_KINDS:
             # The owner chose to wait: keep waiting, without asking again.
             until = (reset + RESET_MARGIN) if reset else now + timedelta(minutes=unknown_wait_min)
@@ -236,12 +243,17 @@ class LimitState:
             history = state.get("history", []) + [{k: state.get(k) for k in (
                 "profile", "kind", "reset_at", "since")} | {"ended": self._now().isoformat(
                     timespec="seconds")}]
-            keep = {k: state[k] for k in ("override", "override_until", "override_for")
-                    if k in state}
+            keep = {k: state[k] for k in OVERRIDE_KEYS if k in state}
             self._save(project_id, {**keep, "history": history[-20:]})
+        elif state.get("override_for") == profile:
+            # The worker an override stands in for works again: the override is not needed.
+            self.clear_override(project_id)
 
-    def choose(self, project_id: str, choice: str, profile: Optional[str] = None) -> dict:
-        """The owner's choice: ``wait``, or ``free``/``paid`` with the profile to use."""
+    def choose(self, project_id: str, choice: str, profile: Optional[str] = None,
+               source: str = "owner") -> dict:
+        """The owner's choice: ``wait``, or ``free``/``paid`` with the profile to use.
+
+        ``source="auto"``: the service chose (``[worker] auto_paid_fallback``)."""
         state = self.get(project_id)
         if state.get("phase") not in self.CHOICE_PHASES:
             raise ValueError("no worker limit waits for a choice in this project")
@@ -257,12 +269,37 @@ class LimitState:
                 raise ValueError(f"no {choice} worker profile is configured")
             ends = reset if reset and reset > now else now + timedelta(hours=24)
             state.update(phase=None, choice=choice, until=None, override=profile,
-                         override_for=state.get("profile"),
+                         override_for=state.get("profile"), override_kind=state.get("kind"),
+                         override_reset=state.get("reset_at") or "unknown",
+                         override_source=source,
                          override_until=ends.isoformat(timespec="seconds"))
         else:
             raise ValueError("choose wait, free or paid")
         self._save(project_id, state)
         return state
+
+    # --- the owner's pin ---
+
+    def pin(self, project_id: str) -> Optional[str]:
+        """The profile the owner pinned as the project's worker, or None."""
+        try:
+            return json.loads((self._pins / f"{project_id}.json").read_text()).get("profile")
+        except (OSError, ValueError, AttributeError):
+            return None
+
+    def set_pin(self, project_id: str, profile: str) -> None:
+        self._pins.mkdir(parents=True, exist_ok=True)
+        path = self._pins / f"{project_id}.json"
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"profile": profile,
+                                   "since": self._now().isoformat(timespec="seconds")}))
+        tmp.replace(path)
+
+    def clear_pin(self, project_id: str) -> Optional[str]:
+        """Remove the pin; the profile it named, or None when there was none."""
+        previous = self.pin(project_id)
+        (self._pins / f"{project_id}.json").unlink(missing_ok=True)
+        return previous
 
     # --- questions ---
 
@@ -277,19 +314,50 @@ class LimitState:
             return phase
         return None
 
-    def override(self, project_id: str) -> Optional[str]:
-        """The profile the owner chose to use instead of a limited one, while it applies."""
+    def override_info(self, project_id: str) -> Optional[dict]:
+        """``{"profile", "for", "until", "kept"}`` of the temporary override while it applies.
+
+        An override stays after ``until`` (``kept``) while the limit it stands in for has
+        no end in sight: the model is gone, the credential missing, or the reset unknown.
+        Going back silently would only hit the same limit again."""
         state = self.get(project_id)
         until = state.get("override_until")
-        if state.get("override") and until and datetime.fromisoformat(until) > self._now():
-            return state["override"]
-        return None
+        if not state.get("override") or not until:
+            return None
+        expired = datetime.fromisoformat(until) <= self._now()
+        if expired and not _no_end_in_sight(state):
+            return None
+        return {"profile": state["override"], "for": state.get("override_for"),
+                "until": until, "kept": expired,
+                "source": state.get("override_source", "owner")}
+
+    def override(self, project_id: str) -> Optional[str]:
+        """The profile the owner chose to use instead of a limited one, while it applies."""
+        info = self.override_info(project_id)
+        return info["profile"] if info else None
+
+    def clear_override(self, project_id: str) -> None:
+        state = self.get(project_id)
+        if any(k in state for k in OVERRIDE_KEYS):
+            self._save(project_id, {k: v for k, v in state.items() if k not in OVERRIDE_KEYS})
+
+
+def _no_end_in_sight(state: dict) -> bool:
+    """The limit an override stands in for will not end by itself (as far as is known)."""
+    return "override_reset" in state and (
+        state.get("override_kind") in ASK_KINDS or state["override_reset"] == "unknown")
 
 
 def _local_time(iso: Optional[str]) -> Optional[str]:
     if not iso or iso == "unknown":
         return None
     return datetime.fromisoformat(iso).astimezone().strftime("%H:%M")
+
+
+def limit_words(kind: Optional[str]) -> str:
+    return {"rate_limited": "rate-limited", "model_unavailable": "not available (model gone "
+            "or no longer free)", "not_configured": "not set up (no credential)",
+            "provider_error": "failing at its provider"}.get(kind, "limited")
 
 
 def describe(project_id: str, state: dict, labels: Optional[dict] = None,
@@ -301,14 +369,19 @@ def describe(project_id: str, state: dict, labels: Optional[dict] = None,
         if state.get("override") and state.get("override_until"):
             label = labels.get(state["override"], state["override"])
             limited = labels.get(state.get("override_for"), state.get("override_for"))
+            if datetime.fromisoformat(state["override_until"]) <= (now or datetime.now(
+                    timezone.utc)):
+                if not _no_end_in_sight(state):
+                    return None
+                return (f"Using {label} instead of {limited}, which is still limited "
+                        f"({state.get('override_kind')}). It stays until you change it: "
+                        f"ms worker {project_id} auto")
             return (f"Using {label} instead of {limited} until "
                     f"{_local_time(state['override_until'])} (your choice).")
         return None
     name = labels.get(state.get("profile"), state.get("profile"))
     reset = _local_time(state.get("reset_at"))
-    what = {"rate_limited": "rate-limited", "model_unavailable": "not available (model gone "
-            "or no longer free)", "not_configured": "not set up (no credential)",
-            "provider_error": "failing at its provider"}.get(state.get("kind"), "limited")
+    what = limit_words(state.get("kind"))
     if phase == "needs_choice":
         until = f" until ~{reset}" if reset else ""
         return (f"{name} is {what}{until}. Choose: ms limit {project_id} wait | free | paid")
@@ -412,3 +485,36 @@ def probe_profile(profile: dict, *, opencode_bin, extra_args, env: dict, log_dir
     else:
         result["ok"] = True
     return result
+
+
+def pick_worker(order, pin: Optional[str] = None,
+                override: Optional[dict] = None) -> Optional[tuple]:
+    """``(profile, why)`` for the project's worker, by priority.
+
+    1. The owner's pin (``pinned``), unless the owner has since chosen another worker
+       for the pinned worker's own limit: that temporary override stands in for it.
+    2. The temporary override after a limit (``owner``, or ``fallback`` when the service
+       chose it): ``{"profile", "for", "source"}``.
+    3. The first profile in the configured order (``order``).
+    """
+    if override and (not pin or override.get("for") == pin):
+        return override["profile"], "fallback" if override.get("source") == "auto" else "owner"
+    if pin:
+        return pin, "pinned"
+    order = list(order)
+    return (order[0], "order") if order else None
+
+
+def active_worker(order, pin: Optional[str], override: Optional[dict],
+                  labels: Optional[dict] = None) -> Optional[str]:
+    """``"Label (pinned)"``, ``"Label (order)"`` or ``"Label (temporary until HH:MM)"``."""
+    picked = pick_worker(order, pin, override)
+    if picked is None:
+        return None
+    profile, why = picked
+    label = (labels or {}).get(profile, profile)
+    if why in ("owner", "fallback"):
+        why = (f"temporary, kept while {(labels or {}).get(override['for'], override['for'])} "
+               "is limited" if override.get("kept")
+               else f"temporary until {_local_time(override['until'])}")
+    return f"{label} ({why})"

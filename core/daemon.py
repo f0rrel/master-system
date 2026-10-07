@@ -253,6 +253,7 @@ class Daemon:
                     log += [f"{project_id}: {line}" for line in lines]
             if not self._hands_off(project_id):
                 continue
+            self._override_kept(memory, project_id)
             if self.is_busy(project_id):
                 log.append(f"{project_id}: busy")
                 continue
@@ -338,6 +339,54 @@ class Daemon:
         self._remember(memory)
         return log
 
+    def _override_kept(self, memory, project_id) -> None:
+        """Tell the owner once that a temporary worker stays: its original is still limited."""
+        if self.limits is None:
+            return
+        info = self.limits.override_info(project_id)
+        if not info or not info["kept"]:
+            return
+        state = self.limits.get(project_id)
+        labels = {n: p.get("label", n) for n, p in self.config.worker.profiles.items()}
+        label = labels.get(info["profile"], info["profile"])
+        original = labels.get(info["for"], info["for"])
+        self._notify_once(
+            memory, f"override-kept:{project_id}:{info['profile']}:{info['until']}",
+            f"{project_id}: staying on {label}",
+            f"{original} is still limited ({state.get('override_kind')}), so {label} stays "
+            f"the worker instead of going back to it. When {original} works again: "
+            f"ms worker {project_id} auto", tags="hourglass")
+
+    def _paid_fallback(self, memory, project_id, state, labels) -> bool:
+        """``[worker] auto_paid_fallback``: a free worker's long limit moves on to the paid one.
+
+        The cycle already stopped at the daily cap, so this stays inside it."""
+        from core.worker_limits import _local_time, choice_profile, limit_words
+
+        worker = self.config.worker
+        limited = state.get("profile")
+        if not worker.auto_paid_fallback or limited not in worker.profiles \
+                or worker.profiles[limited].get("paid"):
+            return False
+        project = self.master.project_state(project_id).project()
+        paid = choice_profile("paid", project.get("workers") or worker.workers,
+                              worker.profiles, limited)
+        if paid is None:
+            return False
+        state = self.limits.choose(project_id, "paid", paid, source="auto")
+        what = limit_words(state.get("override_kind"))
+        self._notify_once(
+            memory, f"fallback:{project_id}:{limited}:{state.get('since')}:"
+                    f"{len(state.get('events', []))}",
+            f"{project_id}: switched to {labels.get(paid, paid)}",
+            f"{labels.get(limited, limited)} is {what}, so the project continues on "
+            f"{labels.get(paid, paid)} until ~{_local_time(state['override_until'])}. It is "
+            f"paid: its cost counts toward the daily cap of ${self.config.budget.daily_usd:.2f}. "
+            f"When {labels.get(limited, limited)} works again: ms worker {project_id} {limited} "
+            "(it is tested first)",
+            tags="moneybag")
+        return True
+
     def _limited(self, memory, project_id, log) -> bool:
         """Skip a project that waits for a worker limit; ask the owner once when needed."""
         if self.limits is None:
@@ -350,6 +399,8 @@ class Daemon:
         state = self.limits.get(project_id)
         labels = {n: p.get("label", n) for n, p in self.config.worker.profiles.items()}
         line = describe(project_id, state, labels)
+        if phase == "needs_choice" and self._paid_fallback(memory, project_id, state, labels):
+            return False
         if phase == "needs_choice":
             # Always immediate: the project stays paused until the owner chooses.
             from core.telegram_bot import limit_buttons

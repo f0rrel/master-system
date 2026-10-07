@@ -242,9 +242,15 @@ Master sees `readiness: waiting_for_owner`, and `TaskOrchestrator.prepare` refus
 
 **Profiles.** `[worker.profiles.<name>]` define workers (`model`, `home`, `paid`,
 `label`). `[worker] workers` (or `workers` in `project.yaml`) orders them; the
-orchestrator uses the first, unless the owner chose another after a limit
-(`LimitState.override`), or a tier ladder is configured. Every attempt records
-`worker_profile`, `worker_model`, `worker_paid` and `worker_choice` (`order` or `owner`).
+orchestrator picks by priority (`worker_limits.pick_worker`, called by
+`TaskOrchestrator._profile_choice`): the owner's **pin** (`ms worker`,
+`LimitState.pin`, stored in `<state dir>/pins/<project>.json`, untouched by limit
+changes), then the temporary **override** the owner chose after a limit
+(`LimitState.override_info`), then the first profile in the configured order, unless a
+tier ladder is configured. One exception keeps the limit flow working: an override made
+for the pinned worker's own limit (`override_for` equals the pin) stands in for the pin
+until it ends. Every attempt records `worker_profile`, `worker_model`, `worker_paid` and
+`worker_choice` (`pinned`, `owner`, `fallback` or `order`).
 
 **Limits.** The OpenCode backend classifies a failed run (`classify_failure`):
 `rate_limited`, `model_unavailable` (including HTTP 402), `not_configured`, or
@@ -278,6 +284,30 @@ why (using `classify_failure`'s kinds where one applies) and what to choose next
 probe is recorded as a `human_action` `worker_probe` with its usage; `spend_since`
 counts it as a worker call, so a paid probe counts toward the daily cap. `wait` sends no
 probe.
+
+**A pin is a human action.** `ms worker <project> <profile>` runs the same probe, then
+stores the pin and records `human_action` `worker_pin` (`worker_unpin` for `auto`), next
+to the probe's `worker_probe`. The service compares the project's last human action with
+the one it stalled on, so a pin clears the "no progress" stall. An unknown profile or a
+failed probe pins nothing. Telegram's `/worker` calls the same command in-process
+(`actor: telegram`).
+
+**A temporary worker is not dropped silently.** `choose` records the limited worker's kind
+and reset next to the override (`override_kind`, `override_reset`). When `override_until`
+passes and that limit has no end in sight (`model_unavailable`, `not_configured`, or an
+unknown reset), `override_info` keeps returning the override (`kept: true`), the service
+sends one notification (`Daemon._override_kept`), and `ms status` shows it. It ends when
+the original works again (`record_success`), with `ms worker <project> auto`, or by
+pinning the original after a passing probe. A limit with a known reset ends the override
+at the reset, as before.
+
+**Automatic paid fallback** (`[worker] auto_paid_fallback`, off by default). When a cycle
+finds a project in `needs_choice` and the limited profile is free, `Daemon._paid_fallback`
+picks the first paid profile (`choice_profile("paid", …)`), records an override with
+`override_source: auto` (`worker_choice: fallback`), and notifies the owner; the project
+then runs in the same cycle. No probe is sent first (it would cost money before the
+decision). The cycle stops at the daily cap before it gets there, and a limited paid
+worker, or no paid profile, asks the owner as before.
 
 **Stalled workers.** An attempt whose worker ends without changing any file is
 `stalled` (not verified, not a failure) when the model was cut off (`finish_reason:

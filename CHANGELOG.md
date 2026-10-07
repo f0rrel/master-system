@@ -5,6 +5,23 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Worker switch
+- `ms worker <project>` shows the worker order, the active worker and why.
+  `ms worker <project> <profile>` pins that profile until changed, after the same test
+  request as `ms limit free|paid`; a failed test or an unknown profile pins nothing.
+  `ms worker <project> auto` removes the pin. Pins live in the state directory and every
+  change is a human action (it also clears a "no progress" stall).
+- The worker is chosen by priority: your pin, then the temporary worker you chose for a
+  limit, then the configured order. If the pinned worker is limited, the usual wait / ask
+  applies.
+- A temporary worker is kept, with one notification, when its time is over but the worker
+  it replaces is still limited (model gone, no credential, or unknown reset).
+- `[worker] auto_paid_fallback = false` (default). When `true`, a free worker's limit
+  longer than `max_auto_wait_minutes` switches to the first paid profile automatically and
+  notifies you, instead of asking.
+- Telegram: `/worker` with a button per profile and **Auto**. `ms status` shows
+  `Worker: <label> (pinned | order | temporary until HH:MM)`.
+
 ### Worker probes before switching
 - `ms limit <project> free|paid` (and Telegram's limit buttons) first sends the target
   worker profile one small test request: same OpenCode binary, model, home and
