@@ -386,6 +386,7 @@ def test_a_limited_paid_worker_still_asks(tmp_path, limits):
     notifier = Notifier(topic=None)
     d, runs = fallback_daemon(tmp_path, limits, fallback_config(tmp_path, workers=ORDER),
                               notifier)
+    limits.set_pin("app", "paid-c")  # the paid worker is in use, and it is limited
     limits.record_limit("app", "paid-c", limit(500))
     d.cycle()
     assert runs == [] and notifier.sent[0]["title"] == "app: needs you"
@@ -527,3 +528,102 @@ def test_status_shows_the_worker_and_why(env, tmp_path):
 
 def test_status_has_no_worker_line_without_worker_profiles(env, tmp_path):
     assert "Worker:" not in status_text(env, tmp_path, on_config=False)
+
+
+# --- a limit pause belongs to the worker that is limited, not to the project ---
+
+
+def gone_model(limits, profile="big-pickle"):
+    return limits.record_limit("p", profile, {"kind": "model_unavailable", "reset_at": None},
+                               120, 60)
+
+
+def test_a_pin_for_another_worker_ends_a_limit_pause_for_the_limited_one(limits):
+    assert gone_model(limits)["phase"] == "needs_choice"
+    limits.set_pin("p", "deepseek-flash")
+    assert limits.paused("p") is None
+
+
+def test_a_pause_applies_only_while_the_limited_worker_is_the_active_one(limits):
+    order = ["big-pickle", "space-bunny", "deepseek-flash"]
+    gone_model(limits)
+    assert limits.paused("p", order) == "needs_choice"
+    limits.set_pin("p", "big-pickle")
+    assert limits.paused("p", order) == "needs_choice"  # it is the pinned worker
+    limits.set_pin("p", "space-bunny")
+    assert limits.paused("p", order) is None
+    limits.clear_pin("p")
+    assert limits.paused("p", order) == "needs_choice"  # first in the order again
+    assert limits.paused("p", ["space-bunny", "big-pickle"]) is None  # order was changed
+
+
+def test_a_pinned_worker_that_is_limited_pauses_the_project(limits):
+    limits.set_pin("p", "deepseek-flash")
+    limits.record_limit("p", "deepseek-flash", limit(500))
+    assert limits.paused("p") == "needs_choice"
+
+
+@pytest.fixture
+def stale_limit(switch):
+    switch["limits"].record_limit(PROJECT, "free-a", {"kind": "model_unavailable",
+                                                      "reset_at": None}, 120, 60)
+    return switch
+
+
+def test_pinning_another_worker_releases_the_limit_and_keeps_its_history(stale_limit):
+    switch = stale_limit
+    code, out = run_worker(switch, "free-b")
+    assert code == 0, out
+    assert "Free A" in out and "no longer holds the project" in out
+    state = switch["limits"].get(PROJECT)
+    assert not state.get("phase") and switch["limits"].paused(PROJECT) is None
+    assert [h["profile"] for h in state["history"]] == ["free-a"]
+    assert state["history"][0]["kind"] == "model_unavailable"
+    [pinned] = human_actions(switch, "worker_pin")
+    assert pinned["released_limit"] == "free-a"
+
+
+def test_pinning_the_limited_worker_itself_does_not_release_it(stale_limit):
+    switch = stale_limit
+    run_worker(switch, "free-a")
+    assert switch["limits"].paused(PROJECT) == "needs_choice"
+    assert human_actions(switch, "worker_pin")[0].get("released_limit") is None
+
+
+def test_a_waiting_limit_of_another_worker_is_released_too(switch):
+    reset = (datetime.now(timezone.utc) + timedelta(minutes=50)).isoformat()
+    switch["limits"].record_limit(PROJECT, "free-a", {"kind": "rate_limited",
+                                                      "reset_at": reset})  # an automatic wait
+    assert switch["limits"].paused(PROJECT) == "auto_wait"
+    run_worker(switch, "paid-c")
+    assert switch["limits"].paused(PROJECT) is None
+
+
+def test_the_service_runs_a_project_pinned_away_from_its_limited_worker(tmp_path, limits):
+    notifier = Notifier(topic=None)
+    d, runs = fallback_daemon(tmp_path, limits, fallback_config(tmp_path, on=False), notifier)
+    limits.record_limit("app", "free-a", {"kind": "model_unavailable", "reset_at": None},
+                        120, 60)
+    limits.set_pin("app", "free-b")
+    d.cycle()
+    assert len(runs) == 1 and notifier.sent == []
+
+
+def test_a_run_does_not_stop_for_a_limit_of_a_worker_it_will_not_use(tmp_path, limits):
+    from core.run_cli import limit_check
+
+    ctx = SimpleNamespace(paths=RuntimePaths(state_dir=limits._dir.parent,
+                                             worktrees_root=tmp_path / "w"))
+    gone_model(limits)
+    assert "big-pickle is limited" in limit_check(ctx, "p")()
+    limits.set_pin("p", "deepseek-flash")
+    assert limit_check(ctx, "p")() is None
+
+
+def test_status_does_not_ask_about_a_limit_of_a_worker_that_is_not_in_use(env, tmp_path):
+    limits = LimitState(RuntimePaths.default().state_dir)
+    limits.record_limit("alpha", "free-a", {"kind": "model_unavailable", "reset_at": None},
+                        120, 60)
+    assert "Choose: ms limit" in status_text(env, tmp_path)
+    limits.set_pin("alpha", "free-b")
+    assert "Choose: ms limit" not in status_text(env, tmp_path)

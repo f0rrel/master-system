@@ -332,7 +332,7 @@ class Daemon:
             if spent >= daily:
                 break
         waiting = self.limits is not None and any(
-            self.limits.paused(p) in ("auto_wait", "chosen_wait")
+            self.limits.paused(p, self._order(p)) in ("auto_wait", "chosen_wait")
             for p in self.master.list_projects())
         if not ran and not waiting and memory.get("work_since") and self.summarize is not None:
             log += self._summary(memory, "the backlog is done or waits for you")
@@ -356,6 +356,14 @@ class Daemon:
             f"{original} is still limited ({state.get('override_kind')}), so {label} stays "
             f"the worker instead of going back to it. When {original} works again: "
             f"ms worker {project_id} auto", tags="hourglass")
+
+    def _order(self, project_id) -> list:
+        from core.worker_limits import project_order
+
+        try:
+            return project_order(self.master.project_state(project_id).project(), self.config)
+        except Exception:  # an unreadable project has no order; the pin alone decides
+            return []
 
     def _paid_fallback(self, memory, project_id, state, labels) -> bool:
         """``[worker] auto_paid_fallback``: a free worker's long limit moves on to the paid one.
@@ -391,7 +399,7 @@ class Daemon:
         """Skip a project that waits for a worker limit; ask the owner once when needed."""
         if self.limits is None:
             return False
-        phase = self.limits.paused(project_id)
+        phase = self.limits.paused(project_id, self._order(project_id))
         if not phase:
             return False
         from core.worker_limits import describe

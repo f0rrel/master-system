@@ -5,6 +5,16 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Fix: a pin releases a limit pause that belongs to another worker
+- A worker limit now pauses a project only while the limited profile is the one the
+  project would use (your pin, the temporary worker, or the first in the order).
+  `ms worker <project> <profile>` used to leave a pending "ms limit …" question or
+  automatic wait for a different profile in place, so the project stayed paused although
+  the pinned worker was fine. After the pin's test request passes, that limit question or
+  wait is ended (its record stays in the history, and `worker_pin` notes the released
+  profile). The service, a running session and `ms status` all use the same rule, so
+  changing the worker order has the same effect.
+
 ### Worker switch
 - `ms worker <project>` shows the worker order, the active worker and why.
   `ms worker <project> <profile>` pins that profile until changed, after the same test

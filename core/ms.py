@@ -632,8 +632,11 @@ def owner_needs(master, history, config, project_id, *, stalled=(), pending_rele
     needs += image_picks(master, project_id, _paths().state_dir)
     from core.worker_limits import LimitState, describe
 
-    limit = describe(project_id, LimitState(_paths().state_dir).get(project_id),
-                     {n: p.get("label", n) for n, p in config.worker.profiles.items()})
+    from core.worker_limits import project_order
+
+    limit = describe(project_id, LimitState(_paths().state_dir).current(
+        project_id, project_order(master.project_state(project_id).project(), config)),
+        {n: p.get("label", n) for n, p in config.worker.profiles.items()})
     if limit:
         needs.append(limit)
     from core.splits import SplitStore
@@ -1607,15 +1610,18 @@ def _command_worker(args, out):
               f"{probe['reason']}\nNot pinned; the worker stays {active()}.", file=out)
         return 1
     limits.set_pin(args.project, args.profile)
+    released = limits.release(args.project, args.profile)
     override = limits.override_info(args.project)
     if override and override["for"] == args.profile:
         limits.clear_override(args.project)  # the probe showed the limited worker works
-    _record_human(args, action="worker_pin", profile=args.profile)
+    _record_human(args, action="worker_pin", profile=args.profile, released_limit=released)
     paid = (" It is paid: its cost counts toward the daily cap." if profiles[args.profile].get(
         "paid") else "")
     print(f"{label} answered a test request ({probe['model'] or 'its default model'}).\n"
           f"{label} is pinned as the worker of {args.project} until you change it "
-          f"(ms worker {args.project} auto).{paid}", file=out)
+          f"(ms worker {args.project} auto).{paid}" + (
+              f"\n{labels.get(released, released)} no longer holds the project: its limit "
+              "is kept in the history." if released else ""), file=out)
     return 0
 
 

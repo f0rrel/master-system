@@ -234,8 +234,16 @@ def limit_check(ctx, project_id, inner=None):
     """A stop_check that also ends the run while the project waits for a worker limit."""
     limits = LimitState(ctx.paths.state_dir)
 
+    def order():
+        from core.worker_limits import project_order
+
+        master, config = getattr(ctx, "master", None), getattr(ctx, "config", None)
+        if master is None or config is None:
+            return []
+        return project_order(master.project_state(project_id).project(), config)
+
     def check():
-        phase = limits.paused(project_id) if project_id else None
+        phase = limits.paused(project_id, order()) if project_id else None
         if phase:
             state = limits.get(project_id)
             return (f"worker {state.get('profile')} is limited ({state.get('kind')}); "
