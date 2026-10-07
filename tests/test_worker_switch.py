@@ -1,6 +1,8 @@
 """The owner's worker switch: ms worker, the pin, the priority, the fallback."""
 
 import io
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -128,9 +130,8 @@ def test_a_pin_counts_as_a_human_action_for_the_stall(switch):
 
 # --- 2. the priority: pin, temporary override, configured order ---
 
-from datetime import timedelta  # noqa: E402
-
-from test_worker_limits import NOW, LimitedWorker, Verifier, clock, limit, limits  # noqa: E402,F401
+from test_worker_limits import (NOW, LimitedWorker, Verifier, clock, limit,  # noqa: E402,F401
+                                limits)
 
 
 def three_workers(tmp_path, limits, worker):
@@ -212,3 +213,89 @@ def test_ms_worker_shows_a_temporary_override_and_a_pin_that_outranks_it(switch)
     assert f"Active: Free B (temporary until {_local_time(until)})" in out
     run_worker(switch, "paid-c")
     assert "Active: Paid C (pinned)" in run_worker(switch)[1]
+
+
+# --- 3. an override whose original worker is still limited stays, with one notice ---
+
+from core.notify import Notifier  # noqa: E402
+from test_worker_limits import daemon  # noqa: E402,F401
+
+
+def override_for_a_gone_model(limits):
+    limits.record_limit("app", "big-pickle", limit(None, "model_unavailable"))
+    return limits.choose("app", "free", "space-bunny")
+
+
+def test_an_override_stays_after_its_time_while_the_original_has_no_end_in_sight(limits, clock):
+    state = override_for_a_gone_model(limits)
+    clock.now = NOW + timedelta(hours=23)
+    assert limits.override_info("app") == {"profile": "space-bunny", "for": "big-pickle",
+                                           "until": state["override_until"], "kept": False}
+    clock.now = NOW + timedelta(hours=25)
+    assert limits.override("app") == "space-bunny"
+    assert limits.override_info("app")["kept"] is True
+
+
+def test_an_override_for_a_known_reset_ends_at_the_reset(limits, clock):
+    limits.record_limit("app", "big-pickle", limit(300))
+    limits.choose("app", "free", "space-bunny")
+    clock.now = NOW + timedelta(minutes=301)
+    assert limits.override("app") is None
+
+
+def test_an_override_from_before_this_change_still_ends(limits, clock):
+    state = override_for_a_gone_model(limits)
+    for key in ("override_kind", "override_reset"):
+        state.pop(key, None)
+    limits._save("app", state)
+    clock.now = NOW + timedelta(hours=25)
+    assert limits.override("app") is None
+
+
+def test_the_original_working_again_ends_the_override(limits, clock):
+    override_for_a_gone_model(limits)
+    clock.now = NOW + timedelta(hours=25)
+    limits.record_success("app", "big-pickle")
+    assert limits.override("app") is None
+
+
+def test_a_kept_override_is_described_and_the_service_says_so_once(tmp_path, limits, clock):
+    from core.worker_limits import describe
+
+    notifier = Notifier(topic=None)
+    d, runs = daemon(tmp_path, limits, notifier)
+    override_for_a_gone_model(limits)
+    d.cycle()
+    assert notifier.sent == []  # the override still has time
+    clock.now = NOW + timedelta(hours=25)
+    d.cycle()
+    d.cycle()
+    [sent] = notifier.sent
+    assert sent["title"] == "app: staying on space-bunny"
+    assert "big-pickle is still limited (model_unavailable)" in sent["message"]
+    assert "ms worker app auto" in sent["message"]
+    line = describe("app", limits.get("app"), now=clock.now)
+    assert "space-bunny instead of big-pickle" in line and "still limited" in line
+
+
+def test_auto_ends_a_kept_override(switch):
+    clock = SimpleNamespace(now=datetime.now(timezone.utc) - timedelta(days=2))
+    limits = LimitState(RuntimePaths.default().state_dir, now=lambda: clock.now)
+    limits.record_limit(PROJECT, "free-a", {"kind": "model_unavailable", "reset_at": "unknown"})
+    limits.choose(PROJECT, "free", "free-b")
+    assert switch["limits"].override(PROJECT) == "free-b"  # kept: its day is over
+    assert "Free B (temporary" in run_worker(switch)[1]
+    code, out = run_worker(switch, "auto")
+    assert code == 0 and "Free A (order)" in out
+    assert switch["limits"].override(PROJECT) is None
+
+
+def test_pinning_the_limited_worker_after_a_passing_probe_ends_the_override(switch):
+    clock = SimpleNamespace(now=datetime.now(timezone.utc) - timedelta(days=2))
+    limits = LimitState(RuntimePaths.default().state_dir, now=lambda: clock.now)
+    limits.record_limit(PROJECT, "free-a", {"kind": "model_unavailable", "reset_at": "unknown"})
+    limits.choose(PROJECT, "free", "free-b")
+    code, out = run_worker(switch, "free-a")
+    assert code == 0, out
+    assert switch["limits"].override(PROJECT) is None
+    assert "Active: Free A (pinned)" in run_worker(switch)[1]

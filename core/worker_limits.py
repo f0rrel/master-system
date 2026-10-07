@@ -41,6 +41,10 @@ KINDS = ("rate_limited", "model_unavailable", "not_configured", "provider_error"
 #: Kinds that always wait for the owner: waiting would not help.
 ASK_KINDS = ("model_unavailable", "not_configured")
 RESET_MARGIN = timedelta(minutes=2)
+#: What an override keeps in the limit state: the profile, its end, the limited profile
+#: it stands in for, and that limit's kind and reset (``override_reset``: ISO or "unknown").
+OVERRIDE_KEYS = ("override", "override_until", "override_for", "override_kind",
+                 "override_reset")
 
 _PATTERNS = (
     ("model_unavailable", re.compile(
@@ -211,8 +215,7 @@ class LimitState:
                       "reset_at": info.get("reset_at") or "unknown"}]}
         if state.get("override") and state["override"] != profile:
             # An override for another limited profile still applies.
-            record.update({k: state[k] for k in ("override", "override_until", "override_for")
-                           if k in state})
+            record.update({k: state[k] for k in OVERRIDE_KEYS if k in state})
         if same and state.get("choice") == "wait" and info.get("kind") not in ASK_KINDS:
             # The owner chose to wait: keep waiting, without asking again.
             until = (reset + RESET_MARGIN) if reset else now + timedelta(minutes=unknown_wait_min)
@@ -239,9 +242,11 @@ class LimitState:
             history = state.get("history", []) + [{k: state.get(k) for k in (
                 "profile", "kind", "reset_at", "since")} | {"ended": self._now().isoformat(
                     timespec="seconds")}]
-            keep = {k: state[k] for k in ("override", "override_until", "override_for")
-                    if k in state}
+            keep = {k: state[k] for k in OVERRIDE_KEYS if k in state}
             self._save(project_id, {**keep, "history": history[-20:]})
+        elif state.get("override_for") == profile:
+            # The worker an override stands in for works again: the override is not needed.
+            self.clear_override(project_id)
 
     def choose(self, project_id: str, choice: str, profile: Optional[str] = None) -> dict:
         """The owner's choice: ``wait``, or ``free``/``paid`` with the profile to use."""
@@ -260,7 +265,8 @@ class LimitState:
                 raise ValueError(f"no {choice} worker profile is configured")
             ends = reset if reset and reset > now else now + timedelta(hours=24)
             state.update(phase=None, choice=choice, until=None, override=profile,
-                         override_for=state.get("profile"),
+                         override_for=state.get("profile"), override_kind=state.get("kind"),
+                         override_reset=state.get("reset_at") or "unknown",
                          override_until=ends.isoformat(timespec="seconds"))
         else:
             raise ValueError("choose wait, free or paid")
@@ -304,21 +310,36 @@ class LimitState:
         return None
 
     def override_info(self, project_id: str) -> Optional[dict]:
-        """``{"profile", "for", "until"}`` of the temporary override while it applies."""
-        profile = self.override(project_id)
-        if profile is None:
-            return None
+        """``{"profile", "for", "until", "kept"}`` of the temporary override while it applies.
+
+        An override stays after ``until`` (``kept``) while the limit it stands in for has
+        no end in sight: the model is gone, the credential missing, or the reset unknown.
+        Going back silently would only hit the same limit again."""
         state = self.get(project_id)
-        return {"profile": profile, "for": state.get("override_for"),
-                "until": state.get("override_until")}
+        until = state.get("override_until")
+        if not state.get("override") or not until:
+            return None
+        expired = datetime.fromisoformat(until) <= self._now()
+        if expired and not _no_end_in_sight(state):
+            return None
+        return {"profile": state["override"], "for": state.get("override_for"),
+                "until": until, "kept": expired}
 
     def override(self, project_id: str) -> Optional[str]:
         """The profile the owner chose to use instead of a limited one, while it applies."""
+        info = self.override_info(project_id)
+        return info["profile"] if info else None
+
+    def clear_override(self, project_id: str) -> None:
         state = self.get(project_id)
-        until = state.get("override_until")
-        if state.get("override") and until and datetime.fromisoformat(until) > self._now():
-            return state["override"]
-        return None
+        if any(k in state for k in OVERRIDE_KEYS):
+            self._save(project_id, {k: v for k, v in state.items() if k not in OVERRIDE_KEYS})
+
+
+def _no_end_in_sight(state: dict) -> bool:
+    """The limit an override stands in for will not end by itself (as far as is known)."""
+    return "override_reset" in state and (
+        state.get("override_kind") in ASK_KINDS or state["override_reset"] == "unknown")
 
 
 def _local_time(iso: Optional[str]) -> Optional[str]:
@@ -336,6 +357,13 @@ def describe(project_id: str, state: dict, labels: Optional[dict] = None,
         if state.get("override") and state.get("override_until"):
             label = labels.get(state["override"], state["override"])
             limited = labels.get(state.get("override_for"), state.get("override_for"))
+            if datetime.fromisoformat(state["override_until"]) <= (now or datetime.now(
+                    timezone.utc)):
+                if not _no_end_in_sight(state):
+                    return None
+                return (f"Using {label} instead of {limited}, which is still limited "
+                        f"({state.get('override_kind')}). It stays until you change it: "
+                        f"ms worker {project_id} auto")
             return (f"Using {label} instead of {limited} until "
                     f"{_local_time(state['override_until'])} (your choice).")
         return None
@@ -475,5 +503,7 @@ def active_worker(order, pin: Optional[str], override: Optional[dict],
     profile, why = picked
     label = (labels or {}).get(profile, profile)
     if why == "owner":
-        why = f"temporary until {_local_time(override['until'])}"
+        why = (f"temporary, kept while {(labels or {}).get(override['for'], override['for'])} "
+               "is limited" if override.get("kept")
+               else f"temporary until {_local_time(override['until'])}")
     return f"{label} ({why})"

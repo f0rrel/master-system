@@ -1570,10 +1570,16 @@ def _command_worker(args, out):
         return 0
     if args.profile == "auto":
         previous = limits.clear_pin(args.project)
-        if previous:
-            _record_human(args, action="worker_unpin", previous=previous)
+        override = limits.override_info(args.project)
+        kept = override["profile"] if override and override["kept"] else None
+        if kept:
+            limits.clear_override(args.project)
+        if previous or kept:
+            _record_human(args, action="worker_unpin", previous=previous, kept_override=kept)
         print((f"{labels.get(previous, previous)} is no longer pinned; " if previous
-               else "No worker was pinned; ") + f"the worker is {active()}.", file=out)
+               else "No worker was pinned; ") + (
+            f"{labels.get(kept, kept)} no longer stands in for a limited worker; " if kept
+            else "") + f"the worker is {active()}.", file=out)
         return 0
     if args.profile not in profiles:
         print(f"error: unknown worker profile {args.profile!r}; known: "
@@ -1586,6 +1592,9 @@ def _command_worker(args, out):
               f"{probe['reason']}\nNot pinned; the worker stays {active()}.", file=out)
         return 1
     limits.set_pin(args.project, args.profile)
+    override = limits.override_info(args.project)
+    if override and override["for"] == args.profile:
+        limits.clear_override(args.project)  # the probe showed the limited worker works
     _record_human(args, action="worker_pin", profile=args.profile)
     paid = (" It is paid: its cost counts toward the daily cap." if profiles[args.profile].get(
         "paid") else "")

@@ -253,6 +253,7 @@ class Daemon:
                     log += [f"{project_id}: {line}" for line in lines]
             if not self._hands_off(project_id):
                 continue
+            self._override_kept(memory, project_id)
             if self.is_busy(project_id):
                 log.append(f"{project_id}: busy")
                 continue
@@ -337,6 +338,24 @@ class Daemon:
             log += self._summary(memory, "the backlog is done or waits for you")
         self._remember(memory)
         return log
+
+    def _override_kept(self, memory, project_id) -> None:
+        """Tell the owner once that a temporary worker stays: its original is still limited."""
+        if self.limits is None:
+            return
+        info = self.limits.override_info(project_id)
+        if not info or not info["kept"]:
+            return
+        state = self.limits.get(project_id)
+        labels = {n: p.get("label", n) for n, p in self.config.worker.profiles.items()}
+        label = labels.get(info["profile"], info["profile"])
+        original = labels.get(info["for"], info["for"])
+        self._notify_once(
+            memory, f"override-kept:{project_id}:{info['profile']}:{info['until']}",
+            f"{project_id}: staying on {label}",
+            f"{original} is still limited ({state.get('override_kind')}), so {label} stays "
+            f"the worker instead of going back to it. When {original} works again: "
+            f"ms worker {project_id} auto", tags="hourglass")
 
     def _limited(self, memory, project_id, log) -> bool:
         """Skip a project that waits for a worker limit; ask the owner once when needed."""
