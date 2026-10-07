@@ -35,7 +35,7 @@ from typing import Optional
 
 __all__ = ["classify_failure", "parse_reset", "LimitState", "KINDS", "ASK_KINDS",
            "RESET_MARGIN", "describe", "choice_profile", "probe_profile", "PROBE_ANSWER",
-           "pick_worker"]
+           "pick_worker", "active_worker"]
 
 KINDS = ("rate_limited", "model_unavailable", "not_configured", "provider_error")
 #: Kinds that always wait for the owner: waiting would not help.
@@ -303,6 +303,15 @@ class LimitState:
             return phase
         return None
 
+    def override_info(self, project_id: str) -> Optional[dict]:
+        """``{"profile", "for", "until"}`` of the temporary override while it applies."""
+        profile = self.override(project_id)
+        if profile is None:
+            return None
+        state = self.get(project_id)
+        return {"profile": profile, "for": state.get("override_for"),
+                "until": state.get("override_until")}
+
     def override(self, project_id: str) -> Optional[str]:
         """The profile the owner chose to use instead of a limited one, while it applies."""
         state = self.get(project_id)
@@ -440,9 +449,31 @@ def probe_profile(profile: dict, *, opencode_bin, extra_args, env: dict, log_dir
     return result
 
 
-def pick_worker(order, pin: Optional[str] = None) -> Optional[tuple]:
-    """``(profile, why)`` for the project's worker: the owner's pin, else the first in order."""
+def pick_worker(order, pin: Optional[str] = None,
+                override: Optional[dict] = None) -> Optional[tuple]:
+    """``(profile, why)`` for the project's worker, by priority.
+
+    1. The owner's pin (``pinned``), unless the owner has since chosen another worker
+       for the pinned worker's own limit: that temporary override stands in for it.
+    2. The temporary override after a limit (``owner``): ``{"profile", "for"}``.
+    3. The first profile in the configured order (``order``).
+    """
+    if override and (not pin or override.get("for") == pin):
+        return override["profile"], "owner"
     if pin:
         return pin, "pinned"
     order = list(order)
     return (order[0], "order") if order else None
+
+
+def active_worker(order, pin: Optional[str], override: Optional[dict],
+                  labels: Optional[dict] = None) -> Optional[str]:
+    """``"Label (pinned)"``, ``"Label (order)"`` or ``"Label (temporary until HH:MM)"``."""
+    picked = pick_worker(order, pin, override)
+    if picked is None:
+        return None
+    profile, why = picked
+    label = (labels or {}).get(profile, profile)
+    if why == "owner":
+        why = f"temporary until {_local_time(override['until'])}"
+    return f"{label} ({why})"

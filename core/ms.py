@@ -1545,7 +1545,7 @@ def _probe_and_record(config, paths, args, profile: str, choice: str) -> dict:
 
 def _command_worker(args, out):
     from core.master import EXPECTED_ERRORS, Master
-    from core.worker_limits import LimitState, describe, pick_worker
+    from core.worker_limits import LimitState, active_worker
 
     config, paths = _config(args), _paths()
     profiles = config.worker.profiles
@@ -1559,11 +1559,9 @@ def _command_worker(args, out):
     order = list(project.get("workers") or config.worker.workers)
 
     def active() -> str:
-        picked = pick_worker(order, limits.pin(args.project))
-        if picked is None:
-            return "the default worker"
-        why = {"pinned": "pinned by you", "order": "the configured order"}[picked[1]]
-        return f"{labels.get(picked[0], picked[0])} ({why})"
+        return active_worker(order, limits.pin(args.project),
+                             limits.override_info(args.project), labels) \
+            or "the default worker"
 
     if args.profile is None:
         print(f"Worker order: {', '.join(labels.get(n, n) for n in order) or '(none configured)'}",

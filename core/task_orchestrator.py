@@ -13,6 +13,7 @@ from core.history import EventType, HistoryStore, jsonable, new_event_id
 from core.master import Master
 from core.paths import RuntimePaths
 from core.verification import VerificationBackend, VerificationResult
+from core.worker_limits import pick_worker
 from core.worker_env import default_worker_home, find_node_bin, worker_environment
 from core.workspace import (
     AttemptWorkspace,
@@ -175,18 +176,24 @@ class TaskOrchestrator:
                 "stderr_tail": str(artifacts.get("stderr_tail") or "")[-500:]}
 
     def _profile_choice(self, project_id):
-        """(profile, why) from the owner's override or the worker order; None: tiers/default."""
+        """(profile, why) by priority: the owner's pin, the temporary override, the order.
+
+        ``None``: tiers/default."""
         if self._tiers is None:
             return None
-        override = self._limits.override(project_id) if self._limits is not None else None
-        if override in self._tiers.backends:
-            return override, "owner"
-        if self._tiers.ladder:
-            return None
+        available = self._tiers.backends
+        pin = override = None
+        if self._limits is not None:
+            pin = self._limits.pin(project_id)
+            override = self._limits.override_info(project_id)
         project = self._master.project_state(project_id).project()
-        workers = [w for w in project.get("workers") or self._tiers.workers
-                   if w in self._tiers.backends]
-        return (workers[0], "order") if workers else None
+        order = [w for w in project.get("workers") or self._tiers.workers if w in available]
+        picked = pick_worker(order, pin if pin in available else None,
+                             override if override and override["profile"] in available
+                             else None)
+        if picked is None or (picked[1] == "order" and self._tiers.ladder):
+            return None
+        return picked
 
     def _propose_lessons(self, project_id, task, attempt_id, reply) -> list:
         """A verified attempt's LESSON lines go to the owner's pending list, nowhere else."""
