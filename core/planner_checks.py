@@ -153,12 +153,18 @@ def make_approver(master, history, paths, checker, git=None):
             test_paths = [t["path"] for task in draft["tasks"] for t in task["tests"]]
             git(["add", "--", *test_paths], worktree)
             epic = draft["epic"]
-            git(["commit", "-q", "-m",
-                 f"{epic['id']}: acceptance tests for {epic['title']}\n\n"
-                 f"Approved by the owner in planner chat {chat_id} (draft {draft_hash[:12]}).",
-                 "--", *test_paths], worktree, extra_env=IDENTITY)
-            commit = git(["rev-parse", "HEAD"], worktree)
-            fast_forward(repo, branch, result["base_sha"], commit)
+            if git(["status", "--porcelain", "--", *test_paths], worktree):
+                git(["commit", "-q", "-m",
+                     f"{epic['id']}: acceptance tests for {epic['title']}\n\n"
+                     f"Approved by the owner in planner chat {chat_id} (draft {draft_hash[:12]}).",
+                     "--", *test_paths], worktree, extra_env=IDENTITY)
+                commit = git(["rev-parse", "HEAD"], worktree)
+                fast_forward(repo, branch, result["base_sha"], commit)
+            else:
+                # The tests already exist on the base branch (a replacement whose
+                # acceptance tests an earlier epic committed): an empty commit would
+                # fail, so the base tip is the tests commit.
+                commit = result["base_sha"]
             if draft.get("replaces"):
                 master.split_task(project_id, draft["replaces"], records)
                 history.append(

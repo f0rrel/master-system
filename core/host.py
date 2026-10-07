@@ -66,8 +66,8 @@ def git(args, cwd, *, extra_env=None, input_text=None, timeout=300) -> str:
     done = subprocess.run(control_git_argv(*args), cwd=str(cwd), capture_output=True, text=True,
                           errors="replace", env=env, input=input_text, timeout=timeout)
     if done.returncode != 0:
-        raise RuntimeError(f"git {args[0]} failed ({done.returncode}): "
-                           f"{done.stderr.strip()[-500:]}")
+        tail = done.stderr.strip() or done.stdout.strip()
+        raise RuntimeError(f"git {args[0]} failed ({done.returncode}): {tail[-500:]}")
     return done.stdout.strip()
 
 
