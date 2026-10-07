@@ -493,3 +493,37 @@ def test_a_failing_probe_is_reported_on_the_phone(phone, switch):
     bot.handle(message(OWNER, f"/worker {PROJECT}"))
     bot.handle(press(OWNER, dict(buttons(api))["Free B"]))
     assert "Not pinned" in api.out[-1]["text"] and switch["limits"].pin(PROJECT) is None
+
+
+# --- 6. ms status shows the worker ---
+
+from test_daemon import NOW as DAEMON_NOW, env  # noqa: E402,F401
+
+
+def status_text(env, tmp_path, on_config=True):
+    from core.ms import friendly_status
+
+    config = fallback_config(tmp_path, on=False) if on_config else load_config("/nonexistent")
+    return friendly_status(env.daemon.master, env.history, config, paused=False,
+                           last_looked="2026-10-01T00:00:00+00:00", is_busy=lambda p: False,
+                           spend={"total_usd": 0.0}, now=DAEMON_NOW)
+
+
+def test_status_shows_the_worker_and_why(env, tmp_path):
+    state_dir = RuntimePaths.default().state_dir
+    limits = LimitState(state_dir)
+    assert "  Worker: Free A (order)\n" in status_text(env, tmp_path)
+    limits.set_pin("alpha", "paid-c")
+    assert "  Worker: Paid C (pinned)\n" in status_text(env, tmp_path)
+    limits.clear_pin("alpha")
+    limits.record_limit("alpha", "free-a", {"kind": "rate_limited", "reset_at": "unknown"})
+    limits.record_limit("alpha", "free-a", {"kind": "rate_limited", "reset_at": "unknown"})
+    limits.choose("alpha", "free", "free-b")
+    from core.worker_limits import _local_time
+
+    until = _local_time(limits.override_info("alpha")["until"])
+    assert f"  Worker: Free B (temporary until {until})\n" in status_text(env, tmp_path)
+
+
+def test_status_has_no_worker_line_without_worker_profiles(env, tmp_path):
+    assert "Worker:" not in status_text(env, tmp_path, on_config=False)

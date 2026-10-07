@@ -659,6 +659,18 @@ def owner_needs(master, history, config, project_id, *, stalled=(), pending_rele
     return needs
 
 
+def _worker_line(config, project, project_id) -> Optional[str]:
+    """``Label (pinned | order | temporary until HH:MM)``; None without worker profiles."""
+    from core.worker_limits import LimitState, active_worker
+
+    if not config.worker.profiles:
+        return None
+    limits = LimitState(_paths().state_dir)
+    return active_worker(project.get("workers") or config.worker.workers,
+                         limits.pin(project_id), limits.override_info(project_id),
+                         {n: p.get("label", n) for n, p in config.worker.profiles.items()})
+
+
 def friendly_status(master, history, config, *, paused, last_looked, is_busy, spend,
                     pending_release=None, stalled=(), now=None) -> str:
     """`ms status` for the owner: a headline, then what needs them, news, what's next."""
@@ -704,6 +716,9 @@ def friendly_status(master, history, config, *, paused, last_looked, is_busy, sp
         head += (" Nothing needs you." if not needs else
                  f" {len(needs)} thing{'s' if len(needs) > 1 else ''} need{'' if len(needs) > 1 else 's'} you.")
         lines.append(f"{name}: {head}")
+        worker = _worker_line(config, project, project_id)
+        if worker:
+            lines.append(f"  Worker: {worker}")
 
         if needs:
             lines.append("\n  Needs you")
