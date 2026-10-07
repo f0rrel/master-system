@@ -134,6 +134,15 @@ def test_draft_problems_catch_bad_drafts(env):
                                                             settings))
 
 
+def test_replacing_an_existing_task_id_is_allowed():
+    settings = planner_settings({"planner": {"test_dir": "tests/tasks",
+                                             "test_suffixes": [".test.js", ".spec.js"]}})
+    replacement = draft(id="t-1")
+    replacement["replaces"] = "t-1"
+    problems = draft_problems(replacement, {"t-1"}, {"m1"}, settings)
+    assert not any("already used" in p for p in problems)
+
+
 def test_a_good_test_fails_on_the_current_code_and_passes_the_check(env):
     chat = env["chat"]([answer(draft())])
     chat.turn("go")

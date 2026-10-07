@@ -212,7 +212,7 @@ def draft_problems(draft, existing_task_ids, existing_milestone_ids, settings,
         where = f"task {tid or '?'}"
         if not ID_PATTERN.match(tid):
             problems.append(f"{where}: invalid id")
-        elif tid in existing_task_ids or ids.count(tid) > 1:
+        elif (tid in existing_task_ids and tid != draft.get("replaces")) or ids.count(tid) > 1:
             problems.append(f"{where}: the id is already used")
         for name in ("title", "description", "manual_check"):
             value = task.get(name)
