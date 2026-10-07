@@ -149,10 +149,12 @@ in the planner assumes a language.
 4. `base_checks` still pass.
 
 A draft with only backlog epics needs no check. `approve` repeats the checks under the
-project lock, adds any backlog epics, commits the tests to the base branch,
-and writes the epic and tasks atomically through `Master.add_planned_work` (human-only),
-recording a `human_action` per task with the draft's hash. Acceptance edits therefore stay
-human-approved.
+project lock, adds any backlog epics, commits the tests to the base branch (when the
+identical tests are already there there is nothing to commit, so the commit is skipped and
+the base tip is recorded), and writes the epic and tasks atomically through
+`Master.add_planned_work`, or through `Master.split_task` when the draft is a replacement
+(`draft.replaces`) (both human-only), recording a `human_action` per task with the draft's
+hash. Acceptance edits therefore stay human-approved.
 
 ## Task size, cut-offs and splits (`core/task_size.py`, `core/splits.py`)
 
@@ -170,9 +172,11 @@ instruction (`recovery_note`). After a second cut-off since the last human actio
 `replaces: <task>` in the task's own epic. It runs the draft's checks and notifies the
 owner with Approve / Reject (Escalate when a worker ladder exists). The task is
 `waiting` meanwhile (the service skips it, the Master sees `waiting_for_owner`).
-Approving calls `Master.split_task`: the task becomes `cancelled` with `replaced_by`,
-the new tasks take its place, and its dependents depend on all of them. Reject blocks
-the task; Escalate sets its size to `hard` (the top tier).
+Approving calls `Master.split_task`: with new replacement ids the task becomes
+`cancelled` with `replaced_by`, the new tasks take its place, and its dependents depend on
+all of them; a replacement that reuses the task's id is updated in place (same id, new
+spec) and its dependents stay valid. Reject blocks the task; Escalate sets its size to
+`hard` (the top tier).
 
 **Fresh starts.** The Master's evidence for a task covers only attempts after its last
 human action (reopen, edit, pick, split decision); earlier ones are counted as

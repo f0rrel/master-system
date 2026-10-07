@@ -5,6 +5,17 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Planner: task replacements and approval
+- A replacement draft may reuse the replaced task's id. `draft_problems` no longer reports
+  it as "already used" (`core/planner.py`).
+- A same-id replacement updates the task in place instead of cancelling it and inserting
+  a duplicate: same id and position, new spec, `status: planned`, no `replaced_by`.
+  New-id splits are unchanged (cancel, insert, rewire dependents) (`core/work_manager.py`).
+- `approve` no longer fails when the acceptance test is already committed on the base
+  branch. It skips the empty commit and records the base tip as the tests commit; a Git
+  failure with no stderr now shows stdout instead of an empty message
+  (`core/planner_checks.py`, `core/host.py`). Details: [docs/planner.md](docs/planner.md).
+
 ### Fix: a pin releases a limit pause that belongs to another worker
 - A worker limit now pauses a project only while the limited profile is the one the
   project would use (your pin, the temporary worker, or the first in the order).

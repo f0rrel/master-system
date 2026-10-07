@@ -96,3 +96,5 @@ Paths: `$MS_HOME` is the repository; `<clone>` is a managed project's dedicated 
 | A multi-line paste in `ms chat` became many messages and consumed the chat cap | Pastes arrive as one message; `"""` blocks; `--file` |
 | `ms` run inside another checkout of the repository used that checkout's code | The wrapper runs `python -P` with an explicit `PYTHONPATH` |
 | The planner replied "I'll read the files…" and ended its turn, so every nudge cost a paid turn (P1) | Reads happen within the turn: files named in prose are read, an empty promise is re-asked once, and the last call must answer |
+| `approve` failed with `Task already exists: <id>` for a draft with `replaces: <id>` | Fixed: a replacement that reuses the replaced task's id now updates it in place; validation and execution agree (`56538f9`, `3c2a314`). See [planner.md](planner.md#recent-planner-fixes) |
+| `approve` failed with `git commit failed (1):` and no detail when the acceptance test was already on the base branch | Fixed: an empty acceptance-test commit is skipped and the base tip is recorded; a Git failure with no stderr now shows stdout (`b8ade04`) |
