@@ -143,6 +143,18 @@ def test_replacing_an_existing_task_id_is_allowed():
     assert not any("already used" in p for p in problems)
 
 
+def test_a_draft_may_reference_an_existing_active_epic(env):
+    """The toy project's m1 is in_progress: a draft extends it instead of re-creating it."""
+    chat = env["chat"]([answer()])
+    chat.state.draft = draft()
+    chat.state.draft["epic"]["id"] = "m1"
+
+    assert chat.problems() == []
+
+    env["master"].update_milestone("toy", "m1", status="completed")
+    assert any("already used" in p for p in chat.problems())
+
+
 def test_a_good_test_fails_on_the_current_code_and_passes_the_check(env):
     chat = env["chat"]([answer(draft())])
     chat.turn("go")

@@ -86,8 +86,10 @@ def test_approving_a_plan_for_a_proposed_epic_keeps_its_place(root):
     epic = next(m for m in master.status("app")["milestones"] if m["id"] == "epic-x")
     assert epic["status"] == "planned" and epic["priority"] == 2
     assert plannable_epics(master.status("app")) == set()
-    with pytest.raises(DuplicateRecordError):
-        master.add_planned_work("app", {"id": "epic-x", "name": "X"}, [task("x-2", "epic-x")])
+    master.add_planned_work("app", {"id": "epic-x", "name": "X"}, [task("x-2", "epic-x")])
+    epic = next(m for m in master.status("app")["milestones"] if m["id"] == "epic-x")
+    assert epic["status"] == "planned" and epic["priority"] == 2  # the record stays as it is
+    assert {t["id"] for t in master.status("app")["tasks"]} >= {"x-1", "x-2"}
 
 
 def test_draft_problems_for_backlog_drafts():

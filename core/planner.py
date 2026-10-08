@@ -179,8 +179,8 @@ def draft_problems(draft, existing_task_ids, existing_milestone_ids, settings,
                    plannable_epics=()) -> list:
     """Why a draft cannot be checked or approved (empty list: it can).
 
-    ``plannable_epics``: ids of proposed backlog epics without tasks; a draft may
-    plan one of them (its ``epic.id`` is the backlog epic's id).
+    ``plannable_epics``: epic ids the draft's ``epic.id`` may be — a proposed backlog
+    epic it plans, or an existing active epic it extends (its tasks join that epic).
     """
     if not isinstance(draft, dict):
         return ["the draft is not an object"]
@@ -769,7 +769,10 @@ class PlannerChat:
 
     def problems(self) -> list:
         status = self._master.status(self.project_id)
-        plannable = set(plannable_epics(status))
+        # An epic that already exists may be referenced: the draft extends it instead
+        # of creating it. Only a completed epic may not take new tasks.
+        plannable = set(plannable_epics(status)) | {
+            m["id"] for m in status["milestones"] if m.get("status") != "completed"}
         problems = []
         replaces = (self.state.draft or {}).get("replaces")
         if replaces:

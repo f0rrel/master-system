@@ -339,6 +339,10 @@ class WorkManager:
         records are complete task records (description, acceptance,
         manual_check, size, depends_on); the result is validated like any
         project state, and both files are restored if it is invalid.
+
+        An epic that already exists is not created again: the tasks join it and
+        its record stays as it is (only a taskless proposed backlog epic flips
+        to planned when its plan is approved).
         """
         snapshot = self._state.snapshot()
         milestones_doc = deepcopy(snapshot.milestones_doc)
@@ -347,11 +351,6 @@ class WorkManager:
         _require_text(milestone.get("name"), "Milestone name")
         backlog_epic = next((m for m in milestones_doc.get("milestones", [])
                              if m.get("id") == milestone["id"]), None)
-        if backlog_epic is not None and (
-                backlog_epic.get("status") != PROPOSED
-                or any(t.get("milestone") == milestone["id"]
-                       for t in tasks_doc.get("tasks", []))):
-            raise DuplicateRecordError(f"Milestone already exists: {milestone['id']}")
         existing = {t.get("id") for t in tasks_doc.get("tasks", [])}
         for task in tasks:
             if task.get("id") in existing:
@@ -359,12 +358,14 @@ class WorkManager:
             if task.get("size") not in (None, *TASK_SIZES):
                 raise InvalidFieldError(f"Invalid task size: {task.get('size')}")
         old_milestones, old_tasks = deepcopy(milestones_doc), deepcopy(tasks_doc)
-        if backlog_epic is not None:
-            # The owner approved the plan of a backlog epic: it keeps its place.
-            backlog_epic["status"] = "planned"
-        else:
+        if backlog_epic is None:
             milestones_doc.setdefault("milestones", []).append(
                 {"id": milestone["id"], "name": milestone["name"], "status": "planned"})
+        elif backlog_epic.get("status") == PROPOSED and not any(
+                t.get("milestone") == milestone["id"] for t in tasks_doc.get("tasks", [])):
+            # The owner approved the plan of a backlog epic: it keeps its place.
+            backlog_epic["status"] = "planned"
+        # else: the epic already exists — its record is untouched and the tasks join it.
         tasks_doc.setdefault("tasks", []).extend(deepcopy(list(tasks)))
         write_yaml_atomically(self._milestones_path, milestones_doc)
         write_yaml_atomically(self._tasks_path, tasks_doc)
