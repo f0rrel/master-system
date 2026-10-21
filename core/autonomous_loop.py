@@ -50,6 +50,7 @@ from core.images import waiting_tasks
 from core.splits import SplitStore
 from core.execution import ExecutionBackend
 from core.evidence import DEFAULT_MAX_ATTEMPTS, HistoryEvidence
+from core.retry_feedback import describe_failure
 from core.execution_runner import ExecutionError
 from core.history import EventType, HistoryStore, InMemoryHistoryStore, jsonable
 from core.usage import add_usage
@@ -171,6 +172,7 @@ class AutonomousLoop:
         history: Optional[HistoryStore] = None,
         session_id: Optional[str] = None,
         max_attempts_per_task: int = DEFAULT_MAX_ATTEMPTS,
+        max_identical_failures: int = 0,
         lock: Optional[ProjectLock] = None,
         paths: Optional[RuntimePaths] = None,
         worktrees: Optional[GitWorktrees] = None,
@@ -209,6 +211,7 @@ class AutonomousLoop:
         self._evidence = HistoryEvidence(
             self._history, session_id=session_id, max_attempts=max_attempts_per_task,
             integration_required=auto_integrate.applies if auto_integrate else None,
+            max_identical_failures=max_identical_failures,
         )
 
         # One interface shared by the engine and the loop, so every decision
@@ -613,11 +616,20 @@ class AutonomousLoop:
                         f"task {task_id!r} has had {self._evidence.max_attempts} "
                         "attempt(s) in this session",
                     )
+                if refusal is None and (
+                        repeated := self._evidence.repeated_failure(
+                            project_id, task_id, self._current_task(operation))) is not None:
+                    times = self._evidence.max_identical_failures
+                    refusal = (
+                        "repeated_failure",
+                        f"task {task_id!r} {describe_failure(repeated, times)}; it needs a "
+                        "change from the owner before another attempt",
+                    )
                 if refusal is not None:
                     self._record_refusal(run_id, project_id, steps, operation, *refusal)
                     return stop(
                         STOP_ATTEMPT_LIMIT
-                        if refusal[0] == "attempt_limit"
+                        if refusal[0] in ("attempt_limit", "repeated_failure")
                         else STOP_OPERATION_FAILED,
                         decision,
                         f"{operation.operation} -> refused ({refusal[0]}): {refusal[1]}",

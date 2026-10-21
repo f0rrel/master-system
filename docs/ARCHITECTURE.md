@@ -432,7 +432,7 @@ Master's context never names them. Reports show attempts, passes and cost per ti
 
 | ID | Gap | Plan |
 | --- | --- | --- |
-| N1 | Workers run as the system's OS user: isolation, not a sandbox. A worker can read the owner's files (`master.env`, the GitHub App key), write outside its worktree (for example `~/.gitconfig`, the state directory, the dedicated clone's working files) and leave processes behind (`setsid`). Everything below that says "detected" assumes the worker stays inside git | Containers or an OS sandbox |
+| N1 | Workers run as the system's OS user: isolation, not a sandbox. A worker can read the owner's files (`master.env`, the GitHub App key), write outside its worktree (for example `~/.gitconfig`, the state directory, the dedicated clone's working files) and leave processes behind (`setsid`). Everything below that says "detected" assumes the worker stays inside git | Containers or an OS sandbox. What the repository can and cannot do about it, and the host-level steps: [SECURITY-RELIABILITY-HARDENING.md](SECURITY-RELIABILITY-HARDENING.md). `ms doctor` lists what a worker can reach |
 | H2 | Policy is keyed on operation names, not state transitions. Partly addressed: completing needs evidence and cancelling is held for the owner; other transitions (`blocked`, `in_progress`, `planned`) and retitling are still routine for the orchestrating model | A transition table |
 | H3 | Approvals for gated operations cannot be granted outside a run | Approval events and `ms approve` |
 | H4 | The service's per-task failure budget and the in-run attempt limit are separate | Unify |

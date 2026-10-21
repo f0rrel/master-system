@@ -13,10 +13,21 @@ process never inherits the control plane's environment. It gets exactly:
   key) live there, and nowhere else.
 * ``LANG``, ``LC_ALL``, ``TERM`` and ``TZ``, copied if set.
 * ``CI=1``, and ``npm_config_cache`` inside the worker home.
+* ``GIT_TERMINAL_PROMPT=0`` and a ``GIT_SSH_COMMAND`` that always fails (see below).
 * any explicitly configured extras, for example ``PLAYWRIGHT_BROWSERS_PATH``.
 
 Nothing else: in particular no API keys, tokens, ``SSH_AUTH_SOCK`` or askpass
 helpers. A configured extra whose name looks like a secret is refused.
+
+**What this does not do.** It is an allowlist of what the orchestrator *hands* a
+worker, not a sandbox. The worker is still the owner's OS user: it can read
+``~/.ssh``, browser profiles and anything else that user can, and a user in the
+``docker`` group can become root through the Docker socket. A separate ``HOME`` does
+not hide SSH keys either: OpenSSH looks them up from the user database, not from
+``$HOME``. ``GIT_SSH_COMMAND`` therefore only stops an *accidental* ``git push`` over
+SSH from using those keys; a worker that runs ``ssh -i ~/.ssh/...`` itself is not
+stopped. The boundary that matters is a separate user, VM or container
+(docs/SECURITY-RELIABILITY-HARDENING.md).
 """
 
 from __future__ import annotations
@@ -36,6 +47,10 @@ __all__ = [
 
 SYSTEM_PATH = ("/usr/local/bin", "/usr/bin", "/bin")
 _COPIED = ("LANG", "LC_ALL", "TERM", "TZ")
+#: Set for every worker and verification process. ``/bin/false`` makes git-over-SSH fail
+#: at once instead of authenticating with the owner's keys; the prompt guard keeps git
+#: from waiting on a terminal that does not exist.
+_GIT_GUARDS = {"GIT_TERMINAL_PROMPT": "0", "GIT_SSH_COMMAND": "/bin/false"}
 _SECRET_LIKE = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASS|AUTH|CREDENTIAL|SSH_)", re.I)
 _VERSION_DIR = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 
@@ -107,6 +122,7 @@ def worker_environment(
         "XDG_CACHE_HOME": str(home / ".cache"),
         "npm_config_cache": str(home / ".npm"),
         "CI": "1",
+        **_GIT_GUARDS,
     }
     for name in _COPIED:
         if name in base_env:

@@ -12,6 +12,7 @@ from core.execution_runner import ExecutionError, TaskExecutionRunner
 from core.history import EventType, HistoryStore, jsonable, new_event_id
 from core.master import Master
 from core.paths import RuntimePaths
+from core.redaction import redact_json, redact_output
 from core.verification import VerificationBackend, VerificationResult
 from core.worker_limits import pick_worker
 from core.worker_env import default_worker_home, find_node_bin, worker_environment
@@ -220,9 +221,21 @@ class TaskOrchestrator:
         project = self._master.project_state(project_id).project()
         direction = read_direction(project)
         briefing = {"direction": direction.text if direction else None}
+        facts: dict = {}
+        if self._history is not None:
+            from core.retry_feedback import identical_streak, retry_note, task_failures
+
+            # What the earlier failed attempts found, from the orchestrator's own record.
+            failures = task_failures(self._history, project_id, task.get("id"), task)
+            note = retry_note(self._history, project_id, task.get("id"), task, failures)
+            if note:
+                briefing["previous_failure"] = note
+                facts.update(previous_failures=len(failures),
+                             previous_failure_fingerprint=failures[-1].fingerprint,
+                             identical_failure_streak=identical_streak(failures))
         task_type = task.get("type")
         if not task_type:
-            return briefing, {}, None
+            return briefing, facts, None
         settings = type_settings(project, task_type)
         lessons = LessonStore(self._master.project_state(project_id).project_path)
         included = lessons.select(task_type)["included"]
@@ -234,9 +247,9 @@ class TaskOrchestrator:
             note = recovery_note(self._history, project_id, task.get("id"))
             if note:
                 briefing["recovery"] = note
-        facts = {"task_type": task_type, "allowed_tools": settings["tools"],
-                 "lessons_used": len(included),
-                 "lessons_used_ids": [record["id"] for record in included]}
+        facts.update(task_type=task_type, allowed_tools=settings["tools"],
+                     lessons_used=len(included),
+                     lessons_used_ids=[record["id"] for record in included])
         if briefing.get("recovery"):
             facts["recovery"] = "write incrementally"
         return briefing, facts, opencode_config(settings["tools"])
@@ -461,22 +474,24 @@ class TaskOrchestrator:
         }
         if exec_res is not None:
             finished.update(
-                reason=exec_res.reason,
-                artifacts=jsonable(exec_res.artifacts),
-                state_updates=jsonable(exec_res.state_updates),
+                reason=redact_output(exec_res.reason),
+                artifacts=redact_json(jsonable(exec_res.artifacts)),
+                state_updates=redact_json(jsonable(exec_res.state_updates)),
                 worker_reported_usage=jsonable(exec_res.usage),
             )
         if raised is not None:
-            finished.update(error_type=type(raised).__name__, message=str(raised))
+            finished.update(error_type=type(raised).__name__, message=redact_output(str(raised)))
         if tampered:
-            finished.update(repository_tampered=tampered, restored_refs=found)
+            # Names the worker chose (refs, config keys): shown and stored, so redacted.
+            finished.update(repository_tampered=redact_json(tampered),
+                            restored_refs={redact_output(ref): tip for ref, tip in found.items()})
         stall = None if tampered else self._stall(outcome, facts, exec_res, worker_minutes)
         if stall is not None:
             outcome = finished["outcome"] = "stalled"
-            finished["stall"] = jsonable(stall)
+            finished["stall"] = redact_json(jsonable(stall))
         profile = tier_facts.get("worker_profile") or "default"
         if limit:
-            finished["limit"] = jsonable(limit)
+            finished["limit"] = redact_json(jsonable(limit))
             if self._limits is not None:
                 state = self._limits.record_limit(
                     project_id, profile, limit,
@@ -499,9 +514,9 @@ class TaskOrchestrator:
             "result_sha": facts.get("result_sha"),
             "execution": {
                 "status": exec_res.status,
-                "reason": exec_res.reason,
-                "artifacts": dict(exec_res.artifacts),
-                "state_updates": dict(exec_res.state_updates),
+                "reason": redact_output(exec_res.reason),
+                "artifacts": redact_json(dict(exec_res.artifacts)),
+                "state_updates": redact_json(dict(exec_res.state_updates)),
             },
             "verification": None,
         }
@@ -512,8 +527,9 @@ class TaskOrchestrator:
             return result
         if tampered:
             # The fail path, without running anything the attempt left behind.
-            finding = {"kind": "repository_tampered", "changed": tampered}
-            summary = f"the worker changed the repository outside its branch: {', '.join(tampered)}"
+            finding = {"kind": "repository_tampered", "changed": redact_json(tampered)}
+            summary = ("the worker changed the repository outside its branch: "
+                       + redact_output(", ".join(tampered)))
             record(EventType.VERIFICATION, verdict="fail", summary=summary, findings=[finding],
                    evidence={"base_sha": base_sha, "result_sha": facts["result_sha"]})
             result["verification"] = {"verdict": "fail", "summary": summary,
@@ -568,7 +584,7 @@ class TaskOrchestrator:
                 EventType.VERIFICATION,
                 verdict=None,
                 error_type=type(error).__name__,
-                message=str(error),
+                message=redact_output(str(error)),
                 worktree=str(verify_path),
                 deadline_at=verify_deadline_at,
                 processes=process_records(verification_workspace),
@@ -578,9 +594,9 @@ class TaskOrchestrator:
         record(
             EventType.VERIFICATION,
             verdict=ver_res.verdict,
-            summary=ver_res.summary,
-            findings=jsonable(list(ver_res.findings)),
-            evidence=jsonable(ver_res.evidence),
+            summary=redact_output(ver_res.summary),
+            findings=redact_json(jsonable(list(ver_res.findings))),
+            evidence=redact_json(jsonable(ver_res.evidence)),
             worktree=str(verify_path),
             deadline_at=verify_deadline_at,
             processes=process_records(verification_workspace),
@@ -588,9 +604,9 @@ class TaskOrchestrator:
 
         result["verification"] = {
             "verdict": ver_res.verdict,
-            "summary": ver_res.summary,
-            "findings": [dict(f) for f in ver_res.findings],
-            "evidence": dict(ver_res.evidence),
+            "summary": redact_output(ver_res.summary),
+            "findings": redact_json([dict(f) for f in ver_res.findings]),
+            "evidence": redact_json(dict(ver_res.evidence)),
         }
         if ver_res.verdict == "pass":
             result["lessons_proposed"] = self._propose_lessons(

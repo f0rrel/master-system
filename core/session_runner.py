@@ -91,6 +91,7 @@ class SessionRunner:
         max_steps: int = 20,
         max_retries: int = DEFAULT_MAX_RETRIES,
         max_attempts_per_task: int = DEFAULT_MAX_ATTEMPTS,
+        max_identical_failures: int = 0,
         attempt_timeout_s: float = DEFAULT_ATTEMPT_TIMEOUT_S,
         verification_timeout_s: float = DEFAULT_VERIFICATION_TIMEOUT_S,
         worker_env=None,
@@ -118,6 +119,7 @@ class SessionRunner:
         self._max_steps = max_steps
         self._max_retries = max_retries
         self._max_attempts_per_task = max_attempts_per_task
+        self._max_identical_failures = max_identical_failures
         self._attempt_timeout_s = attempt_timeout_s
         self._verification_timeout_s = verification_timeout_s
         self._worker_env = worker_env
@@ -207,6 +209,7 @@ class SessionRunner:
             history=self._history,
             session_id=session.session_id,
             max_attempts_per_task=self._max_attempts_per_task,
+            max_identical_failures=self._max_identical_failures,
             lock=lock,
             paths=self._paths,
             worktrees=self._worktrees,

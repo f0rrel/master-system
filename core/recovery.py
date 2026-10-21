@@ -115,6 +115,7 @@ def _observe(worktrees, started_payload) -> dict:
         return {"worktree": worktree}
     try:
         return {"worktree": worktree,
-                **worktrees.observe(worktree, started_payload.get("base_sha"))}
+                **worktrees.observe(worktree, started_payload.get("base_sha"),
+                                       repository=started_payload.get("repository"))}
     except Exception as error:  # observation must never block recovery
         return {"worktree": worktree, "observe_error": f"{type(error).__name__}: {error}"}

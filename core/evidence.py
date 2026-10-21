@@ -204,12 +204,16 @@ class HistoryEvidence:
         session_id: Optional[str] = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         integration_required=None,
+        max_identical_failures: int = 0,
     ):
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
         self._history = history
         self._session_id = session_id
         self.max_attempts = max_attempts
+        #: The same failure this many times in a row refuses a further run_task
+        #: (core.retry_feedback); 0: off.
+        self.max_identical_failures = max_identical_failures
         self.run_id: Optional[str] = None
         #: project_id -> True when the system integrates verified work itself
         #: (H-D2): then a task completes only once its attempt is integrated.
@@ -234,6 +238,13 @@ class HistoryEvidence:
 
     def attempt_limit_reached(self, project_id: str, task_id: str) -> bool:
         return self.attempts_in_scope(project_id, task_id) >= self.max_attempts
+
+    def repeated_failure(self, project_id: str, task_id: str, task=None):
+        """The failure that repeated ``max_identical_failures`` times in a row, or None."""
+        from core.retry_feedback import repeated_failure
+
+        return repeated_failure(self._history, project_id, task_id,
+                                self.max_identical_failures, task)
 
     # --- completion gate -------------------------------------------------
 

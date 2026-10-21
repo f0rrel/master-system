@@ -38,10 +38,10 @@ def screenshots(summary) -> list:
 def build_summary(master, history, since_iso: str, prices: Mapping,
                   default_model: Optional[str] = None,
                   needs_you: Callable[[str], list] = lambda project_id: [],
-                  max_failures: int = 3, reason: str = "",
+                  max_failures: int = 3, reason: str = "", max_identical: int = 0,
                   now: Optional[datetime] = None, project_ids=None,
                   labels: Optional[Mapping] = None) -> dict:
-    from core.daemon import work_for
+    from core.daemon import exhaustion_note, work_for
     from core.report import spend_since
 
     projects = []
@@ -54,7 +54,7 @@ def build_summary(master, history, since_iso: str, prices: Mapping,
                     and e.task_id not in integrated:
                 integrated.append(e.task_id)
         done = [t for t in integrated if tasks[t].get("status") == "completed"]
-        _, exhausted = work_for(status, history, max_failures)
+        _, exhausted = work_for(status, history, max_failures, max_identical)
         blocked = [t for t in tasks if tasks[t].get("status") == "blocked"]
         reviews = {}
         for e in history.events(project_id=project_id, types=[EventType.VERIFICATION]):
@@ -70,7 +70,9 @@ def build_summary(master, history, since_iso: str, prices: Mapping,
             "done": [{"id": t, "title": tasks[t].get("title"),
                       "manual_check": tasks[t].get("manual_check")} for t in done],
             "blocked": [{"id": t, "title": tasks[t].get("title")} for t in blocked],
-            "exhausted": [{"id": t, "title": tasks[t].get("title")} for t in exhausted],
+            "exhausted": [{"id": t, "title": tasks[t].get("title"),
+                           "why": exhaustion_note(history, project_id, tasks[t], max_failures,
+                                                  max_identical)} for t in exhausted],
             "reviews": [{"id": t, "title": tasks.get(t, {}).get("title"), **r}
                         for t, r in reviews.items()],
             "needs_you": list(needs_you(project_id) or []),
@@ -161,8 +163,9 @@ def render_text(summary: Mapping) -> str:
                 lines.append("      check: " + " ".join(str(t["manual_check"]).split()))
         for label, items in (("Blocked", p["blocked"]), ("Out of attempts", p["exhausted"])):
             if items:
-                lines.append(f"  {label}: " + "; ".join(f"{t['id']} {t['title']}"
-                                                        for t in items))
+                lines.append(f"  {label}: " + "; ".join(
+                    f"{t['id']} {t['title']}" + (f" ({t['why']})" if t.get("why") else "")
+                    for t in items))
         for r in p["reviews"]:
             lines.append(f"  Screenshots of {r['id']} (review: {r['verdict']}): "
                          + ", ".join(r["screenshots"]))
@@ -205,7 +208,9 @@ def render_html(summary: Mapping) -> str:
         stuck = p["blocked"] + p["exhausted"]
         if stuck:
             body.append("<h3>Blocked</h3><ul>" + "".join(
-                f"<li>{e(t['id'])} {e(t['title'] or '')}</li>" for t in stuck) + "</ul>")
+                f"<li>{e(t['id'])} {e(t['title'] or '')}"
+                + (f" — {e(t['why'])}" if t.get("why") else "") + "</li>"
+                for t in stuck) + "</ul>")
         for r in p["reviews"]:
             shots = "".join(
                 f'<a href="{e(Path(s).as_uri())}"><img src="{e(Path(s).as_uri())}" '

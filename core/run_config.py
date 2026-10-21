@@ -46,6 +46,7 @@ playwright_browsers_path = "~/.cache/ms-playwright"
 max_steps = 20
 max_retries = 1
 max_attempts_per_task = 3
+max_identical_failures = 2        # same failure this many times in a row: stop retrying (0: off)
 attempt_timeout_s = 1800
 verification_timeout_s = 1800
 # projects_root = "~/.config/master-system/projects"   # the default
@@ -159,6 +160,9 @@ class RunSettings:
     max_steps: int = 20
     max_retries: int = 1
     max_attempts_per_task: int = 3
+    #: The same failure (core.retry_feedback fingerprint) this many times in a row stops
+    #: automatic retries until the owner changes the task. 0 turns the check off.
+    max_identical_failures: int = 2
     attempt_timeout_s: float = 1800
     verification_timeout_s: float = 1800
     projects_root: Optional[Path] = None
@@ -355,14 +359,19 @@ def load_config(path=None, env: Optional[Mapping[str, str]] = None) -> RunConfig
     )
 
     r = _section(data, "run", ("max_steps", "max_retries", "max_attempts_per_task",
-                               "attempt_timeout_s", "verification_timeout_s", "projects_root"))
+                               "max_identical_failures", "attempt_timeout_s",
+                               "verification_timeout_s", "projects_root"))
     max_retries = r.get("max_retries", 1)
     if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
         raise ConfigError("[run] max_retries must be a non-negative integer")
+    identical = r.get("max_identical_failures", RunSettings.max_identical_failures)
+    if isinstance(identical, bool) or not isinstance(identical, int) or identical < 0:
+        raise ConfigError("[run] max_identical_failures must be a non-negative integer")
     run = RunSettings(
         max_steps=_positive(r, "run", "max_steps", 20, int),
         max_retries=max_retries,
         max_attempts_per_task=_positive(r, "run", "max_attempts_per_task", 3, int),
+        max_identical_failures=identical,
         attempt_timeout_s=_positive(r, "run", "attempt_timeout_s", 1800),
         verification_timeout_s=_positive(r, "run", "verification_timeout_s", 1800),
         projects_root=_path(r["projects_root"]) if "projects_root" in r else None,

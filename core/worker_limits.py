@@ -33,6 +33,8 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Optional
 
+from core.redaction import redact_output
+
 __all__ = ["classify_failure", "parse_reset", "LimitState", "KINDS", "ASK_KINDS",
            "RESET_MARGIN", "describe", "choice_profile", "probe_profile", "PROBE_ANSWER",
            "pick_worker", "active_worker", "limit_words", "project_order"]
@@ -100,7 +102,9 @@ def classify_failure(stdout: str, stderr: str, returncode: Optional[int], steps:
     if kind is None:
         return None
     reset = parse_reset(text, now)
-    return {"kind": kind, "detail": detail,
+    # The detail is a slice of the provider's own error text: it is stored (limit state,
+    # history) and shown to the owner, so it never leaves here with a secret in it.
+    return {"kind": kind, "detail": redact_output(detail),
             "reset_at": reset.isoformat(timespec="seconds") if reset else "unknown"}
 
 
@@ -207,7 +211,8 @@ class LimitState:
         same = state.get("profile") == profile
         reset = None if info.get("reset_at") in (None, "unknown") else \
             datetime.fromisoformat(info["reset_at"])
-        record = {"profile": profile, "kind": info.get("kind"), "detail": info.get("detail"),
+        record = {"profile": profile, "kind": info.get("kind"),
+                  "detail": redact_output(info.get("detail")),
                   "reset_at": info.get("reset_at") or "unknown",
                   "since": state.get("since") if same else now.isoformat(timespec="seconds"),
                   "unknown_waits": state.get("unknown_waits", 0) if same else 0,
@@ -512,6 +517,7 @@ def probe_profile(profile: dict, *, opencode_bin, extra_args, env: dict, log_dir
                             + " ".join((text or "(nothing)").split())[:200])
     else:
         result["ok"] = True
+    result["reason"] = redact_output(result["reason"])
     return result
 
 

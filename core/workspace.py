@@ -104,24 +104,80 @@ def control_git_argv(*args: str) -> list:
 
 #: Copied from the control plane's environment into control-plane git; nothing else is.
 _GIT_ENV_COPIED = ("PATH", "HOME", "LANG", "LC_ALL", "TZ")
+#: Worktree -> the common git directory recorded when the control plane created it (or was
+#: told it by the attempt's own record). Control-plane git never takes the common directory
+#: from the worktree itself: a worker can write both the ``.git`` file and the admin
+#: directory's ``commondir``, and pointing them at a git directory it built makes the next
+#: ``git add -A`` run a filter defined in that directory's config.
+_COMMON_DIRS: dict = {}
 
 
-def control_git_env(extra: Optional[Mapping[str, str]] = None) -> dict:
+def _common_dir_of(repository) -> Path:
+    out = _git(["rev-parse", "--path-format=absolute", "--git-common-dir"], repository)
+    return Path(out.stdout.strip()).resolve()
+
+
+def _read_path(file: Path, base: Path) -> Path:
+    try:
+        text = file.read_text().strip()
+    except (OSError, UnicodeDecodeError) as error:
+        raise WorkspaceError(f"cannot read {file}: {error}") from error
+    path = Path(text)
+    return (path if path.is_absolute() else base / path).resolve()
+
+
+def _pinned_dirs(worktree: Path, common: Path) -> dict:
+    """``GIT_DIR``, ``GIT_COMMON_DIR`` and ``GIT_WORK_TREE`` for a worktree of ``common``.
+
+    The admin directory must sit directly under ``<common>/worktrees`` and must point back
+    at this worktree, which keeps a worker from handing the snapshot another attempt's
+    directory. Raises WorkspaceError otherwise, so nothing runs on unverified metadata.
+    """
+    marker = worktree / ".git"
+    if marker.is_symlink() or not marker.is_file():
+        raise WorkspaceError(f"{worktree} is not a linked worktree: .git is not a plain file")
+    try:
+        line = marker.read_text().strip()
+    except (OSError, UnicodeDecodeError) as error:
+        raise WorkspaceError(f"cannot read {marker}: {error}") from error
+    if not line.startswith("gitdir:"):
+        raise WorkspaceError(f"{marker} does not name a git directory")
+    admin = Path(line[len("gitdir:"):].strip())
+    admin = (admin if admin.is_absolute() else worktree / admin).resolve()
+    if admin.parent != common / "worktrees":
+        raise WorkspaceError(
+            f"{worktree} names git directory {admin}, which is not one of {common}'s worktrees"
+        )
+    back = _read_path(admin / "gitdir", admin)
+    if back != worktree / ".git":
+        raise WorkspaceError(f"git directory {admin} does not belong to {worktree}")
+    return {"GIT_DIR": str(admin), "GIT_COMMON_DIR": str(common), "GIT_WORK_TREE": str(worktree)}
+
+
+def control_git_env(extra: Optional[Mapping[str, str]] = None, cwd=None) -> dict:
     """The environment of a git command the control plane runs itself.
 
     Minimal: no keys from master.env, no GIT_* overrides, and no global or system git
     config (a worker running as the owner can write ``~/.gitconfig``), plus only what
     the call needs (an identity for a commit, the askpass variables for a push).
+
+    For a worktree the control plane created, ``cwd`` pins ``GIT_DIR``, ``GIT_COMMON_DIR``
+    and ``GIT_WORK_TREE`` (see :data:`_COMMON_DIRS`).
     """
     env = {name: os.environ[name] for name in _GIT_ENV_COPIED if name in os.environ}
     env.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+    if cwd is not None:
+        worktree = Path(cwd).resolve()
+        common = _COMMON_DIRS.get(worktree)
+        if common is not None:
+            env.update(_pinned_dirs(worktree, common))
     env.update(extra or {})
     return env
 
 
 def _git(args: Sequence[str], cwd, check: bool = True,
          extra_env=None, input_text=None) -> subprocess.CompletedProcess:
-    env = control_git_env(extra_env)
+    env = control_git_env(extra_env, cwd=cwd)
     try:
         done = subprocess.run(
             control_git_argv(*args), cwd=str(cwd), capture_output=True, text=True,
@@ -202,6 +258,7 @@ class GitWorktrees:
              base_sha],
             repository,
         )
+        _COMMON_DIRS[path.resolve()] = _common_dir_of(repository)
         return path
 
     def free_path(self, project_id: str, name: str) -> Path:
@@ -259,24 +316,38 @@ class GitWorktrees:
 
     # --- after a crash ----------------------------------------------------
 
-    def observe(self, path, base_sha: Optional[str]) -> dict:
-        """What an interrupted attempt left in its worktree. Changes nothing."""
+    def observe(self, path, base_sha: Optional[str], repository=None) -> dict:
+        """What an interrupted attempt left in its worktree. Changes nothing.
+
+        A process that did not create the worktree (a recovering one) is given the
+        ``repository`` the attempt recorded; without it, a linked worktree is not
+        inspected with git, because its git directory cannot be trusted.
+        """
         path = Path(path)
         if not path.is_dir():
             return {"worktree_present": False}
         facts: dict = {"worktree_present": True}
-        status = _git(["status", "--porcelain"], path, check=False)
-        if status.returncode != 0:
-            facts["observe_error"] = status.stderr.strip()
-            return facts
-        lines = status.stdout.splitlines()
-        facts["git_status"] = lines[:MAX_LISTED_PATHS]
-        facts["git_status_count"] = len(lines)
-        facts["untracked"] = sum(1 for line in lines if line.startswith("??"))
-        if base_sha:
-            diff = _git(["diff", "--numstat", "--no-renames", base_sha], path, check=False)
-            if diff.returncode == 0:
-                facts["diffstat"] = _numstat(diff.stdout)
+        try:
+            if repository is not None and path.resolve() not in _COMMON_DIRS:
+                _COMMON_DIRS[path.resolve()] = _common_dir_of(repository)
+            if path.resolve() not in _COMMON_DIRS and (path / ".git").is_file():
+                facts["observe_error"] = ("not inspected: the worktree's git directory is "
+                                          "unverified (no recorded repository)")
+                return facts
+            status = _git(["status", "--porcelain"], path, check=False)
+            if status.returncode != 0:
+                facts["observe_error"] = status.stderr.strip()
+                return facts
+            lines = status.stdout.splitlines()
+            facts["git_status"] = lines[:MAX_LISTED_PATHS]
+            facts["git_status_count"] = len(lines)
+            facts["untracked"] = sum(1 for line in lines if line.startswith("??"))
+            if base_sha:
+                diff = _git(["diff", "--numstat", "--no-renames", base_sha], path, check=False)
+                if diff.returncode == 0:
+                    facts["diffstat"] = _numstat(diff.stdout)
+        except WorkspaceError as error:
+            facts["observe_error"] = str(error)
         return facts
 
 

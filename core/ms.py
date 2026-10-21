@@ -43,6 +43,8 @@ from pathlib import Path
 from core.notify import Notifier, default_topic_path, new_topic
 from core.run_config import ConfigError, default_config_path, load_config
 from core.paths import RuntimePaths
+from core.redaction import SECRET_KEYS, SECRET_PATTERNS, redact  # noqa: F401 (re-exported)
+from core.retry_feedback import retry_limits
 
 __all__ = ["main", "service_unit"]
 
@@ -182,7 +184,7 @@ def build_daemon(config, config_path):
         notifier=notifier,
         run=subprocess_runner(config_path, env_file, paths.state_dir / "logs" / "runs",
                               paths.state_dir),
-        max_failures=max(3, 2 * len(config.worker.ladder)),
+        **retry_limits(config),
         after_run=[under_project_lock(master, "publish", publisher),
                    release_ready_notice(releaser)], is_busy=is_busy,
         preview_url=publisher.preview_url,
@@ -213,7 +215,7 @@ def morning_summary(config, master, history, paths, releaser, publisher):
             needs_you=lambda project_id: owner_needs(
                 master, history, config, project_id, stalled=stalled,
                 pending_release=releaser.open_pending(project_id)),
-            max_failures=max(3, 2 * len(config.worker.ladder)), reason=reason,
+            reason=reason, **retry_limits(config),
             project_ids=projects,
             labels={n: p.get("label", n) for n, p in config.worker.profiles.items()})
         written = write_summary(summary, paths.state_dir / "reports")
@@ -479,9 +481,9 @@ def image_picks(master, project_id, state_dir) -> list:
 
 
 def project_overview(master, history, project_id, *, is_busy=None, max_failures=3,
-                     state_dir=None):
+                     max_identical=0, state_dir=None):
     """Everything `ms status` shows for one project, as plain data."""
-    from core.daemon import work_for
+    from core.daemon import exhaustion_note, work_for
     from core.history import EventType
     from core.publish import site_urls
     from core.workspace import is_ancestor
@@ -489,7 +491,7 @@ def project_overview(master, history, project_id, *, is_busy=None, max_failures=
     status = master.status(project_id)
     project = master.project_state(project_id).project()
     tasks = status["tasks"]
-    runnable, exhausted = work_for(status, history, max_failures)
+    runnable, exhausted = work_for(status, history, max_failures, max_identical)
     integrations = {}
     for e in history.events(project_id=project_id, types=[EventType.INTEGRATION]):
         integrations[e.task_id] = e.payload.get("result_sha")
@@ -522,7 +524,8 @@ def project_overview(master, history, project_id, *, is_busy=None, max_failures=
             groups["done"].append(label)
         elif state != "cancelled":
             groups["other"].append(label)
-    needs_you = [f"{t}: failed {max_failures} attempts; change its description or acceptance"
+    by_id = {t["id"]: t for t in tasks}
+    needs_you = [f"{t}: {exhaustion_note(history, project_id, by_id[t], max_failures, max_identical)}"
                  for t in exhausted]
     needs_you += [f"{label}: blocked" for label in groups["blocked"]]
     needs_you += image_picks(master, project_id, state_dir)
@@ -552,14 +555,16 @@ def _status_details(args, out):
     spend = spend_since(history, start_of_today_utc(), config.prices, config.master.model)
     print(f"Master System: {service}. Spent today ${spend['total_usd']:.3f} of "
           f"${config.budget.daily_usd:.2f}"
-          f" (Master ${spend['master_usd']:.3f}, workers ${spend['worker_usd']:.3f}).", file=out)
+          f" (Master ${spend['master_usd']:.3f}, workers ${spend['worker_usd']:.3f}); "
+          "an estimate from the tokens the providers reported and the config's prices.",
+          file=out)
 
     def busy(project_id):
         return _lock_holder(master.project_state(project_id).project_path) is not None
 
     for project_id in master.list_projects():
         view = project_overview(master, history, project_id, is_busy=busy,
-                                state_dir=paths.state_dir)
+                                state_dir=paths.state_dir, **retry_limits(config))
         state = "running now" if view["busy"] else (
             f"{len(view['ready'])} task(s) ready" if view["ready"] else "idle")
         print(f"\n{view['name'] or project_id}: {state}", file=out)
@@ -604,17 +609,19 @@ def _ago(iso: str, now=None) -> str:
 def owner_needs(master, history, config, project_id, *, stalled=(), pending_release=None,
                 status=None, exhausted=None) -> list:
     """What needs the owner in one project, in plain words (ms status, the summary)."""
-    from core.daemon import work_for
+    from core.daemon import exhaustion_note, work_for
     from core.lessons import LessonStore
 
     status = status or master.status(project_id)
     tasks = [t for t in status["tasks"] if t.get("status") != "cancelled"]
     titles = {t["id"]: t.get("title") or t["id"] for t in tasks}
     if exhausted is None:
-        _, exhausted = work_for(status, history, max(3, 2 * len(config.worker.ladder)))
+        _, exhausted = work_for(status, history, **retry_limits(config))
     needs = [f"{t['id']} {titles[t['id']]}: it is blocked; tell the planner what to change "
              "(ms chat)" for t in tasks if t.get("status") == "blocked"]
-    needs += [f"{t} {titles[t]}: failed several attempts; change its description "
+    by_id = {t["id"]: t for t in tasks}
+    needs += [f"{t} {titles[t]}: "
+              f"{exhaustion_note(history, project_id, by_id[t], **retry_limits(config))} "
               "(ms chat)" for t in exhausted]
     from core.evidence import held_cancellations
 
@@ -654,7 +661,7 @@ def owner_needs(master, history, config, project_id, *, stalled=(), pending_rele
     dropped = sum(1 for types in lessons.fit().values() if types)
     if dropped:
         needs.append(f"{_lessons_dropped(dropped)}: ms lessons {project_id}")
-    view = project_overview(master, history, project_id)
+    view = project_overview(master, history, project_id, **retry_limits(config))
     if view["groups"]["in develop"] and not pending_release:
         needs.append(f"{len(view['groups']['in develop'])} finished task(s) are in the "
                      "preview but not released; when you like them: ms release "
@@ -690,12 +697,12 @@ def friendly_status(master, history, config, *, paused, last_looked, is_busy, sp
         tasks = [t for t in status["tasks"] if t.get("status") != "cancelled"]
         titles = {t["id"]: t.get("title") or t["id"] for t in tasks}
         done = sum(1 for t in tasks if t.get("status") == "completed")
-        runnable, exhausted = work_for(status, history, max(3, 2 * len(config.worker.ladder)))
+        runnable, exhausted = work_for(status, history, **retry_limits(config))
 
         needs = owner_needs(master, history, config, project_id, stalled=stalled,
                             pending_release=pending_release, status=status,
                             exhausted=exhausted)
-        view = project_overview(master, history, project_id)
+        view = project_overview(master, history, project_id, **retry_limits(config))
 
         # Headline.
         started = history.events(project_id=project_id, types=[EventType.ATTEMPT_STARTED])
@@ -867,29 +874,6 @@ def check_releases(config, master, history, paths, *, max_age_s: float = 60, now
     return lines
 
 
-SECRET_PATTERNS = [r"ghs_[A-Za-z0-9]+", r"gh[pousr]_[A-Za-z0-9]{20,}", r"sk-[A-Za-z0-9-]{16,}",
-                   r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"]
-SECRET_KEYS = ("key", "token", "secret", "password", "topic", "pass")
-
-
-def redact(text: str, secrets=()) -> str:
-    """Remove known secret values, secret-looking strings and secret-named config values."""
-    import re
-
-    for value in secrets:
-        if value and len(value) >= 6:
-            text = text.replace(value, "<redacted>")
-    for pattern in SECRET_PATTERNS:
-        text = re.sub(pattern, "<redacted>", text)
-    lines = []
-    for line in text.splitlines():
-        name = line.split("=", 1)[0].strip().lower() if "=" in line else ""
-        if name and any(word in name for word in SECRET_KEYS) and not name.startswith("#"):
-            line = line.split("=", 1)[0] + "= <redacted>"
-        lines.append(line)
-    return "\n".join(lines)
-
-
 def doctor_report(args) -> str:
     """A paste-ready diagnostic block for any AI helper. Never contains secrets."""
     import io
@@ -940,6 +924,13 @@ def doctor_report(args) -> str:
                                     if p.is_dir())) or "none"))
     except Exception as error:
         section("Projects", f"(could not read: {error})")
+    from core.worker_exposure import render_exposure, worker_exposure
+
+    try:
+        section("Worker exposure (workers run as your user)",
+                render_exposure(worker_exposure(config_dir=config_path.parent)))
+    except Exception as error:  # a diagnostic must not break the report
+        section("Worker exposure (workers run as your user)", f"(could not check: {error})")
     pid_file = paths.state_dir / "run.pid"
     section("Service", "\n".join([
         f"systemd: {capture(['systemctl', '--user', 'is-active', UNIT_NAME])}, "

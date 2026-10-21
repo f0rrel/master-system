@@ -239,3 +239,23 @@ def test_host_git_does_not_read_the_global_config(tmp_path, monkeypatch, git_rep
 
     with __import__("pytest").raises(RuntimeError):
         host_git(["owned"], git_repo)
+
+
+def test_a_secret_in_a_name_the_worker_chose_is_not_stored(tmp_path):
+    secret = "sk-" + "a1b2c3d4e5f6a7b8c9d0e1f2"
+
+    def add_branch(path):
+        edit_app(path)
+        git(path, "branch", f"leak-{secret}")
+
+    result, history, repo, verifier, _ = run_once(tmp_path, Does(add_branch), Recorder())
+
+    finished = payload(history, EventType.ATTEMPT_FINISHED)
+    verification = payload(history, EventType.VERIFICATION)
+    assert verification["verdict"] == "fail"
+    assert finished["repository_tampered"] == ["refs/heads/leak-<redacted>"]
+    assert list(finished["restored_refs"]) == ["refs/heads/leak-<redacted>"]
+    assert tampered(history)[0]["changed"] == ["refs/heads/leak-<redacted>"]
+    everything = repr([(e.type, e.payload) for e in history.events()]) + repr(result)
+    assert secret not in everything
+    assert f"leak-{secret}" not in git(repo, "branch", "--list").replace("*", "")  # restored

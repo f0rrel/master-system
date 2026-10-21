@@ -294,6 +294,7 @@ Settings live in `~/.config/master-system/config.toml`. Every key is optional.
 | `[run]` | `max_steps` | `20` | Orchestrating-model decisions per run |
 | | `max_retries` | `1` | Retries after an unusable model reply |
 | | `max_attempts_per_task` | `3` | Attempts per task within one session |
+| | `max_identical_failures` | `2` | The same failure this many times in a row (same worker profile) stops automatic retries until you change the task; `0` turns it off. With worker tiers it is raised to at least 3 so a tier still gets its two tries before escalating |
 | | `attempt_timeout_s` | `1800` | Worker deadline per attempt |
 | | `verification_timeout_s` | `1800` | Acceptance deadline per attempt |
 | | `projects_root` | `~/.config/master-system/projects` | Location of project definitions |
@@ -371,7 +372,12 @@ are checked between steps, so a call already in flight can overshoot a cap. Per 
 there is no dollar cap but attempt limits: the service stops working on a task after 3
 failed attempts since the last human change to it (2 × the number of tiers when tiers
 are enabled, at least 3), a session runs a task at most `max_attempts_per_task` times,
-and 3 stalls in a row make a task wait for you. The service starts no run once the
+and 3 stalls in a row make a task wait for you. A task whose last `max_identical_failures`
+(default 2) attempts failed *the same way* also waits for you: same findings, or same
+failing command and output once timings, numbers and ids are ignored
+(`core/retry_feedback.py`). Every retry prompt carries what the earlier attempt got wrong
+(the verifier's findings, redacted and bounded), and says so when it is a repeat. Failures
+under an older version of the task's spec are not counted. The service starts no run once the
 daily cap is reached and bounds each run by `min(run_usd, remaining daily budget)`.
 After changing the configuration, restart the service once `ms status` reports Idle:
 `systemctl --user restart master-system.service`.

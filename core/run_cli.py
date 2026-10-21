@@ -49,6 +49,7 @@ if __package__ in (None, ""):
 from core import human_edits
 from core.master import EXPECTED_ERRORS, Master
 from core.paths import RuntimePaths
+from core.retry_feedback import retry_limits
 from core.run_config import ConfigError, load_config
 from core.run_lock import LOCK_FILENAME, ProjectBusyError, ProjectLock
 
@@ -274,6 +275,7 @@ def build_runner(ctx, stop_check=None):
         max_steps=r.max_steps,
         max_retries=r.max_retries,
         max_attempts_per_task=r.max_attempts_per_task,
+        max_identical_failures=retry_limits(ctx.config)["max_identical"],
         attempt_timeout_s=r.attempt_timeout_s,
         verification_timeout_s=r.verification_timeout_s,
         worker_env=worker_env,

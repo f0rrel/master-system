@@ -62,7 +62,7 @@ def subprocess_runner(config_path: Optional[str], env_file: Path, log_dir: Path,
 
 def git(args, cwd, *, extra_env=None, input_text=None, timeout=300) -> str:
     """Run git for the control plane (publishing); raises RuntimeError on failure."""
-    env = control_git_env(extra_env)
+    env = control_git_env(extra_env, cwd=cwd)
     done = subprocess.run(control_git_argv(*args), cwd=str(cwd), capture_output=True, text=True,
                           errors="replace", env=env, input=input_text, timeout=timeout)
     if done.returncode != 0:

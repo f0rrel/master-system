@@ -112,8 +112,14 @@ def stalls_since_human(history, project_id: str, task_id: str) -> int:
     return count
 
 
-def work_for(status: dict, history, max_failures: int = 3):
-    """(runnable task ids, exhausted task ids) for one project's status, in backlog order."""
+def work_for(status: dict, history, max_failures: int = 3, max_identical: int = 0):
+    """(runnable task ids, exhausted task ids) for one project's status, in backlog order.
+
+    A task is also exhausted when its last ``max_identical`` failures were the same
+    (core.retry_feedback; 0 turns that off): a retry that would repeat itself needs
+    a human change first."""
+    from core.retry_feedback import repeated_failure
+
     from core.backlog import ordered_tasks
 
     tasks = ordered_tasks(status.get("milestones") or [], status.get("tasks") or [])
@@ -131,9 +137,26 @@ def work_for(status: dict, history, max_failures: int = 3):
                 or stalls_since_human(history, status["project_id"], task["id"]) >= MAX_STALLS):
             # Stalls are not failures, but a task the worker keeps stalling on needs a human.
             exhausted.append(task["id"])
+        elif repeated_failure(history, status["project_id"], task["id"], max_identical,
+                              task) is not None:
+            exhausted.append(task["id"])
         else:
             runnable.append(task["id"])
     return runnable, exhausted
+
+
+def exhaustion_note(history, project_id: str, task: dict, max_failures: int = 3,
+                    max_identical: int = 0) -> str:
+    """Why an exhausted task waits for the owner, in one line."""
+    from core.retry_feedback import (describe_failure, identical_streak, repeated_failure,
+                                     task_failures)
+
+    repeated = repeated_failure(history, project_id, task["id"], max_identical, task)
+    if repeated is not None:
+        times = identical_streak(task_failures(history, project_id, task["id"], task))
+        return (f"{describe_failure(repeated, times)}; change its description or acceptance, "
+                "or reopen it to try again")
+    return f"failed {max_failures} attempts; change its description or acceptance"
 
 
 @dataclass
@@ -159,6 +182,8 @@ class Daemon:
     is_busy: Callable[[str], bool] = lambda project_id: False
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
     max_failures: int = 3
+    #: Identical failures in a row before a task stops being retried (0: off).
+    max_identical: int = 0
     preview_url: Callable[[str], Optional[str]] = lambda project_id: None
     #: Called every cycle per project (even without a run), e.g. the release
     #: watcher; returns notification lines.
@@ -276,7 +301,8 @@ class Daemon:
                                           f"{project_id}: needs you", line,
                                           tags="frame_with_picture")
             before = self.master.status(project_id)
-            runnable, exhausted = work_for(before, self.history, self.max_failures)
+            runnable, exhausted = work_for(before, self.history, self.max_failures,
+                                           self.max_identical)
             from core.evidence import held_cancellations
 
             # A cancellation the gate held waits for the owner (ms reopen / ms cancel);
@@ -284,13 +310,15 @@ class Daemon:
             waiting = {**held_cancellations(self.history, project_id),
                        **(self.waiting(project_id) or {})}
             runnable = [t for t in runnable if t not in waiting]
+            tasks_by_id = {t["id"]: t for t in before.get("tasks") or []}
             for task_id in exhausted if self._batch else ():
+                why = exhaustion_note(self.history, project_id, tasks_by_id[task_id],
+                                      self.max_failures, self.max_identical)
                 self._notify_once(
                     memory, f"exhausted:{project_id}:{task_id}:{self._last_human(project_id, task_id)}",
                     f"{project_id}: {task_id} needs you",
-                    f"{task_id} failed {self.max_failures} attempts. Change its description "
-                    "or acceptance (or the planner can), and it will be tried again.",
-                    tags="raising_hand", priority="high")
+                    f"{task_id} {why} (or the planner can change it), and it will be "
+                    "tried again.", tags="raising_hand", priority="high")
             if not runnable:
                 log.append(f"{project_id}: nothing to do")
                 continue

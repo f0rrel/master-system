@@ -31,7 +31,8 @@ def test_the_environment_is_an_allowlist(tmp_path):
                              base_env=base)
 
     assert set(env) == {"PATH", "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
-                        "XDG_CACHE_HOME", "npm_config_cache", "CI", "LANG", "TERM"}
+                        "XDG_CACHE_HOME", "npm_config_cache", "CI", "LANG", "TERM",
+                        "GIT_TERMINAL_PROMPT", "GIT_SSH_COMMAND"}
     assert env["PATH"] == "/opt/node22/bin:" + ":".join(SYSTEM_PATH)
     assert env["HOME"] == str(tmp_path / "worker-home")
     assert env["XDG_DATA_HOME"].startswith(env["HOME"])
@@ -208,3 +209,29 @@ def test_doctor_warns_when_workers_have_no_node(tmp_path, monkeypatch):
     monkeypatch.setattr(run_cli, "find_node_for", lambda config: None)
     report = ms.doctor_report(type("Args", (), {"config": None})())
     assert "no Node >= 22 for workers; Node-based acceptance commands will fail" in report
+
+
+# --- git guards: an accidental push over SSH must not use the owner's keys -------------
+
+
+def test_git_over_ssh_fails_without_starting_ssh(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    marker = tmp_path / "ssh-was-started"
+    ssh = fake_bin / "ssh"
+    ssh.write_text(f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+    ssh.chmod(0o755)
+    env = worker_environment(tmp_path / "home", path_dirs=[fake_bin])
+    assert env["GIT_SSH_COMMAND"] == "/bin/false" and env["GIT_TERMINAL_PROMPT"] == "0"
+
+    outcome = run_process(["git", "ls-remote", "ssh://git@example.invalid/repo.git"],
+                          cwd=tmp_path, log_dir=tmp_path / "logs",
+                          deadline=time.monotonic() + 60, env=env)
+
+    assert outcome.returncode != 0
+    assert not marker.exists()
+
+
+def test_the_git_guards_cannot_be_overridden_through_extras(tmp_path):
+    with pytest.raises(ValueError, match="secret"):
+        worker_environment(tmp_path, extra={"GIT_SSH_COMMAND": "ssh -i /home/me/.ssh/id"})

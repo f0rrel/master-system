@@ -28,7 +28,8 @@ from core.evidence import spec_hash
 from core.history import EventType, HistoryStore
 from core.usage import add_usage
 
-__all__ = ["build_report", "master_cost_usd", "render_report", "spend_since", "tier_stats"]
+__all__ = ["SPEND_BASIS", "build_report", "master_cost_usd", "render_report", "spend_since",
+           "tier_stats"]
 
 _RUN_ENDS = {EventType.RUN_STOPPED: "stopped", EventType.RUN_ERROR: "error",
              EventType.RUN_INTERRUPTED: "interrupted"}
@@ -85,6 +86,12 @@ def master_cost_usd(history: HistoryStore, session_id: str, prices: Mapping,
     return round(total, 6)
 
 
+#: What the spend figures are: tokens are what the providers reported (a worker's are its
+#: own claim), dollars are those tokens times the config's [prices]. Never an invoice.
+SPEND_BASIS = ("estimate: reported tokens x the prices in the config, not an invoice; "
+               "worker_reported_usd is the worker tool's own cost figure")
+
+
 def spend_since(history: HistoryStore, since_iso: str, prices: Mapping,
                 default_model: Optional[str] = None) -> dict:
     """Priced spend recorded at or after ``since_iso``, across all projects.
@@ -94,7 +101,7 @@ def spend_since(history: HistoryStore, since_iso: str, prices: Mapping,
     reported is used (0 for free models). Unpriced Master calls count as
     ``unpriced_calls`` so a cap can refuse to guess.
     """
-    master = worker = reviewer = 0.0
+    master = worker = reviewer = reported = 0.0
     unpriced = 0
     for e in history.events(types=[EventType.DECISION, EventType.RUN_STOPPED,
                                    EventType.ATTEMPT_FINISHED, EventType.PLANNER_TURN,
@@ -107,6 +114,7 @@ def spend_since(history: HistoryStore, since_iso: str, prices: Mapping,
                 model = e.payload.get("model")
                 cost = _price(usage, model, prices) if model else None
                 worker += cost if cost is not None else float(usage.get("reported_cost_usd") or 0)
+                reported += float(usage.get("reported_cost_usd") or 0)
             continue
         if e.type is EventType.VERIFICATION:
             review = (e.payload.get("evidence") or {}).get("visual_review") or {}
@@ -123,6 +131,7 @@ def spend_since(history: HistoryStore, since_iso: str, prices: Mapping,
             model = (e.payload.get("artifacts") or {}).get("model")
             cost = _price(usage, model, prices) if model else None
             worker += cost if cost is not None else float(usage.get("reported_cost_usd") or 0)
+            reported += float(usage.get("reported_cost_usd") or 0)
             continue
         for usage in (e.payload.get("usage"), e.payload.get("failed_call_usage")):
             if not usage:
@@ -135,7 +144,8 @@ def spend_since(history: HistoryStore, since_iso: str, prices: Mapping,
                 master += cost
     return {"master_usd": round(master, 6), "worker_usd": round(worker, 6),
             "reviewer_usd": round(reviewer, 6),
-            "total_usd": round(master + worker + reviewer, 6), "unpriced_calls": unpriced}
+            "total_usd": round(master + worker + reviewer, 6), "unpriced_calls": unpriced,
+            "worker_reported_usd": round(reported, 6), "basis": SPEND_BASIS}
 
 
 def _completes(payload) -> bool:

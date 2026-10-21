@@ -5,6 +5,28 @@ Rationale for each change is in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Unreleased
 
+### Security and reliability hardening
+Details, limits and the manual host steps: [docs/SECURITY-RELIABILITY-HARDENING.md](docs/SECURITY-RELIABILITY-HARDENING.md).
+- A retry now learns from the attempts before it. The worker's prompt carries what the
+  verifier found last time (redacted, bounded), and says so when the same failure
+  repeated. A task that fails the same way `[run] max_identical_failures` times in a row
+  (default 2, `0` = off) stops being retried until you change it; the reason shows in
+  `ms status`, the morning summary and the notification. The in-session loop refuses the
+  extra attempt too (`core/retry_feedback.py`).
+- Worker and verifier output is redacted before it is stored in history or put in a
+  prompt (`core/redaction.py`; `ms.redact` is unchanged and now lives there too).
+  This includes a provider's limit message (limit state file, `ms worker` probe output,
+  `worker_probe` history) and the ref and config names a worker changed.
+- Worker and verification processes get `GIT_SSH_COMMAND=/bin/false` and
+  `GIT_TERMINAL_PROMPT=0`: an accidental `git push` over SSH no longer authenticates with
+  your keys. This is not a sandbox (`core/worker_env.py`).
+- `ms doctor` has a "Worker exposure" section: Docker/sudo membership, readable SSH keys,
+  credentials and browser profiles (names and modes only; `core/worker_exposure.py`).
+- `ms status` and the other overviews use the same retry limits as the service, including
+  with worker tiers (they used the default cap before).
+- Spend figures are labelled as estimates; `spend_since` also returns the worker tool's own
+  cost figure (`worker_reported_usd`) and a `basis` text.
+
 ### Planner: task replacements and approval
 - A replacement draft may reuse the replaced task's id. `draft_problems` no longer reports
   it as "already used" (`core/planner.py`).
